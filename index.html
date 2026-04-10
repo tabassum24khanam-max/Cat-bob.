@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ULTRAMAX v3 — Intelligence</title>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root {
+  --bg: #04080f;
+  --surface: #080e1a;
+  --border: rgba(0,229,255,.12);
+  --cyan: #00e5ff;
+  --green: #00e676;
+  --red: #ff1744;
+  --yellow: #ffd600;
+  --muted: #2d4d6e;
+  --dim: #1a3a5c;
+  --text: #c8e0f4;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Space Mono', monospace; }
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Bebas+Neue&display=swap');
+
+.app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* Header */
+.hdr { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.logo { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 3px; color: var(--cyan); }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.status-dot.on { background: var(--green); box-shadow: 0 0 5px var(--green); }
+.status-dot.idle { background: var(--yellow); animation: blink 2s infinite; }
+.status-txt { font-size: 8px; color: var(--muted); flex: 1; }
+.key-btn { background: none; border: 1px solid var(--border); color: var(--cyan); font-family: 'Space Mono'; font-size: 7px; padding: 3px 8px; border-radius: 3px; cursor: pointer; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* Asset tabs */
+.tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; overflow-x: auto; }
+.tab { padding: 7px 14px; font-size: 9px; letter-spacing: 1px; border: none; background: none; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.tab.active { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
+
+.asset-row { display: flex; gap: 6px; padding: 6px 12px; overflow-x: auto; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.asset-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 4px; background: none; color: var(--text); font-family: 'Space Mono'; font-size: 8px; cursor: pointer; white-space: nowrap; }
+.asset-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,229,255,.07); }
+
+/* Chart area */
+.chart-wrap { flex: 1; min-height: 0; position: relative; }
+#chart { width: 100%; height: 100%; }
+.chart-overlay { position: absolute; top: 0; left: 0; right: 0; padding: 8px 12px; display: flex; align-items: center; gap: 10px; pointer-events: none; }
+.price-live { font-size: 20px; font-weight: 700; color: var(--text); }
+.price-chg { font-size: 10px; padding: 2px 6px; border-radius: 3px; }
+.price-chg.up { color: var(--green); }
+.price-chg.dn { color: var(--red); }
+
+/* Bottom controls */
+.bottom { flex-shrink: 0; }
+
+/* Horizon + Predict */
+.ctrl-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.hz-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 3px; background: none; color: var(--muted); font-family: 'Space Mono'; font-size: 8px; cursor: pointer; }
+.hz-btn.active { border-color: var(--yellow); color: var(--yellow); }
+.predict-btn { margin-left: auto; padding: 7px 20px; background: var(--cyan); color: #000; font-family: 'Bebas Neue'; font-size: 16px; letter-spacing: 2px; border: none; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
+.predict-btn:disabled { background: var(--muted); cursor: not-allowed; }
+
+/* Loading overlay */
+.loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(4,8,15,.9); z-index: 100; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.loading-overlay.on { display: flex; }
+.spin { width: 28px; height: 28px; border: 2px solid var(--border); border-top-color: var(--cyan); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-title { font-family: 'Bebas Neue'; font-size: 22px; letter-spacing: 3px; color: var(--cyan); }
+.loading-step { font-size: 8px; color: var(--muted); max-width: 280px; text-align: center; }
+.agent-steps { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.astep { display: flex; align-items: center; gap: 8px; font-size: 8px; }
+.astep-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.astep-dot.running { background: var(--cyan); animation: blink .5s infinite; }
+.astep-dot.done { background: var(--green); }
+.syslog { max-height: 100px; overflow-y: auto; background: rgba(0,0,0,.4); border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; font-size: 7px; color: var(--muted); text-align: left; width: 300px; margin-top: 6px; }
+
+/* Result panel */
+.result-panel { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 2px solid var(--border); transform: translateY(100%); transition: transform .3s; z-index: 50; max-height: 70vh; overflow-y: auto; }
+.result-panel.show { transform: translateY(0); }
+.rp-header { display: flex; align-items: center; padding: 10px 14px; gap: 10px; border-bottom: 1px solid var(--border); }
+.rp-close { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; }
+.verdict { font-family: 'Bebas Neue'; font-size: 32px; letter-spacing: 4px; }
+.verdict.BUY { color: var(--green); }
+.verdict.SELL { color: var(--red); }
+.verdict.NO_TRADE { color: var(--yellow); }
+.conf { font-size: 12px; color: var(--muted); }
+
+.rp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+.rp-cell { background: var(--surface); padding: 8px 12px; }
+.rp-lbl { font-size: 7px; color: var(--muted); letter-spacing: 1px; margin-bottom: 2px; }
+.rp-val { font-size: 11px; color: var(--text); }
+.rp-val.up { color: var(--green); }
+.rp-val.dn { color: var(--red); }
+.rp-val.dim { color: var(--muted); font-size: 9px; }
+
+.insight { padding: 10px 14px; font-size: 9px; color: var(--muted); line-height: 1.6; border-top: 1px solid var(--border); }
+.insight strong { color: var(--cyan); }
+
+/* Agent bars */
+.agent-bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); }
+.ab { background: var(--surface); padding: 8px; text-align: center; }
+.ab-lbl { font-size: 7px; color: var(--muted); }
+.ab-verdict { font-size: 10px; font-weight: 700; margin: 2px 0; }
+.ab-verdict.bull { color: var(--green); }
+.ab-verdict.bear { color: var(--red); }
+.ab-verdict.neu { color: var(--yellow); }
+.ab-conf { font-size: 8px; color: var(--muted); }
+
+/* Prob bar */
+.prob-row { display: flex; gap: 6px; padding: 8px 14px; align-items: center; border-top: 1px solid var(--border); }
+.prob-bar { height: 6px; border-radius: 3px; transition: width .5s; }
+.prob-up { background: var(--green); }
+.prob-dn { background: var(--red); }
+.prob-txt { font-size: 8px; color: var(--muted); }
+
+/* System log in result */
+.result-log { padding: 8px 14px; border-top: 1px solid var(--border); }
+.log-title { font-size: 7px; color: var(--muted); margin-bottom: 4px; }
+.log-entry { font-size: 7px; color: rgba(0,229,255,.5); padding: 1px 0; }
+
+/* History panel */
+.history-panel { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg); z-index: 200; display: none; flex-direction: column; overflow: hidden; }
+.history-panel.on { display: flex; }
+.hp-hdr { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 10px; }
+.hp-title { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 2px; color: var(--cyan); }
+.hp-stats { display: flex; gap: 14px; margin-left: auto; }
+.hp-stat { text-align: center; }
+.hp-stat-val { font-size: 14px; font-weight: 700; }
+.hp-stat-lbl { font-size: 7px; color: var(--muted); }
+.hp-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; margin-left: 8px; }
+.hp-list { flex: 1; overflow-y: auto; padding: 8px; }
+.he { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 6px; cursor: pointer; }
+.he:active { opacity: .8; }
+.he.correct { border-left: 3px solid var(--green); }
+.he.wrong { border-left: 3px solid var(--red); }
+.he-top { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.he-asset { font-size: 11px; font-weight: 700; color: var(--cyan); }
+.he-dec { font-size: 9px; padding: 1px 6px; border-radius: 3px; }
+.he-dec.BUY { color: var(--green); background: rgba(0,230,118,.1); }
+.he-dec.SELL { color: var(--red); background: rgba(255,23,68,.1); }
+.he-dec.NO_TRADE { color: var(--yellow); background: rgba(255,214,0,.08); }
+.he-row { display: flex; justify-content: space-between; font-size: 8px; color: var(--muted); margin: 2px 0; }
+.he-fb { font-size: 8px; margin-top: 4px; padding: 3px 6px; border-radius: 3px; }
+.he-fb.correct { color: var(--green); background: rgba(0,230,118,.1); }
+.he-fb.wrong { color: var(--red); background: rgba(255,23,68,.1); }
+.he-fb.pending { color: var(--yellow); background: rgba(255,214,0,.08); }
+.check-btn { background: rgba(0,229,255,.15); border: 1px solid rgba(0,229,255,.4); color: var(--cyan); font-family: 'Space Mono'; font-size: 7px; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+
+/* Modal */
+.modal-bg { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.8); z-index: 300; display: none; align-items: center; justify-content: center; }
+.modal-bg.on { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; width: 320px; max-width: 95vw; }
+.modal-title { font-family: 'Bebas Neue'; font-size: 20px; letter-spacing: 2px; color: var(--cyan); margin-bottom: 4px; }
+.modal-sub { font-size: 8px; color: var(--muted); margin-bottom: 14px; }
+.modal-lbl { font-size: 8px; color: var(--muted); margin: 10px 0 4px; }
+.modal-input { width: 100%; background: rgba(0,229,255,.05); border: 1px solid var(--border); color: var(--text); font-family: 'Space Mono'; font-size: 10px; padding: 8px 10px; border-radius: 4px; }
+.modal-save { width: 100%; margin-top: 14px; padding: 10px; background: var(--cyan); color: #000; font-family: 'Bebas Neue'; font-size: 16px; letter-spacing: 2px; border: none; border-radius: 4px; cursor: pointer; }
+
+/* Backend status bar */
+.backend-bar { padding: 3px 14px; font-size: 7px; color: var(--muted); background: var(--surface); border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
+.backend-dot { width: 4px; height: 4px; border-radius: 50%; }
+.backend-dot.ok { background: var(--green); }
+.backend-dot.err { background: var(--red); animation: blink 1s infinite; }
+
+/* Toast */
+.toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,229,255,.15); border: 1px solid var(--cyan); color: var(--cyan); font-size: 9px; padding: 8px 16px; border-radius: 6px; z-index: 400; display: none; white-space: nowrap; }
+.toast.on { display: block; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="hdr">
+    <div class="logo">ULTRAMAX</div>
+    <div class="status-dot idle" id="dot"></div>
+    <div class="status-txt" id="stxt">Connecting...</div>
+    <button class="key-btn" onclick="openHistory()">HISTORY</button>
+    <button class="key-btn" onclick="openModal()">⚙ KEYS</button>
+  </div>
+
+  <!-- Backend status -->
+  <div class="backend-bar">
+    <div class="backend-dot err" id="backend-dot"></div>
+    <span id="backend-txt">Backend not connected</span>
+  </div>
+
+  <!-- Asset tabs -->
+  <div class="tabs">
+    <button class="tab active" id="tab-c" onclick="switchTab('crypto')">CRYPTO</button>
+    <button class="tab" id="tab-s" onclick="switchTab('stocks')">STOCKS</button>
+    <button class="tab" id="tab-m" onclick="switchTab('macro')">MACRO</button>
+  </div>
+  <div class="asset-row" id="asset-row"></div>
+
+  <!-- Chart -->
+  <div class="chart-wrap">
+    <div id="chart"></div>
+    <div class="chart-overlay">
+      <span class="price-live" id="plive">—</span>
+      <span class="price-chg" id="pchg">—</span>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="bottom">
+    <div class="ctrl-row">
+      <button class="hz-btn" onclick="setHz(1,this)">1H</button>
+      <button class="hz-btn active" onclick="setHz(4,this)">4H</button>
+      <button class="hz-btn" onclick="setHz(8,this)">8H</button>
+      <button class="hz-btn" onclick="setHz(24,this)">1D</button>
+      <button class="hz-btn" onclick="setHz(72,this)">3D</button>
+      <button class="hz-btn" onclick="setHz(168,this)">1W</button>
+      <button class="predict-btn" id="pb" onclick="predict()">PREDICT</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div class="loading-overlay" id="loading">
+  <div class="spin"></div>
+  <div class="loading-title">ANALYZING</div>
+  <div class="loading-step" id="lstep">Starting agents...</div>
+  <div class="agent-steps">
+    <div class="astep"><div class="astep-dot" id="a1dot"></div><span id="a1txt">📐 Quant Agent — waiting</span></div>
+    <div class="astep"><div class="astep-dot" id="a2dot"></div><span id="a2txt">📰 News Agent — waiting</span></div>
+    <div class="astep"><div class="astep-dot" id="a3dot"></div><span id="a3txt">🧠 Decision Agent — waiting</span></div>
+  </div>
+  <div class="syslog" id="syslog"></div>
+</div>
+
+<!-- Result panel -->
+<div class="result-panel" id="result-panel">
+  <div class="rp-header">
+    <div class="verdict" id="rp-verdict">—</div>
+    <div class="conf" id="rp-conf">—</div>
+    <button class="rp-close" onclick="closeResult()">✕</button>
+  </div>
+  <div class="prob-row">
+    <span class="prob-txt" id="pu-txt">—%</span>
+    <div style="flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;gap:1px">
+      <div class="prob-bar prob-up" id="bup" style="width:50%"></div>
+      <div class="prob-bar prob-dn" id="bdn" style="width:50%"></div>
+    </div>
+    <span class="prob-txt" id="pd-txt">—%</span>
+  </div>
+  <div class="agent-bars">
+    <div class="ab"><div class="ab-lbl">QUANT</div><div class="ab-verdict neu" id="ab1">—</div><div class="ab-conf" id="ac1">—</div></div>
+    <div class="ab"><div class="ab-lbl">NEWS</div><div class="ab-verdict neu" id="ab2">—</div><div class="ab-conf" id="ac2">—</div></div>
+    <div class="ab"><div class="ab-lbl">DECISION</div><div class="ab-verdict neu" id="ab3">—</div><div class="ab-conf" id="ac3">—</div></div>
+  </div>
+  <div class="rp-grid">
+    <div class="rp-cell"><div class="rp-lbl">💰 ENTRY PRICE</div><div class="rp-val" id="rp-entry">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🎯 TARGET</div><div class="rp-val" id="rp-target">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">📈 BULL TARGET</div><div class="rp-val up" id="rp-bull">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">📉 BEAR TARGET</div><div class="rp-val dn" id="rp-bear">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">⚡ REGIME</div><div class="rp-val" id="rp-regime">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🤖 MODEL</div><div class="rp-val dim" id="rp-model">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🏄 HURST</div><div class="rp-val" id="rp-hurst">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">📊 HMM STATE</div><div class="rp-val" id="rp-hmm">—</div></div>
+  </div>
+  <div class="insight" id="rp-insight">—</div>
+  <div id="gate-box" style="padding:6px 14px;border-top:1px solid var(--border);font-size:8px;color:var(--red);display:none"></div>
+  <div class="result-log" id="result-log" style="display:none">
+    <div class="log-title">SYSTEM LOG</div>
+    <div id="log-entries"></div>
+  </div>
+</div>
+
+<!-- History panel -->
+<div class="history-panel" id="history-panel">
+  <div class="hp-hdr">
+    <div class="hp-title">HISTORY</div>
+    <div class="hp-stats">
+      <div class="hp-stat"><div class="hp-stat-val" id="hs-total" style="color:var(--cyan)">0</div><div class="hp-stat-lbl">TOTAL</div></div>
+      <div class="hp-stat"><div class="hp-stat-val" id="hs-correct" style="color:var(--green)">0</div><div class="hp-stat-lbl">CORRECT</div></div>
+      <div class="hp-stat"><div class="hp-stat-val" id="hs-wrong" style="color:var(--red)">0</div><div class="hp-stat-lbl">WRONG</div></div>
+      <div class="hp-stat"><div class="hp-stat-val" id="hs-acc">—</div><div class="hp-stat-lbl">ACCURACY</div></div>
+    </div>
+    <button class="hp-close" onclick="closeHistory()">✕</button>
+  </div>
+  <div style="display:flex;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--surface)">
+    <button class="key-btn" onclick="checkAllOutcomes()" style="flex:1">⚡ CHECK ALL OUTCOMES</button>
+    <button class="key-btn" onclick="retrainML()" style="flex:1">🤖 RETRAIN ML</button>
+  </div>
+  <div class="hp-list" id="hp-list"></div>
+</div>
+
+<!-- Keys modal -->
+<div class="modal-bg" id="kmodal">
+  <div class="modal">
+    <div class="modal-title">API CONFIGURATION</div>
+    <div class="modal-sub">Settings saved in browser. Backend URL connects to your Python server.</div>
+    <div class="modal-lbl">BACKEND URL</div>
+    <input class="modal-input" id="k-backend" type="text" placeholder="http://localhost:8000" autocomplete="off">
+    <div class="modal-lbl">OPENAI API KEY (Agents 1 & 2)</div>
+    <input class="modal-input" id="k-openai" type="password" placeholder="sk-..." autocomplete="off">
+    <div class="modal-lbl">DEEPSEEK API KEY (R1 + V3 News)</div>
+    <input class="modal-input" id="k-deepseek" type="password" placeholder="sk-..." autocomplete="off">
+    <button class="modal-save" onclick="saveKeys()">SAVE & CONNECT</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
