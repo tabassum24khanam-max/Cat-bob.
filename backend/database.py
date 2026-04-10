@@ -120,6 +120,14 @@ async def update_prediction_outcome(pred_id: str, outcome_price: float, outcome_
              int(target_hit) if target_hit is not None else None, feedback_note, pred_id))
         await db.commit()
 
+async def get_macro_history(hours: int = 24) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM macro_data ORDER BY ts DESC LIMIT ?", (hours,))
+        return [dict(r) for r in reversed(await cur.fetchall())]
+
+
 async def get_news_history(asset: str, hours: int = 24) -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

@@ -525,6 +525,54 @@ function saveKeys() {
   showToast('✓ Keys saved');
 }
 
+async function checkAllOutcomes() {
+  showToast('Checking all outcomes...');
+  try {
+    const r = await fetch(`${backendUrl}/history/check-all`, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const result = await r.json();
+    if (result.resolved > 0) {
+      // Update local history with resolved outcomes
+      const history = getHistory();
+      for (const item of result.items) {
+        const idx = history.findIndex(h => h.id === item.id);
+        if (idx >= 0) {
+          history[idx].feedback = item.feedback;
+          history[idx].outcome_price = item.price;
+        }
+      }
+      saveHistory(history);
+      renderHistory();
+      showToast(`Resolved ${result.resolved} predictions`);
+    } else {
+      showToast('No expired predictions to resolve');
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
+async function retrainML() {
+  showToast('Retraining ML model...');
+  try {
+    const r = await fetch(`${backendUrl}/ml/retrain`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(30000)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const result = await r.json();
+    if (result.ok) {
+      const top = result.top_features ? result.top_features.map(f => f[0]).join(', ') : '';
+      showToast(`ML retrained: ${result.n_train} samples, top features: ${top}`);
+    } else {
+      showToast(`ML retrain: ${result.error}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
 let _toastTimer;
 function showToast(msg) {
   const t=document.getElementById('toast');

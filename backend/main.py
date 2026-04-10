@@ -451,6 +451,32 @@ async def predict(req: PredictRequest):
             gate_reason = f"🛡 MACRO BULL GATE — {bull_count}/5 bullish signals"
             slog(f"🛡 MACRO BULL GATE fired ({bull_count}/5)")
 
+    # VWAP HARD RULE: BUY below VWAP = -10 confidence
+    if decision.get('decision') == 'BUY' and ind.get('dist_vwap', 0) < 0:
+        old_conf = decision.get('confidence', 50)
+        decision['confidence'] = max(0, old_conf - 10)
+        slog(f"⚠ VWAP rule: BUY below VWAP — confidence {old_conf}% → {decision['confidence']}%")
+
+    # COUNTER-TREND PENALTY: -15 confidence when signal opposes daily trend
+    if decision.get('decision') != 'NO_TRADE' and mtf_data:
+        daily_bull = mtf_data.get('daily_bull', False)
+        daily_bear = mtf_data.get('daily_bear', False)
+        if (daily_bear and decision.get('decision') == 'BUY') or \
+           (daily_bull and decision.get('decision') == 'SELL'):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + low confluence = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE':
+        inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
+        low_confluence = decision.get('confidence', 0) < 60
+        if inside_cloud and low_confluence:
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 60%)"
+            slog(f"⚠ Ichimoku cloud gate: inside cloud + confidence {decision.get('confidence', 0)}%")
+
     # Confidence cap: neutral daily + bearish MACD
     if decision.get('decision') != 'NO_TRADE':
         daily_neutral = not mtf_data.get('daily_bull') and not mtf_data.get('daily_bear')
@@ -542,7 +568,6 @@ async def predict(req: PredictRequest):
             "win_rate": sum(1 for s in similar if (s.get('fwd_4h') or 0) > 0) / len(similar) * 100 if similar else 0,
             "avg_fwd_4h": sum(s.get('fwd_4h') or 0 for s in similar) / len(similar) if similar else 0,
         },
-        "ml": ml_result,
         "bayesian_conf": bayes_conf,
         "raw_ai_conf": raw_ai_conf,
         # DB sentiment memory

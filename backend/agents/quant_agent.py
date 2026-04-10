@@ -392,7 +392,8 @@ def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = 
     max_pct = (0.4 if is_crypto else 0.2) if horizon_h <= 1 else \
               (1.2 if is_crypto else 0.6) if horizon_h <= 4 else \
               (2.0 if is_crypto else 1.0) if horizon_h <= 8 else \
-              (4.0 if is_crypto else 2.5) if horizon_h <= 24 else 12
+              (4.0 if is_crypto else 2.5) if horizon_h <= 24 else \
+              (12.0 if is_crypto else 6.0)
 
     def clamp(p):
         pct = (p - cur_price) / cur_price * 100

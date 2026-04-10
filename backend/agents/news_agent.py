@@ -157,10 +157,32 @@ async def fetch_asset_news(asset: str, asset_name: str, asset_type: str) -> list
             'url': 'https://news.google.com/rss/search?q=Bitcoin+crypto+regulation+SEC&hl=en-US&gl=US',
             'tier': 0.6, 'name': 'GoogleNews-Crypto'
         })
+        feed_list.append({
+            'url': 'https://news.google.com/rss/search?q=crypto+macro+interest+rates+liquidity&hl=en-US&gl=US',
+            'tier': 0.5, 'name': 'GoogleNews-CryptoMacro'
+        })
+        feed_list.append({
+            'url': f'https://news.google.com/rss/search?q={encoded}+whale+sentiment+social&hl=en-US&gl=US',
+            'tier': 0.3, 'name': 'GoogleNews-Social'
+        })
+    elif asset_type == 'macro':
+        # Oil/Gold/Commodities — geopolitical feeds
+        feed_list.append({
+            'url': 'https://news.google.com/rss/search?q=OPEC+Iran+oil+supply+geopolitical&hl=en-US&gl=US',
+            'tier': 0.7, 'name': 'GoogleNews-Geopolitical'
+        })
+        feed_list.append({
+            'url': f'https://news.google.com/rss/search?q={encoded}+supply+demand+inventory&hl=en-US&gl=US',
+            'tier': 0.6, 'name': 'GoogleNews-Commodity'
+        })
     else:
         feed_list.append({
             'url': f'https://news.google.com/rss/search?q={asset}+earnings+analyst+insider&hl=en-US&gl=US',
             'tier': 0.7, 'name': 'GoogleNews-Stock'
+        })
+        feed_list.append({
+            'url': f'https://news.google.com/rss/search?q={asset}+unusual+options+activity+upgrade&hl=en-US&gl=US',
+            'tier': 0.6, 'name': 'GoogleNews-StockFlow'
         })
 
     async with httpx.AsyncClient() as client:
