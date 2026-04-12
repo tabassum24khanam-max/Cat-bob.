@@ -6,9 +6,6 @@ import asyncio
 import json
 import os
 import time
-import re
-import httpx
-from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,14 +16,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from database import init_db, get_predictions, save_prediction, update_prediction_outcome, similarity_search, get_news_history, get_macro_history, DB_PATH
-from agents.quant_agent import compute_indicators, monte_carlo, run_quant_agent, build_quant_prompt, train_ml_classifier, ml_predict, bayesian_confidence
+from config import BINANCE_SYMBOLS, ASSET_NAMES, WORKER_URL, ALL_ASSETS, get_asset_type, set_setting, is_configured
+from database import (init_db, get_predictions, save_prediction, update_prediction_outcome,
+                      similarity_search, get_news_history, get_macro_history, DB_PATH,
+                      get_accuracy_stats, update_accuracy_stats, get_upcoming_events)
+from data_fetcher import fetch_candles, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
+from indicators import compute_indicators, monte_carlo
+from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
+from agents.quant_agent import run_quant_agent, build_quant_prompt
 from agents.news_agent import fetch_asset_news, filter_headlines_ai, run_news_agent
 from agents.decision_agent import run_decision_agent
-
-# In-memory ML model cache (rebuilt on startup, retrained after feedback)
-_ml_cache: dict = {}  # asset -> model_artifact
-from agents.ml_classifier import predict_ml, retrain_model, extract_features
+from sentiment import get_sentiment_snapshot
+from macro_engine import get_macro_context
+from correlation_engine import get_correlation_summary
+from cluster_engine import assign_cluster
+from alert_engine import scan_for_alerts, get_latest_alerts
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
 
@@ -42,22 +46,6 @@ frontend_path = os.path.join(os.path.dirname(__file__), '..', 'frontend')
 if os.path.exists(frontend_path):
     app.mount("/static", StaticFiles(directory=frontend_path), name="static")
 
-WORKER_URL = os.getenv("WORKER_URL", "https://winter-sunset-e359.azk40772corp.workers.dev")
-
-BINANCE_SYMBOLS = {
-    'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT',
-    'BNB': 'BNBUSDT', 'XRP': 'XRPUSDT', 'DOGE': 'DOGEUSDT',
-}
-
-ASSET_NAMES = {
-    'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'SOL': 'Solana', 'BNB': 'BNB',
-    'XRP': 'XRP', 'DOGE': 'Dogecoin', 'AAPL': 'Apple Inc', 'TSLA': 'Tesla',
-    'NVDA': 'Nvidia', 'MSFT': 'Microsoft', 'GOOGL': 'Alphabet Google',
-    'SPY': 'S&P 500 ETF', 'GC=F': 'Gold Futures', 'CL=F': 'WTI Crude Oil',
-    'SI=F': 'Silver Futures', 'XOM': 'ExxonMobil', 'LMT': 'Lockheed Martin',
-    'RTX': 'Raytheon', 'NOC': 'Northrop Grumman', 'GD': 'General Dynamics',
-}
-
 
 # ─── Startup ────────────────────────────────────────────────────────────────
 
@@ -67,8 +55,10 @@ async def startup():
     print(f"✓ ULTRAMAX Backend started")
     print(f"  Database: {DB_PATH}")
     print(f"  Worker: {WORKER_URL}")
-    # Try to pre-train ML models from existing history
+    # Pre-train ML ensemble from existing history
     asyncio.create_task(warm_ml_models())
+    # Initial calendar refresh
+    asyncio.create_task(_safe_refresh_calendar())
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -96,103 +86,22 @@ class SavePredRequest(BaseModel):
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
-async def fetch_candles(asset: str, interval: str = '1h', limit: int = 300) -> list:
-    """Fetch candles from Binance or Yahoo via Worker."""
-    if asset in BINANCE_SYMBOLS:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                "https://api.binance.com/api/v3/klines",
-                params={'symbol': BINANCE_SYMBOLS[asset], 'interval': interval, 'limit': limit}
-            )
-            data = resp.json()
-            return [{'time': int(k[0])//1000, 'open': float(k[1]), 'high': float(k[2]),
-                     'low': float(k[3]), 'close': float(k[4]), 'volume': float(k[5])} for k in data]
-
-    # Stocks/futures via Worker
+async def _safe_refresh_calendar():
+    """Safely refresh economic calendar on startup."""
+    await asyncio.sleep(3)
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(f"{WORKER_URL}/candles", params={'sym': asset, 'iv': interval})
-            if resp.status_code == 200:
-                data = resp.json()
-                candles = data.get('candles', [])
-                return candles[-limit:]
-    except:
+        from macro_engine import refresh_calendar
+        await refresh_calendar()
+    except Exception:
         pass
 
-    # Direct Yahoo fallback
+
+async def _safe_assign_cluster(asset: str, ind: dict) -> dict:
+    """Safely assign cluster — returns {available: False} on error."""
     try:
-        range_map = {'1h': '60d', '4h': '3mo', '1d': '2y'}
-        yrange = range_map.get(interval, '60d')
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{asset}",
-                params={'range': yrange, 'interval': interval},
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            d = resp.json()
-            res = d.get('chart', {}).get('result', [{}])[0]
-            q = res.get('indicators', {}).get('quote', [{}])[0]
-            ts_list = res.get('timestamp', [])
-            candles = []
-            for i, t in enumerate(ts_list):
-                if q.get('close', [None])[i]:
-                    candles.append({'time': t, 'open': q['open'][i], 'high': q['high'][i],
-                                   'low': q['low'][i], 'close': q['close'][i],
-                                   'volume': (q.get('volume') or [0])[i] or 0})
-            return candles[-limit:]
-    except:
-        return []
-
-
-async def fetch_macro() -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{WORKER_URL}/macro")
-            if resp.status_code == 200:
-                return resp.json()
-    except:
-        pass
-    return {}
-
-
-async def fetch_fear_greed() -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get("https://api.alternative.me/fng/?limit=2")
-            d = resp.json()
-            cur = d['data'][0]
-            return {'value': int(cur['value']), 'label': cur['value_classification']}
-    except:
-        return {'value': 50, 'label': 'Neutral'}
-
-
-async def fetch_onchain(asset: str) -> dict:
-    if asset not in BINANCE_SYMBOLS:
-        return {}
-    try:
-        sym = BINANCE_SYMBOLS[asset]
-        async with httpx.AsyncClient(timeout=10) as client:
-            tasks = [
-                client.get(f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={sym}"),
-                client.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={sym}"),
-                client.get(f"https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol={sym}&period=1h&limit=1"),
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        data = {}
-        if not isinstance(results[0], Exception):
-            fr_data = results[0].json()
-            data['funding_rate'] = float(fr_data.get('lastFundingRate', 0)) * 100
-        if not isinstance(results[1], Exception):
-            oi_data = results[1].json()
-            data['open_interest'] = float(oi_data.get('openInterest', 0))
-        if not isinstance(results[2], Exception):
-            ls_data = results[2].json()
-            if ls_data:
-                data['long_short_ratio'] = float(ls_data[0].get('longShortRatio', 1))
-        return data
-    except:
-        return {}
+        return assign_cluster(asset, ind)
+    except Exception:
+        return {'available': False}
 
 
 def build_state_vector(ind: dict) -> list:
@@ -214,12 +123,15 @@ def build_state_vector(ind: dict) -> list:
     ]
 
 
+_ml_cache = {}  # asset -> trained ensemble model artifact
+
+
 async def _async_retrain(asset_name: str):
-    """Retrain ML model in background after new feedback."""
+    """Retrain ML ensemble in background after new feedback."""
     await asyncio.sleep(1)
     try:
         preds = await get_predictions(asset_name, 500)
-        model = train_ml_classifier(preds)
+        model = train_ensemble(preds)
         if model:
             _ml_cache[asset_name] = model
             print(f"✓ ML retrained for {asset_name}: {model['n_samples']} samples")
@@ -228,31 +140,31 @@ async def _async_retrain(asset_name: str):
 
 
 async def warm_ml_models():
-    """Pre-train ML models from existing prediction history."""
+    """Pre-train ML ensemble models from existing prediction history."""
     await asyncio.sleep(2)  # Let DB init complete
     try:
         all_preds = await get_predictions(limit=500)
         assets = list(set(p['asset'] for p in all_preds))
         for asset_name in assets:
             asset_preds = [p for p in all_preds if p['asset'] == asset_name]
-            model = train_ml_classifier(asset_preds)
+            model = train_ensemble(asset_preds)
             if model:
                 _ml_cache[asset_name] = model
-                print(f"✓ ML model trained for {asset_name}: {model['n_samples']} samples, {model['train_accuracy']:.0%} accuracy")
+                print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
     except Exception as e:
         print(f"⚠ ML warm-up skipped: {e}")
 
 
 @app.post("/retrain")
 async def retrain(asset_name: str = None):
-    """Retrain ML model after new feedback arrives."""
+    """Retrain ML ensemble after new feedback arrives."""
     try:
         preds = await get_predictions(asset_name, 500)
-        model = train_ml_classifier(preds)
+        model = train_ensemble(preds)
         if model:
             key = asset_name or 'all'
             _ml_cache[key] = model
-            return {"ok": True, "samples": model['n_samples'], "accuracy": model['train_accuracy']}
+            return {"ok": True, "samples": model['n_samples'], "accuracy": model.get('train_accuracy', 0)}
         return {"ok": False, "reason": "Not enough rated predictions (need 20+)"}
     except Exception as e:
         return {"ok": False, "reason": str(e)}
@@ -319,14 +231,26 @@ async def predict(req: PredictRequest):
         slog(f"✓ Found {len(similar)} similar periods — {wins/len(similar)*100:.0f}% were up")
 
     # ── Fetch parallel data ──────────────────────────────────────────────
-    slog("🌐 Fetching macro, on-chain, news in parallel...")
-    macro_data, fg_data, onchain_data = await asyncio.gather(
-        fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset)
+    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster in parallel...")
+    asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
+    macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data, cluster_data = await asyncio.gather(
+        fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset),
+        get_sentiment_snapshot(req.asset),
+        get_macro_context(req.asset, req.horizon),
+        get_correlation_summary(req.asset),
+        _safe_assign_cluster(req.asset, ind),
     )
+    if sentiment_data.get('available'):
+        slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
+    if macro_context.get('warnings'):
+        slog(f"⚠ Macro: {'; '.join(macro_context['warnings'][:2])}")
+    if correlation_data.get('available'):
+        slog(f"✓ Correlations loaded")
+    if cluster_data.get('available'):
+        slog(f"✓ Cluster #{cluster_data.get('cluster_id', '?')} ({cluster_data.get('members', 0)} members)")
 
     # ── Fetch news ───────────────────────────────────────────────────────
     slog("📰 Fetching news from 10+ sources...")
-    asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
     articles = await fetch_asset_news(req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type)
     slog(f"✓ {len(articles)} headlines collected")
 
@@ -365,36 +289,43 @@ async def predict(req: PredictRequest):
             }
             slog(f"✓ Daily: {'BULL' if mtf_data['daily_bull'] else 'BEAR' if mtf_data['daily_bear'] else 'NEUTRAL'}")
 
-    # ── ML Classifier ────────────────────────────────────────────────────
-    ml_result = predict_ml(ind, 'BUY')  # get score before we know direction
-    if ml_result['available']:
-        slog(f"✓ ML classifier: n_train={ml_result['n_train']}")
-
-    # ── Agent 1: Quant ───────────────────────────────────────────────────
-    slog("📐 Agent 1 (Quant) analyzing...")
-    quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon)
-    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key)
-    slog(f"✓ Quant: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
-
-    # ── ML Classifier (local, from history) ─────────────────────────────
+    # ── ML Ensemble ──────────────────────────────────────────────────────
     ml_result = {'confidence': 50, 'available': False}
     model_artifact = _ml_cache.get(req.asset)
     if model_artifact:
-        ml_result = ml_predict(model_artifact, ind)
-        slog(f"✓ ML classifier: {ml_result['confidence']:.0f}% win probability ({ml_result['n_samples']} samples)")
+        ml_result = predict_ensemble(model_artifact, ind)
+        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
+    else:
+        slog("⚠ ML ensemble: no trained model yet")
 
-    # ── Bayesian confidence blending ─────────────────────────────────────
+    # ── Agent 1: Quant ───────────────────────────────────────────────────
+    slog("📐 Agent 1 (Quant) analyzing...")
+    quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
+                                       cluster_data=cluster_data, correlation_data=correlation_data)
+    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key)
+    slog(f"✓ Quant: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
+
+    # ── Bayesian + 4-way confidence blending ────────────────────────────
     rated_preds = await get_predictions(req.asset, 200)
     raw_ai_conf = quant_result.get('confidence', 50)
     bayes_conf = bayesian_confidence(rated_preds, req.asset, req.horizon, raw_ai_conf)
-    if ml_result['available']:
-        # 3-way blend: AI 40%, Bayesian 35%, ML 25%
-        blended_conf = raw_ai_conf * 0.4 + bayes_conf * 0.35 + ml_result['confidence'] * 0.25
+    ml_conf = ml_result.get('score', 0.5) * 100 if ml_result['available'] else None
+    cluster_conf = cluster_data.get('win_rate_4h') if cluster_data.get('available') else None
+
+    if ml_conf is not None and cluster_conf is not None:
+        # 4-way: AI 25% + Bayes 30% + ML 25% + Cluster 20%
+        blended_conf = raw_ai_conf * 0.25 + bayes_conf * 0.30 + ml_conf * 0.25 + cluster_conf * 0.20
+    elif ml_conf is not None:
+        # 3-way: AI 35% + Bayes 35% + ML 30%
+        blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + ml_conf * 0.30
+    elif cluster_conf is not None:
+        # 3-way: AI 35% + Bayes 35% + Cluster 30%
+        blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
     else:
-        # 2-way blend: AI 55%, Bayesian 45%
+        # 2-way: AI 55% + Bayes 45%
         blended_conf = raw_ai_conf * 0.55 + bayes_conf * 0.45
     quant_result['confidence'] = round(blended_conf)
-    slog(f"✓ Bayesian blend: AI={raw_ai_conf}% → Bayes={bayes_conf:.0f}% → Final={quant_result['confidence']}%")
+    slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
 
     # ── Agent 2: News ────────────────────────────────────────────────────
     slog(f"📰 Agent 2 (News/{'DeepSeek V3' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
@@ -494,6 +425,78 @@ async def predict(req: PredictRequest):
             gate_reason = f"Hurst={hurst:.3f} random walk — need 65%+ confidence"
             slog(f"⚠ Hurst gate: {hurst:.3f}")
 
+    # GATE 7: FUNDING RATE EXTREME — BUY + funding > 0.08% = -15 confidence
+    if decision.get('decision') == 'BUY' and is_crypto:
+        funding = onchain_data.get('funding_rate', 0) if onchain_data else 0
+        if funding > 0.0008:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ Funding rate gate: rate={funding:.4%} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 8: AGENT CONFLICT — Quant vs News disagree + <72% = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE':
+        q_dir = quant_result.get('direction', '').upper()
+        n_sent = news_result.get('sentiment', '').upper()
+        agents_disagree = (q_dir == 'BUY' and n_sent == 'BEARISH') or (q_dir == 'SELL' and n_sent == 'BULLISH')
+        if agents_disagree and decision.get('confidence', 0) < 72:
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Agent conflict: Quant={q_dir} vs News={n_sent} + confidence < 72%"
+            slog(f"⚠ Agent conflict gate: {q_dir} vs {n_sent}")
+
+    # GATE 9: CMF CONTRADICTION — BUY + CMF<-0.1 or SELL + CMF>0.1 = -15 confidence
+    if decision.get('decision') != 'NO_TRADE':
+        cmf = ind.get('cmf', 0)
+        if (decision['decision'] == 'BUY' and cmf < -0.1) or (decision['decision'] == 'SELL' and cmf > 0.1):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ CMF contradiction: {decision['decision']} but CMF={cmf:.3f} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 10: OBV DIVERGENCE — BUY + OBV falling or SELL + OBV rising = -15 confidence
+    if decision.get('decision') != 'NO_TRADE':
+        obv_slope = ind.get('obv_slope', 0)
+        if (decision['decision'] == 'BUY' and obv_slope < -0.1) or (decision['decision'] == 'SELL' and obv_slope > 0.1):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ OBV divergence: {decision['decision']} but OBV slope={obv_slope:.3f} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 11: CLUSTER BOUNDARY — <10 members in cluster = cap 60%
+    if decision.get('decision') != 'NO_TRADE' and cluster_data.get('available'):
+        if cluster_data.get('members', 0) < 10 and decision.get('confidence', 0) > 60:
+            slog(f"⚠ Cluster boundary: only {cluster_data['members']} members — capped 60%")
+            decision['confidence'] = 60
+
+    # GATE 12: ML AGREEMENT — ensemble disagrees with decision = cap 60%
+    if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
+        ml_says_up = ml_result.get('score', 0.5) > 0.55
+        ml_says_down = ml_result.get('score', 0.5) < 0.45
+        if (decision['decision'] == 'BUY' and ml_says_down) or (decision['decision'] == 'SELL' and ml_says_up):
+            if decision.get('confidence', 0) > 60:
+                slog(f"⚠ ML disagreement: ML score={ml_result['score']:.2f} vs {decision['decision']} — capped 60%")
+                decision['confidence'] = 60
+
+    # GATE 13: CONFIDENCE FLOOR — <45% = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < 45:
+        decision['_original_decision'] = decision.get('decision')
+        decision['decision'] = 'NO_TRADE'
+        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < 45%"
+        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}%")
+
+    # GATE 14: UPCOMING EVENT — high-impact event within horizon = -15 confidence
+    if decision.get('decision') != 'NO_TRADE' and macro_context.get('upcoming_events'):
+        high_impact = [e for e in macro_context['upcoming_events'] if e.get('impact') == 'high']
+        if high_impact:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ Event gate: {len(high_impact)} high-impact event(s) ahead — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 15: ENTROPY GATE — Shannon entropy > 0.9 = cap 55%
+    if decision.get('decision') != 'NO_TRADE':
+        entropy = ind.get('entropy_ratio', 0.5)
+        if entropy > 0.9 and decision.get('confidence', 0) > 55:
+            slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
+            decision['confidence'] = 55
+
     # Save predicted price BEFORE nulling target for NO_TRADE
     predicted_price = None
     if decision.get('decision') == 'NO_TRADE':
@@ -558,8 +561,13 @@ async def predict(req: PredictRequest):
             "bb_pos": ind['bb_pos'], "poc": ind['poc'], "dist_poc": ind['dist_poc'],
         },
         "ind_snapshot": json.dumps(ind),  # full snapshot for ML training
-        # ML classifier
+        # ML ensemble
         "ml": ml_result,
+        # New engines
+        "sentiment": sentiment_data,
+        "macro_context": macro_context,
+        "correlation": correlation_data,
+        "cluster": cluster_data,
         # MC results
         "monte_carlo": mc,
         # Similarity
@@ -595,10 +603,16 @@ async def save_history(req: SavePredRequest):
 
 @app.post("/ml/retrain")
 async def ml_retrain():
-    """Retrain XGBoost on rated prediction history."""
-    preds = await get_predictions(limit=2000)
-    result = await retrain_model(preds)
-    return result
+    """Retrain ML ensemble on rated prediction history."""
+    try:
+        preds = await get_predictions(limit=2000)
+        model = train_ensemble(preds)
+        if model:
+            _ml_cache['all'] = model
+            return {"ok": True, "samples": model['n_samples'], "accuracy": model.get('train_accuracy', 0)}
+        return {"ok": False, "reason": "Not enough rated predictions"}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
 
 
 @app.get("/history/check-all")
@@ -618,16 +632,8 @@ async def check_all_outcomes(asset: str = None):
         # Fetch outcome price
         try:
             asset_sym = p['asset']
-            if asset_sym in BINANCE_SYMBOLS:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    resp = await client.get(
-                        f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[asset_sym]}"
-                    )
-                    price = float(resp.json()['price'])
-            else:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    resp = await client.get(f"{WORKER_URL}/price?sym={asset_sym}")
-                    price = resp.json()['price']
+            result = await fetch_current_price(asset_sym)
+            price = result['price']
 
             entry_price = p.get('entry_price', 0)
             moved = price - entry_price
@@ -664,17 +670,8 @@ async def check_outcome(req: OutcomeRequest):
     """Fetch price at horizon expiry and score prediction."""
     try:
         # Fetch current price
-        if req.asset in BINANCE_SYMBOLS:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[req.asset]}"
-                )
-                price = float(resp.json()['price'])
-        else:
-            worker = req.worker_url or WORKER_URL
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{worker}/price?sym={req.asset}")
-                price = resp.json()['price']
+        result = await fetch_current_price(req.asset)
+        price = result['price']
 
         moved = price - req.entry_price
         moved_pct = moved / req.entry_price * 100
@@ -724,18 +721,8 @@ async def check_outcome(req: OutcomeRequest):
 async def get_price(asset: str):
     """Get current price for an asset."""
     try:
-        if asset in BINANCE_SYMBOLS:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(
-                    f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[asset]}"
-                )
-                price = float(resp.json()['price'])
-                return {"price": price, "asset": asset}
-
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(f"{WORKER_URL}/price?sym={asset}")
-            d = resp.json()
-            return {"price": d['price'], "chg": d.get('chg'), "asset": asset}
+        result = await fetch_current_price(asset)
+        return {"price": result['price'], "chg": result.get('chg'), "asset": asset}
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -754,16 +741,91 @@ async def get_macro():
     return data
 
 
+@app.get("/accuracy")
+async def get_accuracy(asset: str = None):
+    """Get prediction accuracy statistics."""
+    try:
+        stats = await get_accuracy_stats(asset)
+        return {"stats": stats, "asset": asset}
+    except Exception as e:
+        return {"stats": [], "error": str(e)}
+
+
+@app.get("/market_data/{asset}")
+async def get_market_data(asset: str):
+    """Get comprehensive market data for an asset."""
+    try:
+        price_result, sentiment_data, correlation_data, macro_ctx = await asyncio.gather(
+            fetch_current_price(asset),
+            get_sentiment_snapshot(asset),
+            get_correlation_summary(asset),
+            get_macro_context(asset, 4),
+        )
+        return {
+            "asset": asset,
+            "price": price_result.get('price'),
+            "sentiment": sentiment_data,
+            "correlation": correlation_data,
+            "macro": macro_ctx,
+        }
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/alerts")
+async def get_alerts():
+    """Get latest confluence alerts."""
+    try:
+        alerts = get_latest_alerts()
+        return {"alerts": alerts, "count": len(alerts)}
+    except Exception as e:
+        return {"alerts": [], "error": str(e)}
+
+
+class SettingsRequest(BaseModel):
+    settings: dict
+
+
+@app.get("/settings")
+async def get_settings():
+    """Get current backend settings (which optional keys are configured)."""
+    return {
+        "fred_configured": is_configured('FRED_API_KEY'),
+        "reddit_configured": is_configured('REDDIT_CLIENT_ID'),
+        "alpaca_configured": is_configured('ALPACA_KEY'),
+        "openai_configured": is_configured('OPENAI_API_KEY'),
+        "deepseek_configured": is_configured('DEEPSEEK_API_KEY'),
+    }
+
+
+@app.post("/settings")
+async def save_settings(req: SettingsRequest):
+    """Save API key settings from frontend."""
+    saved = []
+    for key, value in req.settings.items():
+        if key in ('FRED_API_KEY', 'REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET',
+                    'ALPACA_KEY', 'ALPACA_SECRET') and value:
+            os.environ[key] = value
+            set_setting(key, value)
+            saved.append(key)
+    return {"ok": True, "saved": saved}
+
+
 @app.get("/db/status")
 async def db_status():
     """Database statistics."""
     import aiosqlite
     async with aiosqlite.connect(DB_PATH) as db:
         stats = {}
-        for table in ['price_data', 'news_sentiment', 'articles', 'predictions']:
-            cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
-            row = await cursor.fetchone()
-            stats[table] = row[0]
+        tables = ['price_data', 'news_sentiment', 'articles', 'predictions',
+                  'sentiment_snapshots', 'macro_events', 'accuracy_stats', 'pattern_memory', 'clusters']
+        for table in tables:
+            try:
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+                row = await cursor.fetchone()
+                stats[table] = row[0]
+            except Exception:
+                stats[table] = 0
         # Latest data per asset
         cursor = await db.execute(
             "SELECT asset, MAX(ts) as latest, COUNT(*) as cnt FROM price_data GROUP BY asset"
