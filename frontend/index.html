@@ -177,6 +177,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="status-dot idle" id="dot"></div>
     <div class="status-txt" id="stxt">Connecting...</div>
     <button class="key-btn" onclick="openHistory()">HISTORY</button>
+    <button class="key-btn" onclick="openAlerts()" id="alerts-btn">ALERTS</button>
     <button class="key-btn" onclick="openModal()">⚙ KEYS</button>
   </div>
 
@@ -259,6 +260,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="rp-cell"><div class="rp-lbl">🤖 MODEL</div><div class="rp-val dim" id="rp-model">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">🏄 HURST</div><div class="rp-val" id="rp-hurst">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">📊 HMM STATE</div><div class="rp-val" id="rp-hmm">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🔮 CLUSTER</div><div class="rp-val" id="rp-cluster">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">💬 SENTIMENT</div><div class="rp-val" id="rp-sentiment">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🔗 CORRELATION</div><div class="rp-val" id="rp-corr">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">🤖 ML ENSEMBLE</div><div class="rp-val" id="rp-ml">—</div></div>
   </div>
   <div class="insight" id="rp-insight">—</div>
   <div id="gate-box" style="padding:6px 14px;border-top:1px solid var(--border);font-size:8px;color:var(--red);display:none"></div>
@@ -298,8 +303,31 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <input class="modal-input" id="k-openai" type="password" placeholder="sk-..." autocomplete="off">
     <div class="modal-lbl">DEEPSEEK API KEY (R1 + V3 News)</div>
     <input class="modal-input" id="k-deepseek" type="password" placeholder="sk-..." autocomplete="off">
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="font-size:8px;color:var(--muted);margin-bottom:8px">OPTIONAL — unlock extra data sources</div>
+      <div class="modal-lbl">FRED API KEY (macro data)</div>
+      <input class="modal-input" id="k-fred" type="password" placeholder="Get free at fred.stlouisfed.org" autocomplete="off">
+      <div class="modal-lbl">REDDIT CLIENT ID (sentiment)</div>
+      <input class="modal-input" id="k-reddit-id" type="password" placeholder="Reddit app client ID" autocomplete="off">
+      <div class="modal-lbl">REDDIT CLIENT SECRET</div>
+      <input class="modal-input" id="k-reddit-secret" type="password" placeholder="Reddit app client secret" autocomplete="off">
+      <div class="modal-lbl">ALPACA KEY (market data)</div>
+      <input class="modal-input" id="k-alpaca-key" type="password" placeholder="Alpaca API key" autocomplete="off">
+      <div class="modal-lbl">ALPACA SECRET</div>
+      <input class="modal-input" id="k-alpaca-secret" type="password" placeholder="Alpaca secret" autocomplete="off">
+    </div>
     <button class="modal-save" onclick="saveKeys()">SAVE & CONNECT</button>
   </div>
+</div>
+
+<!-- Alerts panel -->
+<div class="history-panel" id="alerts-panel">
+  <div class="hp-hdr">
+    <div class="hp-title">ALERTS</div>
+    <div style="margin-left:auto;font-size:8px;color:var(--muted)" id="alerts-info">Scanning...</div>
+    <button class="hp-close" onclick="closeAlerts()">✕</button>
+  </div>
+  <div class="hp-list" id="alerts-list"></div>
 </div>
 
 <div class="toast" id="toast"></div>

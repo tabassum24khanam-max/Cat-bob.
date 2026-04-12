@@ -1,36 +1,17 @@
 """
 ULTRAMAX Data Agent — 24/7 Background Pipeline
 Continuous scraping, database updates, weekly recompute
+Now uses centralized config and data_fetcher
 """
 import asyncio
-import httpx
 import json
 import time
-import feedparser
 import aiosqlite
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from agents.news_agent import fetch_asset_news, score_sentiment, score_impact, classify_category
+from datetime import datetime, timezone
+from config import ASSETS, BINANCE_SYMBOLS, YAHOO_SYMBOLS, ASSET_NAMES, ALL_ASSETS
+from data_fetcher import fetch_binance_candles, fetch_yahoo_candles
 from database import DB_PATH, init_db
-
-ASSETS = {
-    'crypto': ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE'],
-    'stock':  ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'SPY'],
-    'macro':  ['GC=F', 'CL=F', 'SI=F', 'XOM', 'LMT'],
-}
-
-BINANCE_SYMBOLS = {
-    'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT',
-    'BNB': 'BNBUSDT', 'XRP': 'XRPUSDT', 'DOGE': 'DOGEUSDT',
-}
-
-YAHOO_SYMBOLS = {
-    'AAPL': 'AAPL', 'TSLA': 'TSLA', 'NVDA': 'NVDA', 'MSFT': 'MSFT',
-    'GOOGL': 'GOOGL', 'SPY': 'SPY', 'GC=F': 'GC=F', 'CL=F': 'CL=F',
-    'SI=F': 'SI=F', 'XOM': 'XOM', 'LMT': 'LMT',
-}
-
-WORKER_URL = None  # Set from config
+from agents.news_agent import fetch_asset_news
 
 log_queue = asyncio.Queue()
 
@@ -51,69 +32,12 @@ async def log(job: str, asset: str = None, status: str = 'ok', rows: int = 0, er
         await db.commit()
 
 
-async def fetch_binance_candles(symbol: str, interval: str = '1h', limit: int = 24) -> list:
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"https://api.binance.com/api/v3/klines",
-            params={'symbol': symbol, 'interval': interval, 'limit': limit}
-        )
-        data = resp.json()
-        return [{
-            'time': int(k[0]) // 1000,
-            'open': float(k[1]), 'high': float(k[2]),
-            'low': float(k[3]), 'close': float(k[4]),
-            'volume': float(k[5])
-        } for k in data]
-
-
-async def fetch_yahoo_candles(symbol: str, interval: str = '1h', limit: int = 24) -> list:
-    """Fetch via Cloudflare Worker or direct."""
-    if WORKER_URL:
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    f"{WORKER_URL}/candles",
-                    params={'sym': symbol, 'iv': interval}
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data.get('candles', [])[-limit:]
-        except:
-            pass
-
-    # Direct Yahoo fallback
-    try:
-        range_map = {'1h': '60d', '4h': '3mo', '1d': '2y'}
-        yrange = range_map.get(interval, '60d')
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                params={'range': yrange, 'interval': interval},
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            d = resp.json()
-            res = d.get('chart', {}).get('result', [{}])[0]
-            q = res.get('indicators', {}).get('quote', [{}])[0]
-            ts = res.get('timestamp', [])
-            candles = []
-            for i, t in enumerate(ts):
-                if q.get('close', [None])[i] is not None:
-                    candles.append({
-                        'time': t, 'open': q['open'][i], 'high': q['high'][i],
-                        'low': q['low'][i], 'close': q['close'][i],
-                        'volume': q.get('volume', [0])[i] or 0
-                    })
-            return candles[-limit:]
-    except:
-        return []
-
-
 async def compute_and_store_indicators(asset: str, candles: list):
     """Compute all indicators and store in database."""
     if len(candles) < 60:
         return
 
-    from agents.quant_agent import compute_indicators, monte_carlo
+    from indicators import compute_indicators, monte_carlo
     ind = compute_indicators(candles)
     if not ind:
         return
@@ -156,6 +80,14 @@ async def compute_and_store_indicators(asset: str, candles: list):
         'hmm_trending': ind['hmm_probs'].get('TRENDING', 0),
         'hmm_ranging': ind['hmm_probs'].get('RANGING', 0),
         'hmm_volatile': ind['hmm_probs'].get('VOLATILE', 0),
+        # New indicator columns
+        'stoch_d': ind.get('stoch_d'),
+        'pivot_r2': ind.get('pivot_r2'),
+        'pivot_s2': ind.get('pivot_s2'),
+        'engulfing': ind.get('engulfing', 0),
+        'doji': ind.get('doji', 0),
+        'hammer': ind.get('hammer', 0),
+        'shooting_star': ind.get('shooting_star', 0),
     }
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -173,7 +105,6 @@ async def compute_forward_returns():
     """Update forward returns for past hours where price data is available."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # Find rows missing forward returns
         cursor = await db.execute(
             "SELECT asset, ts, close FROM price_data WHERE fwd_1h IS NULL ORDER BY ts DESC LIMIT 10000"
         )
@@ -231,36 +162,35 @@ async def update_news_sentiment(asset: str, asset_type: str, articles: list):
             categories.count('earnings'), categories.count('geopolitical'),
             top_headlines
         ))
-        # Store individual articles
         for a in articles:
             try:
                 await db.execute("""
                     INSERT OR IGNORE INTO articles (asset, ts, source, tier, headline, sentiment, impact, category)
                     VALUES (?,?,?,?,?,?,?,?)
                 """, (asset, ts, a['source'], a['tier'], a['headline'], a['sentiment'], a['impact'], a['category']))
-            except:
+            except Exception:
                 pass
         await db.commit()
 
 
 async def update_macro_data():
     """Fetch macro data (VIX, DXY, etc.) and store."""
+    from data_fetcher import fetch_macro
+    import httpx
+
     ts = hour_ts()
     data = {'ts': ts}
 
-    if WORKER_URL:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(f"{WORKER_URL}/macro")
-                if resp.status_code == 200:
-                    macro = resp.json()
-                    data['vix'] = macro.get('vix')
-                    data['dxy'] = macro.get('dxy')
-                    data['ten_year_yield'] = macro.get('tenYear')
-                    data['fed_rate'] = macro.get('fedRate')
-                    data['spy'] = macro.get('spy')
-        except:
-            pass
+    try:
+        macro = await fetch_macro()
+        if macro:
+            data['vix'] = macro.get('vix')
+            data['dxy'] = macro.get('dxy')
+            data['ten_year_yield'] = macro.get('tenYear')
+            data['fed_rate'] = macro.get('fedRate')
+            data['spy'] = macro.get('spy')
+    except Exception:
+        pass
 
     if 'vix' in data:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -296,24 +226,16 @@ async def task_update_prices():
                 await log('price_update', asset, 'error', 0, str(e))
 
         duration = int((time.time() - start) * 1000)
-        await log('price_update', None, 'ok', len(ASSETS['crypto']) + len(ASSETS['stock']) + len(ASSETS['macro']), duration_ms=duration)
+        await log('price_update', None, 'ok', len(ALL_ASSETS), duration_ms=duration)
         print(f"✓ Price update complete in {duration}ms")
-        await asyncio.sleep(900)  # 15 minutes
+        await asyncio.sleep(900)
 
 
 async def task_update_news():
     """Update news sentiment for all assets every 30 minutes."""
-    ASSET_NAMES = {
-        'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'SOL': 'Solana',
-        'BNB': 'BNB', 'XRP': 'XRP', 'DOGE': 'Dogecoin',
-        'AAPL': 'Apple', 'TSLA': 'Tesla', 'NVDA': 'Nvidia',
-        'MSFT': 'Microsoft', 'GOOGL': 'Google', 'SPY': 'S&P 500',
-        'GC=F': 'Gold', 'CL=F': 'Oil', 'XOM': 'ExxonMobil', 'LMT': 'Lockheed',
-    }
     while True:
         start = time.time()
-        all_assets = ASSETS['crypto'] + ASSETS['stock'] + ASSETS['macro']
-        for asset in all_assets:
+        for asset in ALL_ASSETS:
             try:
                 asset_type = 'crypto' if asset in ASSETS['crypto'] else \
                              'stock' if asset in ASSETS['stock'] else 'macro'
@@ -324,9 +246,9 @@ async def task_update_news():
                 await log('news_update', asset, 'error', 0, str(e))
 
         duration = int((time.time() - start) * 1000)
-        await log('news_update', None, 'ok', len(all_assets), duration_ms=duration)
+        await log('news_update', None, 'ok', len(ALL_ASSETS), duration_ms=duration)
         print(f"✓ News update complete in {duration}ms")
-        await asyncio.sleep(1800)  # 30 minutes
+        await asyncio.sleep(1800)
 
 
 async def task_compute_forward_returns():
@@ -345,27 +267,52 @@ async def task_update_macro():
     while True:
         try:
             await update_macro_data()
-        except Exception as e:
+        except Exception:
             pass
         await asyncio.sleep(3600)
 
 
+async def task_update_sentiment():
+    """Update social sentiment every 15 minutes."""
+    while True:
+        try:
+            from sentiment import get_sentiment_snapshot
+            for asset in ALL_ASSETS[:6]:  # Top 6 assets only (rate limits)
+                try:
+                    await get_sentiment_snapshot(asset)
+                except Exception:
+                    pass
+                await asyncio.sleep(2)  # Rate limit spacing
+        except ImportError:
+            pass
+        await asyncio.sleep(900)
+
+
+async def task_refresh_calendar():
+    """Refresh economic calendar every 6 hours."""
+    while True:
+        try:
+            from macro_engine import refresh_calendar
+            count = await refresh_calendar()
+            print(f"✓ Calendar refreshed: {count} events")
+        except Exception:
+            pass
+        await asyncio.sleep(21600)
+
+
 async def run_data_agent(worker_url: str = None):
     """Main entry point for the Data Agent."""
-    global WORKER_URL
-    WORKER_URL = worker_url
+    from config import WORKER_URL
 
     await init_db()
     print("🚀 ULTRAMAX Data Agent starting...")
     print(f"   Database: {DB_PATH}")
-    print(f"   Worker URL: {WORKER_URL or 'not set'}")
-    print(f"   Tracking {len(ASSETS['crypto'])} crypto + {len(ASSETS['stock'])} stocks + {len(ASSETS['macro'])} macro assets")
+    print(f"   Worker URL: {worker_url or WORKER_URL}")
+    print(f"   Tracking {len(ALL_ASSETS)} assets")
     print()
 
-    # Run initial update immediately
+    # Run initial update
     print("📊 Running initial data collection...")
-    # Initial data load
-    print('📊 Loading initial prices...')
     for asset in ASSETS['crypto']:
         try:
             candles = await fetch_binance_candles(BINANCE_SYMBOLS[asset], '1h', 300)
@@ -381,6 +328,8 @@ async def run_data_agent(worker_url: str = None):
         task_update_news(),
         task_compute_forward_returns(),
         task_update_macro(),
+        task_update_sentiment(),
+        task_refresh_calendar(),
     )
 
 

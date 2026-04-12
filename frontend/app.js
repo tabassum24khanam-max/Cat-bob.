@@ -3,12 +3,18 @@
 let backendUrl = localStorage.getItem('um_backend') || 'http://localhost:8000';
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
+let fredKey = localStorage.getItem('um_fred')  || '';
+let redditId = localStorage.getItem('um_reddit_id') || '';
+let redditSecret = localStorage.getItem('um_reddit_secret') || '';
+let alpacaKey = localStorage.getItem('um_alpaca_key') || '';
+let alpacaSecret = localStorage.getItem('um_alpaca_secret') || '';
 let asset   = 'BTC';
 let horizon = 4;
 let chartInst = null, mainSeries = null, predSeries = null;
 let currentTab = 'crypto';
 let lastResult = null;
 let _predicting = false;
+let _alertsCache = [];
 
 const ASSETS = {
   crypto: ['BTC','ETH','SOL','BNB','XRP','DOGE'],
@@ -30,8 +36,11 @@ window.addEventListener('DOMContentLoaded', () => {
   else { setDot('idle','READY'); checkBackend(); }
   setInterval(checkBackend, 30000);
   setInterval(tickPrice, 15000);
+  setInterval(fetchAlerts, 60000);
   loadChart();
   retroactivelyScoreHistory();
+  fetchAlerts();
+  pushSettingsToBackend();
 });
 
 async function checkBackend() {
@@ -245,8 +254,33 @@ function displayResult(r) {
   let confLine = modelMap[r.agent_model] || r.agent_model || '—';
   if (r.raw_ai_conf) confLine += ` · AI:${r.raw_ai_conf}%`;
   if (r.bayesian_conf) confLine += ` B:${r.bayesian_conf?.toFixed(0)}%`;
-  if (r.ml?.available) confLine += ` ML:${r.ml.confidence?.toFixed(0)}%`;
+  if (r.ml?.available) confLine += ` ML:${r.ml.score?.toFixed(0) || r.ml.confidence?.toFixed(0)}%`;
   set('rp-model', confLine);
+
+  // Cluster info
+  if (r.cluster && r.cluster.available) {
+    set('rp-cluster', `#${r.cluster.cluster_id} · ${r.cluster.n_members} matches · ${(r.cluster.win_rate_4h||50).toFixed(0)}% win`);
+  } else { set('rp-cluster', 'Not built yet'); }
+
+  // Sentiment info
+  if (r.sentiment_data && r.sentiment_data.sources_available > 0) {
+    const sc = r.sentiment_data.combined_score || 0;
+    set('rp-sentiment', `${sc > 0 ? '+' : ''}${sc.toFixed(2)} (${r.sentiment_data.sources_available} sources)`);
+  } else { set('rp-sentiment', 'No data'); }
+
+  // Correlation info
+  if (r.correlation && r.correlation.available) {
+    const parts = [];
+    if (r.correlation.btc_corr != null) parts.push(`BTC:${r.correlation.btc_corr.toFixed(2)}`);
+    if (r.correlation.spy_corr != null) parts.push(`SPY:${r.correlation.spy_corr.toFixed(2)}`);
+    set('rp-corr', parts.join(' · ') || '—');
+  } else { set('rp-corr', 'Building...'); }
+
+  // ML ensemble info
+  if (r.ml?.available) {
+    const agree = r.ml.agreement ? '✓ agree' : '✗ disagree';
+    set('rp-ml', `${r.ml.score?.toFixed(0)}% · XGB:${r.ml.xgb_score||'?'} RF:${r.ml.rf_score||'?'} · ${agree}`);
+  } else { set('rp-ml', 'Not trained'); }
 
   const sim = r.similarity||{};
   const parts = [];
@@ -509,6 +543,8 @@ function openModal() {
   document.getElementById('kmodal')?.classList.add('on');
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
   set('k-backend',backendUrl); set('k-openai',apiKey); set('k-deepseek',dsKey);
+  set('k-fred',fredKey); set('k-reddit-id',redditId); set('k-reddit-secret',redditSecret);
+  set('k-alpaca-key',alpacaKey); set('k-alpaca-secret',alpacaSecret);
 }
 
 function saveKeys() {
@@ -517,13 +553,76 @@ function saveKeys() {
   const ds=document.getElementById('k-deepseek')?.value.trim();
   if (!oai||oai.length<10) { showToast('⚠ OpenAI key required'); return; }
   backendUrl=bk||'http://localhost:8000'; apiKey=oai; dsKey=ds||'';
+  fredKey=document.getElementById('k-fred')?.value.trim()||'';
+  redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
+  redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
+  alpacaKey=document.getElementById('k-alpaca-key')?.value.trim()||'';
+  alpacaSecret=document.getElementById('k-alpaca-secret')?.value.trim()||'';
   localStorage.setItem('um_backend',backendUrl);
   localStorage.setItem('um_key',apiKey);
   localStorage.setItem('um_dskey',dsKey);
+  localStorage.setItem('um_fred',fredKey);
+  localStorage.setItem('um_reddit_id',redditId);
+  localStorage.setItem('um_reddit_secret',redditSecret);
+  localStorage.setItem('um_alpaca_key',alpacaKey);
+  localStorage.setItem('um_alpaca_secret',alpacaSecret);
   document.getElementById('kmodal')?.classList.remove('on');
   checkBackend();
+  pushSettingsToBackend();
   showToast('✓ Keys saved');
 }
+
+async function pushSettingsToBackend() {
+  const settings = {};
+  if (fredKey) settings.FRED_API_KEY = fredKey;
+  if (redditId) settings.REDDIT_CLIENT_ID = redditId;
+  if (redditSecret) settings.REDDIT_CLIENT_SECRET = redditSecret;
+  if (alpacaKey) settings.ALPACA_KEY = alpacaKey;
+  if (alpacaSecret) settings.ALPACA_SECRET = alpacaSecret;
+  if (Object.keys(settings).length === 0) return;
+  try {
+    await fetch(`${backendUrl}/settings`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(settings), signal: AbortSignal.timeout(5000)
+    });
+  } catch {}
+}
+
+async function fetchAlerts() {
+  try {
+    const r = await fetch(`${backendUrl}/alerts`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return;
+    const data = await r.json();
+    _alertsCache = data.alerts || [];
+    const btn = document.getElementById('alerts-btn');
+    if (btn) btn.textContent = _alertsCache.length > 0 ? `ALERTS (${_alertsCache.length})` : 'ALERTS';
+  } catch {}
+}
+
+function openAlerts() {
+  document.getElementById('alerts-panel')?.classList.add('on');
+  const list = document.getElementById('alerts-list');
+  const info = document.getElementById('alerts-info');
+  if (info) info.textContent = `${_alertsCache.length} active alerts`;
+  if (!list) return;
+  if (_alertsCache.length === 0) {
+    list.innerHTML = '<div style="text-align:center;padding:40px;font-size:9px;color:var(--muted)">No high-confluence alerts right now</div>';
+    return;
+  }
+  list.innerHTML = _alertsCache.map(a => {
+    const dirCls = a.direction === 'BUY' ? 'BUY' : a.direction === 'SELL' ? 'SELL' : 'NO_TRADE';
+    return `<div class="he" onclick="selA('${a.asset}');closeAlerts()">
+      <div class="he-top">
+        <span class="he-asset">${a.asset} · ${a.asset_name}</span>
+        <span class="he-dec ${dirCls}">${a.direction} · ${a.score}/10</span>
+      </div>
+      <div class="he-row"><span>${fmtP(a.price)}</span><span>${a.regime}</span></div>
+      <div style="font-size:7px;color:var(--cyan);margin-top:4px">${a.signals.join(' · ')}</div>
+    </div>`;
+  }).join('');
+}
+
+function closeAlerts() { document.getElementById('alerts-panel')?.classList.remove('on'); }
 
 async function checkAllOutcomes() {
   showToast('Checking all outcomes...');
