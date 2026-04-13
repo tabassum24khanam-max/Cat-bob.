@@ -42,9 +42,10 @@ app.add_middleware(
 )
 
 # Mount frontend
-frontend_path = os.path.join(os.path.dirname(__file__), '..', 'frontend')
+frontend_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend'))
 if os.path.exists(frontend_path):
     app.mount("/static", StaticFiles(directory=frontend_path), name="static")
+    print(f"✓ Frontend mounted from: {frontend_path}")
 
 
 # ─── Startup ────────────────────────────────────────────────────────────────
@@ -178,6 +179,14 @@ async def index():
     if os.path.exists(fp):
         return FileResponse(fp)
     return {"status": "ULTRAMAX Backend v3.0", "endpoints": ["/predict", "/history", "/health"]}
+
+
+@app.get("/app.js")
+async def serve_appjs():
+    fp = os.path.join(frontend_path, 'app.js')
+    if os.path.exists(fp):
+        return FileResponse(fp, media_type="application/javascript")
+    raise HTTPException(404, "app.js not found")
 
 
 @app.get("/health")
