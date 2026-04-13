@@ -24,5 +24,5 @@ EXPOSE 8000
 # Railway sets PORT env var
 ENV PORT=8000
 
-# Start server
-CMD python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}
+# Start server (run from backend/ so bare imports work)
+CMD cd backend && python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}
