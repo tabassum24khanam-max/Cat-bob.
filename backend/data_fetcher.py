@@ -6,17 +6,29 @@ import asyncio
 import httpx
 from config import BINANCE_SYMBOLS, YAHOO_SYMBOLS, WORKER_URL, FRED_API_KEY, is_configured
 
+# yfinance for direct Yahoo fallback (no worker needed)
+try:
+    import yfinance as yf
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+
 
 async def fetch_binance_candles(symbol: str, interval: str = '1h', limit: int = 300) -> list:
     """Fetch candles from Binance API."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            "https://api.binance.com/api/v3/klines",
-            params={'symbol': symbol, 'interval': interval, 'limit': limit}
-        )
-        data = resp.json()
-        return [{'time': int(k[0]) // 1000, 'open': float(k[1]), 'high': float(k[2]),
-                 'low': float(k[3]), 'close': float(k[4]), 'volume': float(k[5])} for k in data]
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://api.binance.com/api/v3/klines",
+                params={'symbol': symbol, 'interval': interval, 'limit': limit}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return [{'time': int(k[0]) // 1000, 'open': float(k[1]), 'high': float(k[2]),
+                         'low': float(k[3]), 'close': float(k[4]), 'volume': float(k[5])} for k in data]
+    except Exception:
+        pass
+    return []
 
 
 async def fetch_yahoo_candles(symbol: str, interval: str = '1h', limit: int = 300,
@@ -62,23 +74,66 @@ async def fetch_candles(asset: str, interval: str = '1h', limit: int = 300,
                          worker_url: str = None) -> list:
     """Unified candle fetcher — picks Binance or Yahoo based on asset."""
     if asset in BINANCE_SYMBOLS:
-        return await fetch_binance_candles(BINANCE_SYMBOLS[asset], interval, limit)
+        candles = await fetch_binance_candles(BINANCE_SYMBOLS[asset], interval, limit)
+        if candles:
+            return candles
+        # Binance blocked — fall back to Yahoo for crypto (e.g. BTC-USD)
+        crypto_yahoo = {'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
+                        'BNB': 'BNB-USD', 'XRP': 'XRP-USD', 'DOGE': 'DOGE-USD',
+                        'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD',
+                        'MATIC': 'MATIC-USD', 'LINK': 'LINK-USD', 'UNI': 'UNI-USD'}
+        yahoo_sym = crypto_yahoo.get(asset)
+        if yahoo_sym:
+            return await fetch_yahoo_candles(yahoo_sym, interval, limit, worker_url)
+        return []
 
     symbol = YAHOO_SYMBOLS.get(asset, asset)
     return await fetch_yahoo_candles(symbol, interval, limit, worker_url)
 
 
 async def fetch_macro(worker_url: str = None) -> dict:
-    """Fetch macro data (VIX, DXY, etc.) from Worker."""
+    """Fetch macro data (VIX, DXY, etc.) from Worker or direct Yahoo/FRED."""
+    # Try worker first
     wurl = worker_url or WORKER_URL
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{wurl}/macro")
-            if resp.status_code == 200:
-                return resp.json()
-    except Exception:
-        pass
+    if wurl:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{wurl}/macro")
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            pass
+
+    # Direct fallback via yfinance
+    if HAS_YFINANCE:
+        try:
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, _fetch_macro_yfinance)
+            if data:
+                return data
+        except Exception:
+            pass
+
+    # FRED fallback for VIX
+    fred_data = await fetch_fred_macro()
+    if fred_data:
+        return fred_data
+
     return {}
+
+
+def _fetch_macro_yfinance() -> dict:
+    """Sync helper to fetch VIX/DXY/10Y from yfinance."""
+    result = {}
+    tickers = {'^VIX': 'vix', 'DX-Y.NYB': 'dxy', '^TNX': 'ten_year_yield'}
+    for sym, key in tickers.items():
+        try:
+            t = yf.Ticker(sym)
+            info = t.fast_info
+            result[key] = round(info.last_price, 2)
+        except Exception:
+            pass
+    return result
 
 
 async def fetch_fear_greed() -> dict:
@@ -186,16 +241,59 @@ async def fetch_coingecko_dominance() -> dict:
     return {}
 
 
-async def fetch_current_price(asset: str, worker_url: str = None) -> float:
-    """Fetch current price for a single asset."""
+async def fetch_current_price(asset: str, worker_url: str = None) -> dict:
+    """Fetch current price for a single asset. Returns {'price': float, 'chg': float|None}."""
+    # Crypto — Binance direct
     if asset in BINANCE_SYMBOLS:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.get(
-                f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[asset]}"
-            )
-            return float(resp.json()['price'])
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(
+                    f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[asset]}"
+                )
+                if resp.status_code == 200:
+                    return {'price': float(resp.json()['price'])}
+        except Exception:
+            pass
+        # Binance blocked — fall back to yfinance for crypto
+        if HAS_YFINANCE:
+            crypto_yahoo = {'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
+                            'BNB': 'BNB-USD', 'XRP': 'XRP-USD', 'DOGE': 'DOGE-USD',
+                            'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD',
+                            'MATIC': 'MATIC-USD', 'LINK': 'LINK-USD', 'UNI': 'UNI-USD'}
+            yahoo_sym = crypto_yahoo.get(asset)
+            if yahoo_sym:
+                loop = asyncio.get_event_loop()
+                price = await loop.run_in_executor(None, _get_yfinance_price, yahoo_sym)
+                if price:
+                    return {'price': price}
 
+    # Stocks/commodities — try worker first
     wurl = worker_url or WORKER_URL
-    async with httpx.AsyncClient(timeout=8) as client:
-        resp = await client.get(f"{wurl}/price?sym={asset}")
-        return resp.json()['price']
+    if wurl:
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(f"{wurl}/price?sym={asset}")
+                if resp.status_code == 200:
+                    d = resp.json()
+                    return {'price': d['price'], 'chg': d.get('chg')}
+        except Exception:
+            pass
+
+    # Direct Yahoo fallback via yfinance
+    if HAS_YFINANCE:
+        try:
+            symbol = YAHOO_SYMBOLS.get(asset, asset)
+            loop = asyncio.get_event_loop()
+            price = await loop.run_in_executor(None, _get_yfinance_price, symbol)
+            if price:
+                return {'price': price}
+        except Exception:
+            pass
+
+    raise Exception(f"Could not fetch price for {asset}")
+
+
+def _get_yfinance_price(symbol: str) -> float:
+    """Sync helper to get latest price from yfinance."""
+    t = yf.Ticker(symbol)
+    return t.fast_info.last_price
