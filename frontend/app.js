@@ -1,6 +1,8 @@
 // ULTRAMAX Frontend v3.0
 
-let backendUrl = localStorage.getItem('um_backend') || window.location.origin;
+// Auto-detect backend URL — always same origin since FastAPI serves both
+let _stored = localStorage.getItem('um_backend') || '';
+let backendUrl = (_stored && !_stored.includes('localhost')) ? _stored : window.location.origin;
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
 let fredKey = localStorage.getItem('um_fred')  || '';
@@ -53,7 +55,7 @@ async function checkBackend() {
     return true;
   } catch {
     document.getElementById('backend-dot').className = 'backend-dot err';
-    document.getElementById('backend-txt').textContent = 'Backend offline — run ./start.sh';
+    document.getElementById('backend-txt').textContent = 'Backend not connected';
     setDot('idle','BACKEND OFFLINE');
     return false;
   }
@@ -552,7 +554,7 @@ function saveKeys() {
   const oai=document.getElementById('k-openai')?.value.trim();
   const ds=document.getElementById('k-deepseek')?.value.trim();
   if (!oai||oai.length<10) { showToast('⚠ OpenAI key required'); return; }
-  backendUrl=bk||window.location.origin; apiKey=oai; dsKey=ds||'';
+  backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
   redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
   redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
