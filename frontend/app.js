@@ -1,6 +1,6 @@
 // ULTRAMAX Frontend v3.0
 
-let backendUrl = localStorage.getItem('um_backend') || 'http://localhost:8000';
+let backendUrl = localStorage.getItem('um_backend') || window.location.origin;
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
 let fredKey = localStorage.getItem('um_fred')  || '';
@@ -552,7 +552,7 @@ function saveKeys() {
   const oai=document.getElementById('k-openai')?.value.trim();
   const ds=document.getElementById('k-deepseek')?.value.trim();
   if (!oai||oai.length<10) { showToast('⚠ OpenAI key required'); return; }
-  backendUrl=bk||'http://localhost:8000'; apiKey=oai; dsKey=ds||'';
+  backendUrl=bk||window.location.origin; apiKey=oai; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
   redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
   redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
