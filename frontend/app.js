@@ -131,12 +131,13 @@ async function loadChart() {
     const d = await r.json();
     if (!d.candles?.length) { console.warn('No candles returned for', asset); return; }
 
-    // Force minimum chart height — flex container may not have rendered yet
-    const cw = container.clientWidth || container.offsetWidth || 360;
-    const ch = container.clientHeight || container.offsetHeight || 300;
+    // Calculate chart size — use window height minus header/tabs/controls (~180px)
+    const cw = container.clientWidth || container.offsetWidth || window.innerWidth || 360;
+    let ch = container.clientHeight || container.offsetHeight || 0;
+    if (ch < 100) ch = Math.max(window.innerHeight - 220, 200);
 
     chartInst = LightweightCharts.createChart(container, {
-      width: cw, height: Math.max(ch, 200),
+      width: cw, height: ch,
       layout: { background: { color: 'transparent' }, textColor: '#2d4d6e' },
       grid: { vertLines: { color: 'rgba(20,38,61,.4)' }, horzLines: { color: 'rgba(20,38,61,.4)' } },
       rightPriceScale: { borderColor: 'rgba(20,38,61,.5)' },
@@ -169,7 +170,12 @@ async function loadChart() {
 window.addEventListener('resize', () => {
   if (chartInst) {
     const c = document.getElementById('chart');
-    if (c) chartInst.applyOptions({ width:c.clientWidth, height:c.clientHeight });
+    if (c) {
+      const w = c.clientWidth || window.innerWidth || 360;
+      let h = c.clientHeight || 0;
+      if (h < 100) h = Math.max(window.innerHeight - 220, 200);
+      chartInst.applyOptions({ width: w, height: h });
+    }
   }
 });
 
