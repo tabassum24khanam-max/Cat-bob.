@@ -197,8 +197,14 @@ async def health():
 @app.post("/predict")
 async def predict(req: PredictRequest):
     """Main prediction endpoint — orchestrates all 3 agents."""
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+    # Use server-side keys as fallback if frontend didn't provide them
     if not req.api_key or len(req.api_key) < 10:
-        raise HTTPException(400, "OpenAI API key is required. Click KEYS and paste your key.")
+        req.api_key = OPENAI_API_KEY
+    if not req.ds_key or len(req.ds_key) < 10:
+        req.ds_key = DEEPSEEK_API_KEY
+    if not req.api_key or len(req.api_key) < 10:
+        raise HTTPException(400, "No OpenAI API key configured")
     start_time = time.time()
     worker = req.worker_url or WORKER_URL
     logs = []

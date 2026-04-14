@@ -12,8 +12,8 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# ─── API Keys (read from env, can be overridden via /settings endpoint) ─────
-WORKER_URL = os.getenv("WORKER_URL", "https://winter-sunset-e359.azk40772corp.workers.dev")
+# ─── API Keys (set via Railway Variables or .env file) ───────────────────
+WORKER_URL = os.getenv("WORKER_URL", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")

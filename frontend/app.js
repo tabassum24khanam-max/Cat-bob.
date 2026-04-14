@@ -34,8 +34,7 @@ const fmtPct = p => p == null || isNaN(p) ? '—' : `${p >= 0 ? '+' : ''}${Numbe
 
 window.addEventListener('DOMContentLoaded', () => {
   renderAssets();
-  if (!apiKey) openModal();
-  else { setDot('idle','READY'); checkBackend(); }
+  setDot('idle','READY'); checkBackend();
   setInterval(checkBackend, 30000);
   setInterval(tickPrice, 15000);
   setInterval(fetchAlerts, 60000);
@@ -47,7 +46,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function checkBackend() {
   try {
-    const r = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(5000) });
+    const r = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(10000) });
     const d = await r.json();
     document.getElementById('backend-dot').className = 'backend-dot ok';
     document.getElementById('backend-txt').textContent = `Backend v${d.version} · ${backendUrl}`;
@@ -69,7 +68,7 @@ function setDot(state, txt) {
 
 async function tickPrice() {
   try {
-    const r = await fetch(`${backendUrl}/price?asset=${asset}`, { signal: AbortSignal.timeout(5000) });
+    const r = await fetch(`${backendUrl}/price?asset=${asset}`, { signal: AbortSignal.timeout(15000) });
     if (!r.ok) return;
     const d = await r.json();
     const el = document.getElementById('plive'), ce = document.getElementById('pchg');
@@ -110,7 +109,7 @@ async function loadChart() {
   if (!container) return;
   if (chartInst) { try { chartInst.remove(); } catch {} chartInst = mainSeries = predSeries = null; }
   try {
-    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(20000) });
     if (!r.ok) return;
     const d = await r.json();
     if (!d.candles?.length) return;
@@ -155,9 +154,8 @@ window.addEventListener('resize', () => {
 
 async function predict() {
   if (_predicting) return;
-  if (!apiKey) { openModal(); return; }
   const ok = await checkBackend();
-  if (!ok) { showToast('⚠ Backend offline — run ./start.sh'); return; }
+  if (!ok) { showToast('⚠ Backend not connected'); return; }
 
   _predicting = true;
   const pb = document.getElementById('pb');
