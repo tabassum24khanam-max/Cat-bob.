@@ -93,15 +93,31 @@ function switchTab(tab) {
   asset = ASSETS[tab][0];
   renderAssets();
   closeResult();
+  // Clear stale price immediately then fetch fresh data
+  const el = document.getElementById('plive'), ce = document.getElementById('pchg');
+  if (el) el.textContent = '...';
+  if (ce) { ce.textContent = ''; ce.className = 'price-chg'; }
+  tickPrice();
   loadChart();
 }
 
-function selA(a) { asset = a; renderAssets(); closeResult(); loadChart(); }
+function selA(a) {
+  asset = a;
+  renderAssets();
+  closeResult();
+  // Clear stale price immediately then fetch fresh data
+  const el = document.getElementById('plive'), ce = document.getElementById('pchg');
+  if (el) el.textContent = '...';
+  if (ce) { ce.textContent = ''; ce.className = 'price-chg'; }
+  tickPrice();
+  loadChart();
+}
 
 function setHz(h, btn) {
   horizon = h;
   document.querySelectorAll('.hz-btn').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
+  closeResult();
 }
 
 async function loadChart() {
@@ -551,8 +567,7 @@ function saveKeys() {
   const bk=document.getElementById('k-backend')?.value.trim();
   const oai=document.getElementById('k-openai')?.value.trim();
   const ds=document.getElementById('k-deepseek')?.value.trim();
-  if (!oai||oai.length<10) { showToast('⚠ OpenAI key required'); return; }
-  backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai; dsKey=ds||'';
+  backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai||''; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
   redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
   redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';

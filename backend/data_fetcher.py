@@ -242,8 +242,24 @@ async def fetch_coingecko_dominance() -> dict:
 
 
 async def fetch_current_price(asset: str, worker_url: str = None) -> dict:
-    """Fetch current price for a single asset. Returns {'price': float, 'chg': float|None}."""
-    # Crypto — Binance direct
+    """Fetch current price for a single asset. Returns {'price': float, 'chg': float|None}.
+    Priority: Worker (fast) → Binance (crypto only) → yfinance (slow fallback).
+    """
+    wurl = worker_url or WORKER_URL
+
+    # 1. Worker proxy — fastest for all assets (crypto + stocks + macro)
+    if wurl:
+        try:
+            sym = YAHOO_SYMBOLS.get(asset, asset)
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(f"{wurl}/price?sym={sym}")
+                if resp.status_code == 200:
+                    d = resp.json()
+                    return {'price': d['price'], 'chg': d.get('chg')}
+        except Exception:
+            pass
+
+    # 2. Binance direct — crypto only, may be blocked on some hosts
     if asset in BINANCE_SYMBOLS:
         try:
             async with httpx.AsyncClient(timeout=8) as client:
@@ -254,35 +270,15 @@ async def fetch_current_price(asset: str, worker_url: str = None) -> dict:
                     return {'price': float(resp.json()['price'])}
         except Exception:
             pass
-        # Binance blocked — fall back to yfinance for crypto
-        if HAS_YFINANCE:
+
+    # 3. yfinance — slow but reliable last resort
+    if HAS_YFINANCE:
+        try:
             crypto_yahoo = {'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
                             'BNB': 'BNB-USD', 'XRP': 'XRP-USD', 'DOGE': 'DOGE-USD',
                             'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD',
                             'MATIC': 'MATIC-USD', 'LINK': 'LINK-USD', 'UNI': 'UNI-USD'}
-            yahoo_sym = crypto_yahoo.get(asset)
-            if yahoo_sym:
-                loop = asyncio.get_event_loop()
-                price = await loop.run_in_executor(None, _get_yfinance_price, yahoo_sym)
-                if price:
-                    return {'price': price}
-
-    # Stocks/commodities — try worker first
-    wurl = worker_url or WORKER_URL
-    if wurl:
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(f"{wurl}/price?sym={asset}")
-                if resp.status_code == 200:
-                    d = resp.json()
-                    return {'price': d['price'], 'chg': d.get('chg')}
-        except Exception:
-            pass
-
-    # Direct Yahoo fallback via yfinance
-    if HAS_YFINANCE:
-        try:
-            symbol = YAHOO_SYMBOLS.get(asset, asset)
+            symbol = crypto_yahoo.get(asset) or YAHOO_SYMBOLS.get(asset, asset)
             loop = asyncio.get_event_loop()
             price = await loop.run_in_executor(None, _get_yfinance_price, symbol)
             if price:
