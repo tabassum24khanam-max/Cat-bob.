@@ -204,7 +204,7 @@ async def predict(req: PredictRequest):
     if not req.ds_key or len(req.ds_key) < 10:
         req.ds_key = DEEPSEEK_API_KEY
     if not req.api_key or len(req.api_key) < 10:
-        raise HTTPException(400, "No OpenAI API key configured")
+        raise HTTPException(400, "No OpenAI API key configured — set OPENAI_API_KEY in Railway Variables")
     start_time = time.time()
     worker = req.worker_url or WORKER_URL
     logs = []
@@ -212,6 +212,20 @@ async def predict(req: PredictRequest):
     def slog(msg: str):
         logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
         print(f"  [{logs[-1]['ts']}ms] {msg}")
+
+    try:
+        return await _run_prediction(req, worker, start_time, logs, slog)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        total_ms = int((time.time() - start_time) * 1000)
+        raise HTTPException(500, f"Prediction failed after {total_ms}ms: {str(e)[:200]}")
+
+
+async def _run_prediction(req, worker, start_time, logs, slog):
+    """Internal prediction logic — separated so top-level can catch errors."""
 
     slog(f"🚀 PREDICT {req.asset} {req.horizon}H")
 
@@ -741,13 +755,18 @@ async def get_price(asset: str):
         result = await fetch_current_price(asset)
         return {"price": result['price'], "chg": result.get('chg'), "asset": asset}
     except Exception as e:
-        raise HTTPException(400, str(e))
+        print(f"⚠ /price error for {asset}: {e}")
+        return {"price": None, "chg": None, "asset": asset, "error": str(e)[:100]}
 
 
 @app.get("/candles")
 async def get_candles(asset: str, interval: str = '1h', limit: int = 100):
-    candles = await fetch_candles(asset, interval, limit)
-    return {"candles": candles, "asset": asset}
+    try:
+        candles = await fetch_candles(asset, interval, limit)
+        return {"candles": candles, "asset": asset}
+    except Exception as e:
+        print(f"⚠ /candles error for {asset}: {e}")
+        return {"candles": [], "asset": asset, "error": str(e)[:100]}
 
 
 @app.get("/macro")
