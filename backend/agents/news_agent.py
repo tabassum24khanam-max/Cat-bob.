@@ -342,24 +342,27 @@ Respond ONLY with this JSON:
         pass
 
     # Fallback to GPT-4o-mini
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "gpt-4o-mini",
-                "max_tokens": 500,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-        )
-        resp.raise_for_status()
-        text = resp.json()['choices'][0]['message']['content']
-        m = re.search(r'\{[\s\S]*\}', text)
-        if m:
-            return json.loads(m.group())
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 500,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
+            )
+            resp.raise_for_status()
+            text = resp.json()['choices'][0]['message']['content']
+            m = re.search(r'\{[\s\S]*\}', text)
+            if m:
+                return json.loads(m.group())
+    except Exception as e:
+        print(f"⚠ News agent error: {e}")
 
     return {
         "sentiment": "neutral", "sentiment_score": 0, "confidence": 50,
         "market_regime": "neutral", "key_catalysts": [], "time_bias": "neutral",
-        "reasoning": "News agent fallback", "macro_warning": None, "event_impact_score": 0.3
+        "reasoning": f"News analysis unavailable", "macro_warning": None, "event_impact_score": 0.3
     }

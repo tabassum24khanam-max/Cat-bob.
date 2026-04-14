@@ -14,23 +14,30 @@ from ml_engine import bayesian_confidence
 async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                            quant_prompt: str, api_key: str) -> dict:
     """Call GPT-4o-mini with full quant context."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": "gpt-4o-mini",
-                "max_tokens": 600,
-                "messages": [{"role": "user", "content": quant_prompt}]
-            }
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data['choices'][0]['message']['content']
-        m = re.search(r'\{[\s\S]*\}', text)
-        if m:
-            return json.loads(m.group())
-        return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50, "confidence": 40, "reasoning": "Parse error"}
+    if not api_key or len(api_key) < 10:
+        return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
+                "confidence": 40, "reasoning": "No OpenAI API key — add it in KEYS settings"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "max_tokens": 600,
+                    "messages": [{"role": "user", "content": quant_prompt}]
+                }
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data['choices'][0]['message']['content']
+            m = re.search(r'\{[\s\S]*\}', text)
+            if m:
+                return json.loads(m.group())
+            return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50, "confidence": 40, "reasoning": "Parse error"}
+    except Exception as e:
+        return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
+                "confidence": 40, "reasoning": f"Quant agent error: {str(e)[:100]}"}
 
 
 def build_quant_prompt(asset: str, ind: dict, sim: dict, horizon: int,

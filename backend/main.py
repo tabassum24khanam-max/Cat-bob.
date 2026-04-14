@@ -197,6 +197,8 @@ async def health():
 @app.post("/predict")
 async def predict(req: PredictRequest):
     """Main prediction endpoint — orchestrates all 3 agents."""
+    if not req.api_key or len(req.api_key) < 10:
+        raise HTTPException(400, "OpenAI API key is required. Click KEYS and paste your key.")
     start_time = time.time()
     worker = req.worker_url or WORKER_URL
     logs = []
