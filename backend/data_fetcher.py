@@ -17,7 +17,7 @@ except ImportError:
 async def fetch_binance_candles(symbol: str, interval: str = '1h', limit: int = 300) -> list:
     """Fetch candles from Binance API."""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(
                 "https://api.binance.com/api/v3/klines",
                 params={'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -37,7 +37,7 @@ async def fetch_yahoo_candles(symbol: str, interval: str = '1h', limit: int = 30
     wurl = worker_url or WORKER_URL
     if wurl:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=25) as client:
                 resp = await client.get(f"{wurl}/candles", params={'sym': symbol, 'iv': interval})
                 if resp.status_code == 200:
                     data = resp.json()
@@ -49,7 +49,7 @@ async def fetch_yahoo_candles(symbol: str, interval: str = '1h', limit: int = 30
     try:
         range_map = {'1h': '60d', '4h': '3mo', '1d': '2y'}
         yrange = range_map.get(interval, '60d')
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.get(
                 f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
                 params={'range': yrange, 'interval': interval},
@@ -251,7 +251,7 @@ async def fetch_current_price(asset: str, worker_url: str = None) -> dict:
     if wurl:
         try:
             sym = YAHOO_SYMBOLS.get(asset, asset)
-            async with httpx.AsyncClient(timeout=8) as client:
+            async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(f"{wurl}/price?sym={sym}")
                 if resp.status_code == 200:
                     d = resp.json()
@@ -262,7 +262,7 @@ async def fetch_current_price(asset: str, worker_url: str = None) -> dict:
     # 2. Binance direct — crypto only, may be blocked on some hosts
     if asset in BINANCE_SYMBOLS:
         try:
-            async with httpx.AsyncClient(timeout=8) as client:
+            async with httpx.AsyncClient(timeout=12) as client:
                 resp = await client.get(
                     f"https://api.binance.com/api/v3/ticker/price?symbol={BINANCE_SYMBOLS[asset]}"
                 )

@@ -68,13 +68,14 @@ function setDot(state, txt) {
 
 async function tickPrice() {
   try {
-    const r = await fetch(`${backendUrl}/price?asset=${asset}`, { signal: AbortSignal.timeout(15000) });
-    if (!r.ok) return;
+    const r = await fetch(`${backendUrl}/price?asset=${asset}`, { signal: AbortSignal.timeout(25000) });
+    if (!r.ok) { console.warn('Price fetch failed:', r.status); return; }
     const d = await r.json();
     const el = document.getElementById('plive'), ce = document.getElementById('pchg');
     if (el && d.price) el.textContent = fmtP(d.price);
+    else if (el && d.error) el.textContent = 'err';
     if (ce && d.chg != null) { ce.textContent = fmtPct(d.chg); ce.className = `price-chg ${d.chg >= 0 ? 'up' : 'dn'}`; }
-  } catch {}
+  } catch(e) { console.warn('Price tick error:', e.message); }
 }
 
 function renderAssets() {
@@ -125,13 +126,17 @@ async function loadChart() {
   if (!container) return;
   if (chartInst) { try { chartInst.remove(); } catch {} chartInst = mainSeries = predSeries = null; }
   try {
-    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(20000) });
-    if (!r.ok) return;
+    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) { console.warn('Chart fetch failed:', r.status); return; }
     const d = await r.json();
-    if (!d.candles?.length) return;
+    if (!d.candles?.length) { console.warn('No candles returned for', asset); return; }
+
+    // Force minimum chart height — flex container may not have rendered yet
+    const cw = container.clientWidth || container.offsetWidth || 360;
+    const ch = container.clientHeight || container.offsetHeight || 300;
 
     chartInst = LightweightCharts.createChart(container, {
-      width: container.clientWidth, height: container.clientHeight || 300,
+      width: cw, height: Math.max(ch, 200),
       layout: { background: { color: 'transparent' }, textColor: '#2d4d6e' },
       grid: { vertLines: { color: 'rgba(20,38,61,.4)' }, horzLines: { color: 'rgba(20,38,61,.4)' } },
       rightPriceScale: { borderColor: 'rgba(20,38,61,.5)' },
@@ -158,7 +163,7 @@ async function loadChart() {
       }
     }
     chartInst.timeScale().fitContent();
-  } catch {}
+  } catch(e) { console.error('Chart error:', e); }
 }
 
 window.addEventListener('resize', () => {
