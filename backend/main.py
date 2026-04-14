@@ -100,7 +100,7 @@ async def _safe_refresh_calendar():
 async def _safe_assign_cluster(asset: str, ind: dict) -> dict:
     """Safely assign cluster — returns {available: False} on error."""
     try:
-        return assign_cluster(asset, ind)
+        return await assign_cluster(asset, ind)
     except Exception:
         return {'available': False}
 
@@ -132,7 +132,7 @@ async def _async_retrain(asset_name: str):
     await asyncio.sleep(1)
     try:
         preds = await get_predictions(asset_name, 500)
-        model = train_ensemble(preds)
+        model = await train_ensemble(preds)
         if model:
             _ml_cache[asset_name] = model
             print(f"✓ ML retrained for {asset_name}: {model['n_samples']} samples")
@@ -148,7 +148,7 @@ async def warm_ml_models():
         assets = list(set(p['asset'] for p in all_preds))
         for asset_name in assets:
             asset_preds = [p for p in all_preds if p['asset'] == asset_name]
-            model = train_ensemble(asset_preds)
+            model = await train_ensemble(asset_preds)
             if model:
                 _ml_cache[asset_name] = model
                 print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
@@ -161,7 +161,7 @@ async def retrain(asset_name: str = None):
     """Retrain ML ensemble after new feedback arrives."""
     try:
         preds = await get_predictions(asset_name, 500)
-        model = train_ensemble(preds)
+        model = await train_ensemble(preds)
         if model:
             key = asset_name or 'all'
             _ml_cache[key] = model
@@ -637,7 +637,7 @@ async def ml_retrain():
     """Retrain ML ensemble on rated prediction history."""
     try:
         preds = await get_predictions(limit=2000)
-        model = train_ensemble(preds)
+        model = await train_ensemble(preds)
         if model:
             _ml_cache['all'] = model
             return {"ok": True, "samples": model['n_samples'], "accuracy": model.get('train_accuracy', 0)}
