@@ -44,8 +44,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .asset-btn.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,229,255,.07); }
 
 /* Chart area */
-.chart-wrap { flex: 1; min-height: 0; position: relative; }
-#chart { width: 100%; height: 100%; }
+.chart-wrap { flex: 1; min-height: 200px; position: relative; }
+#chart { width: 100%; height: 100%; min-height: 200px; }
 .chart-overlay { position: absolute; top: 0; left: 0; right: 0; padding: 8px 12px; display: flex; align-items: center; gap: 10px; pointer-events: none; }
 .price-live { font-size: 20px; font-weight: 700; color: var(--text); }
 .price-chg { font-size: 10px; padding: 2px 6px; border-radius: 3px; }
