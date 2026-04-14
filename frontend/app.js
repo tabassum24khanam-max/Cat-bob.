@@ -131,17 +131,21 @@ async function loadChart() {
     const d = await r.json();
     if (!d.candles?.length) { console.warn('No candles returned for', asset); return; }
 
-    // Calculate chart size — use window height minus header/tabs/controls (~180px)
-    const cw = container.clientWidth || container.offsetWidth || window.innerWidth || 360;
-    let ch = container.clientHeight || container.offsetHeight || 0;
-    if (ch < 100) ch = Math.max(window.innerHeight - 220, 200);
+    // Force explicit pixel dimensions — do NOT rely on CSS flex
+    const wrap = container.parentElement;
+    const cw = window.innerWidth || document.documentElement.clientWidth || 360;
+    // Calculate available height: viewport minus header(40) + backend bar(20) + tabs(35) + assets(35) + controls(45) + padding
+    const ch = Math.max((window.innerHeight || 600) - 200, 200);
+    container.style.width = cw + 'px';
+    container.style.height = ch + 'px';
+    if (wrap) { wrap.style.height = ch + 'px'; wrap.style.minHeight = ch + 'px'; }
 
     chartInst = LightweightCharts.createChart(container, {
       width: cw, height: ch,
-      layout: { background: { color: 'transparent' }, textColor: '#2d4d6e' },
-      grid: { vertLines: { color: 'rgba(20,38,61,.4)' }, horzLines: { color: 'rgba(20,38,61,.4)' } },
-      rightPriceScale: { borderColor: 'rgba(20,38,61,.5)' },
-      timeScale: { borderColor: 'rgba(20,38,61,.5)', timeVisible: true },
+      layout: { background: { color: '#04080f' }, textColor: '#2d4d6e' },
+      grid: { vertLines: { color: 'rgba(0,229,255,.06)' }, horzLines: { color: 'rgba(0,229,255,.06)' } },
+      rightPriceScale: { borderColor: 'rgba(0,229,255,.2)' },
+      timeScale: { borderColor: 'rgba(0,229,255,.2)', timeVisible: true },
       handleScroll: true, handleScale: true,
     });
 
@@ -171,9 +175,10 @@ window.addEventListener('resize', () => {
   if (chartInst) {
     const c = document.getElementById('chart');
     if (c) {
-      const w = c.clientWidth || window.innerWidth || 360;
-      let h = c.clientHeight || 0;
-      if (h < 100) h = Math.max(window.innerHeight - 220, 200);
+      const w = window.innerWidth || document.documentElement.clientWidth || 360;
+      const h = Math.max((window.innerHeight || 600) - 200, 200);
+      c.style.width = w + 'px';
+      c.style.height = h + 'px';
       chartInst.applyOptions({ width: w, height: h });
     }
   }
