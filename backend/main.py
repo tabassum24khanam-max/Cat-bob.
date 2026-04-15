@@ -76,7 +76,9 @@ class OutcomeRequest(BaseModel):
     asset: str
     entry_price: float
     target_price: Optional[float] = None
+    predicted_price: Optional[float] = None
     original_decision: Optional[str] = None
+    decision: Optional[str] = None
     horizon: int
     api_key: Optional[str] = None
     worker_url: Optional[str] = None
@@ -86,6 +88,54 @@ class SavePredRequest(BaseModel):
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
+
+def _score_prediction(decision: str, original_decision: str, entry_price: float,
+                      outcome_price: float, predicted_price: float = None) -> str:
+    """Score a prediction's accuracy based on direction + target proximity.
+    For NO_TRADE: evaluates the AI's original prediction accuracy, not the gate.
+    Correct only if direction right AND price reached >=40% of predicted move.
+    """
+    if not entry_price:
+        return 'skipped'
+    moved = outcome_price - entry_price
+    moved_pct = moved / entry_price * 100
+
+    # For BUY/SELL decisions, simple direction check
+    if decision == 'BUY':
+        return 'correct' if moved > 0 else 'wrong'
+    if decision == 'SELL':
+        return 'correct' if moved < 0 else 'wrong'
+
+    # NO_TRADE — evaluate based on AI's original intent + target accuracy
+    direction = original_decision  # what AI wanted before gate blocked
+    target = predicted_price  # predicted price target
+
+    if not direction and not target:
+        return 'skipped'  # pure abstention with no prediction
+
+    if direction and not target:
+        # Have direction but no target — just check direction
+        if direction == 'BUY':
+            return 'correct' if moved_pct > 0.5 else 'wrong'
+        elif direction == 'SELL':
+            return 'correct' if moved_pct < -0.5 else 'wrong'
+        return 'skipped'
+
+    # Have a target price — check direction AND proximity
+    predicted_move_pct = (target - entry_price) / entry_price * 100
+    if abs(predicted_move_pct) < 0.01:
+        return 'skipped'  # no meaningful predicted move
+
+    # Direction must be right
+    direction_correct = (predicted_move_pct > 0 and moved_pct > 0) or \
+                        (predicted_move_pct < 0 and moved_pct < 0)
+    if not direction_correct:
+        return 'wrong'
+
+    # Direction right — check if price got close enough (40% of predicted move)
+    reached_ratio = moved_pct / predicted_move_pct
+    return 'correct' if reached_ratio >= 0.4 else 'wrong'
+
 
 async def _safe_refresh_calendar():
     """Safely refresh economic calendar on startup."""
@@ -667,18 +717,10 @@ async def check_all_outcomes(asset: str = None):
             price = result['price']
 
             entry_price = p.get('entry_price', 0)
-            moved = price - entry_price
             orig = p.get('original_decision')
             decision = p.get('decision', 'NO_TRADE')
-
-            if orig:
-                feedback = 'correct' if (orig == 'BUY' and moved < 0) or (orig == 'SELL' and moved > 0) else 'wrong'
-            elif decision == 'BUY':
-                feedback = 'correct' if moved > 0 else 'wrong'
-            elif decision == 'SELL':
-                feedback = 'correct' if moved < 0 else 'wrong'
-            else:
-                feedback = 'skipped'
+            pred_price = p.get('predicted_price') or p.get('target_price')
+            feedback = _score_prediction(decision, orig, entry_price, price, pred_price)
 
             target_hit = None
             if p.get('target_price') and entry_price:
@@ -707,15 +749,10 @@ async def check_outcome(req: OutcomeRequest):
         moved = price - req.entry_price
         moved_pct = moved / req.entry_price * 100
 
-        # Score based on original_decision (for gated NO_TRADE) or the decision itself
+        decision = req.decision or 'NO_TRADE'
         orig = req.original_decision
-        feedback = None
-        if orig == 'BUY':
-            feedback = 'correct' if moved < 0 else 'wrong'  # avoided a bad BUY
-        elif orig == 'SELL':
-            feedback = 'correct' if moved > 0 else 'wrong'  # avoided a bad SELL
-        else:
-            feedback = 'skipped'  # pure abstention
+        pred_price = req.predicted_price or req.target_price
+        feedback = _score_prediction(decision, orig, req.entry_price, price, pred_price)
 
         # Check target hit
         target_hit = None

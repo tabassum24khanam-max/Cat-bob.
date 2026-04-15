@@ -429,15 +429,35 @@ function retroactivelyScoreHistory() {
   let changed = false;
   const updated = history.map(e => {
     if (e.feedback!==null && e.feedback!==undefined) return e;
-    if (!e.outcome_price||!e.entry_price||!e.original_decision) return e;
-    const moved = e.outcome_price - e.entry_price;
-    const fb = e.original_decision==='BUY' ? (moved<0?'correct':'wrong')
-              : e.original_decision==='SELL' ? (moved>0?'correct':'wrong') : null;
+    if (!e.outcome_price||!e.entry_price) return e;
+    const fb = scorePrediction(e);
     if (!fb) return e;
     changed = true;
     return {...e, feedback:fb};
   });
   if (changed) saveHistory(updated);
+}
+
+function scorePrediction(e) {
+  const movedPct = (e.outcome_price - e.entry_price) / e.entry_price * 100;
+  // BUY/SELL — simple direction check
+  if (e.decision==='BUY') return movedPct>0?'correct':'wrong';
+  if (e.decision==='SELL') return movedPct<0?'correct':'wrong';
+  // NO_TRADE — evaluate AI's prediction accuracy, not the gate
+  const target = e.predicted_price || e.target_price;
+  const direction = e.original_decision;
+  if (!direction && !target) return null;
+  if (direction && !target) {
+    if (direction==='BUY') return movedPct>0.5?'correct':'wrong';
+    if (direction==='SELL') return movedPct<-0.5?'correct':'wrong';
+    return null;
+  }
+  // Have target — check direction + proximity (40% of predicted move)
+  const predMovePct = (target - e.entry_price) / e.entry_price * 100;
+  if (Math.abs(predMovePct)<0.01) return null;
+  const directionCorrect = (predMovePct>0 && movedPct>0) || (predMovePct<0 && movedPct<0);
+  if (!directionCorrect) return 'wrong';
+  return (movedPct/predMovePct)>=0.4 ? 'correct' : 'wrong';
 }
 
 function openHistory() { renderHistory(); document.getElementById('history-panel')?.classList.add('on'); }
@@ -471,10 +491,7 @@ function renderHistory() {
       fbHtml=`<div class="he-fb wrong">✗ WRONG${pct!=null?` · ${fmtPct(pct)}`:''}</div>`;
     } else if (e.feedback==='skipped') {
       const pct = e.outcome_price&&e.entry_price?((e.outcome_price-e.entry_price)/e.entry_price*100):null;
-      const orig=e.original_decision;
-      const wouldHaveLost=orig==='BUY'?(pct||0)<-0.3:orig==='SELL'?(pct||0)>0.3:false;
-      const tag=wouldHaveLost?' · ✓ SMART AVOID':Math.abs(pct||0)>0.5?' · ⚠ MISSED MOVE':'';
-      fbHtml=`<div class="he-fb pending">⏸ NO TRADE${pct!=null?` · ${fmtPct(pct)}${tag}`:''}</div>`;
+      fbHtml=`<div class="he-fb pending">⏸ NO TRADE${pct!=null?` · ${fmtPct(pct)}`:''}</div>`;
     } else if (now>=expiresAt) {
       fbHtml=`<div class="he-fb pending" style="display:flex;justify-content:space-between;align-items:center"><span>⏰ Expired</span><button class="check-btn" onclick="event.stopPropagation();checkOutcome('${e.id}')">GET PRICE</button></div>`;
     } else {
@@ -501,15 +518,10 @@ function openHistDetail(id) {
   if (e.outcome_price&&e.entry_price) pct=(e.outcome_price-e.entry_price)/e.entry_price*100;
 
   let verdictHtml='';
-  if (e.feedback==='correct') verdictHtml=`<div style="color:var(--green);font-size:22px;font-family:'Bebas Neue'">✓ CORRECT DIRECTION</div>`;
-  else if (e.feedback==='wrong') verdictHtml=`<div style="color:var(--red);font-size:22px;font-family:'Bebas Neue'">✗ WRONG DIRECTION</div>`;
+  if (e.feedback==='correct') verdictHtml=`<div style="color:var(--green);font-size:22px;font-family:'Bebas Neue'">✓ CORRECT${pct!=null?' · '+fmtPct(pct):''}</div>`;
+  else if (e.feedback==='wrong') verdictHtml=`<div style="color:var(--red);font-size:22px;font-family:'Bebas Neue'">✗ WRONG${pct!=null?' · '+fmtPct(pct):''}</div>`;
   else if (e.feedback==='skipped'&&e.outcome_price) {
-    const orig=e.original_decision;
-    const wl=orig==='BUY'?pct<-0.3:orig==='SELL'?pct>0.3:false;
-    const ww=orig==='BUY'?pct>0.3:orig==='SELL'?pct<-0.3:false;
-    verdictHtml=wl?`<div style="color:var(--green);font-size:18px;font-family:'Bebas Neue'">✓ SMART AVOID · ${fmtPct(pct)}</div>`
-                :ww?`<div style="color:var(--yellow);font-size:18px;font-family:'Bebas Neue'">⚠ MISSED MOVE · ${fmtPct(pct)}</div>`
-                :`<div style="color:var(--muted);font-size:16px;font-family:'Bebas Neue'">⏸ NO TRADE · Moved ${fmtPct(pct)}</div>`;
+    verdictHtml=`<div style="color:var(--muted);font-size:16px;font-family:'Bebas Neue'">⏸ NO TRADE · Moved ${fmtPct(pct)}</div>`;
   } else if (!expired) {
     verdictHtml=`<div style="color:var(--yellow);font-family:'Bebas Neue';font-size:18px">⏳ ${Math.max(0,(expiresAt-now)/3600000).toFixed(1)}H REMAINING</div>`;
   } else verdictHtml=`<div style="color:var(--yellow);font-family:'Bebas Neue';font-size:16px">⏰ EXPIRED — tap GET PRICE</div>`;
@@ -568,15 +580,11 @@ async function checkOutcome(id) {
   try {
     const r=await fetch(`${backendUrl}/history/outcome`,{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({pred_id:id,asset:entry.asset,entry_price:entry.entry_price,target_price:entry.target_price,original_decision:entry.original_decision,horizon:entry.horizon})
+      body:JSON.stringify({pred_id:id,asset:entry.asset,entry_price:entry.entry_price,target_price:entry.target_price,predicted_price:entry.predicted_price||null,original_decision:entry.original_decision,decision:entry.decision,horizon:entry.horizon})
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const result=await r.json();
     let feedback=result.feedback;
-    if (feedback==='skipped'&&entry.original_decision) {
-      const moved=result.price-entry.entry_price;
-      feedback=entry.original_decision==='BUY'?(moved<0?'correct':'wrong'):entry.original_decision==='SELL'?(moved>0?'correct':'wrong'):'skipped';
-    }
     const updated=history.map(e=>e.id===id?{...e,feedback,outcome_price:result.price,target_hit:result.target_hit}:e);
     saveHistory(updated);
     renderHistory();
