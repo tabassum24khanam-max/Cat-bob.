@@ -125,28 +125,33 @@ async function loadChart() {
   const container = document.getElementById('chart');
   if (!container) return;
   if (chartInst) { try { chartInst.remove(); } catch {} chartInst = mainSeries = predSeries = null; }
+
+  // Force explicit pixel dimensions before anything else
+  const cw = window.innerWidth || document.documentElement.clientWidth || 360;
+  const ch = Math.max((window.innerHeight || 600) - 200, 200);
+  container.style.width = cw + 'px';
+  container.style.height = ch + 'px';
+  const wrap = container.parentElement;
+  if (wrap) { wrap.style.height = ch + 'px'; wrap.style.minHeight = ch + 'px'; }
+
   try {
     const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(30000) });
     if (!r.ok) { console.warn('Chart fetch failed:', r.status); return; }
     const d = await r.json();
     if (!d.candles?.length) { console.warn('No candles returned for', asset); return; }
 
-    // Force explicit pixel dimensions — do NOT rely on CSS flex
-    const wrap = container.parentElement;
-    const cw = window.innerWidth || document.documentElement.clientWidth || 360;
-    // Calculate available height: viewport minus header(40) + backend bar(20) + tabs(35) + assets(35) + controls(45) + padding
-    const ch = Math.max((window.innerHeight || 600) - 200, 200);
-    container.style.width = cw + 'px';
-    container.style.height = ch + 'px';
-    if (wrap) { wrap.style.height = ch + 'px'; wrap.style.minHeight = ch + 'px'; }
+    // Determine background format based on library version
+    let bgOpt;
+    try { bgOpt = { background: { type: LightweightCharts.ColorType.Solid, color: '#04080f' } }; }
+    catch(e) { bgOpt = { background: { color: '#04080f' } }; }
 
     chartInst = LightweightCharts.createChart(container, {
       width: cw, height: ch,
-      layout: { background: { color: '#04080f' }, textColor: '#2d4d6e' },
-      grid: { vertLines: { color: 'rgba(0,229,255,.06)' }, horzLines: { color: 'rgba(0,229,255,.06)' } },
-      rightPriceScale: { borderColor: 'rgba(0,229,255,.2)' },
-      timeScale: { borderColor: 'rgba(0,229,255,.2)', timeVisible: true },
-      handleScroll: true, handleScale: true,
+      layout: Object.assign(bgOpt, { textColor: '#5a7a9a' }),
+      grid: { vertLines: { color: 'rgba(0,229,255,.08)' }, horzLines: { color: 'rgba(0,229,255,.08)' } },
+      rightPriceScale: { borderColor: 'rgba(0,229,255,.25)', textColor: '#5a7a9a' },
+      timeScale: { borderColor: 'rgba(0,229,255,.25)', timeVisible: true, textColor: '#5a7a9a' },
+      crosshair: { mode: 0 },
     });
 
     mainSeries = chartInst.addCandlestickSeries({
@@ -155,10 +160,18 @@ async function loadChart() {
       wickUpColor:'#00e676', wickDownColor:'#ff1744',
     });
 
-    const valid = d.candles.filter(c => c.close && c.open);
-    mainSeries.setData(valid.map(c => ({ time:c.time, open:c.open, high:c.high, low:c.low, close:c.close })));
+    const valid = d.candles.filter(c => c.close != null && c.open != null && c.high != null && c.low != null);
+    if (!valid.length) { console.warn('No valid candles after filter'); return; }
 
-    const last = valid[valid.length-1], prev = valid[valid.length-2];
+    // Ensure time values are numbers (not strings) and sorted ascending
+    const sorted = valid.map(c => ({
+      time: typeof c.time === 'string' ? parseInt(c.time) : c.time,
+      open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
+    })).sort((a,b) => a.time - b.time);
+
+    mainSeries.setData(sorted);
+
+    const last = sorted[sorted.length-1], prev = sorted[sorted.length-2];
     if (last) {
       document.getElementById('plive').textContent = fmtP(last.close);
       if (prev) {
