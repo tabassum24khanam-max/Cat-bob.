@@ -122,79 +122,104 @@ function setHz(h, btn) {
 }
 
 async function loadChart() {
-  const container = document.getElementById('chart');
-  if (!container) return;
-  if (chartInst) { try { chartInst.remove(); } catch {} chartInst = mainSeries = predSeries = null; }
+  const el = document.getElementById('chart');
+  const errEl = document.getElementById('chart-err');
+  if (!el) return;
 
-  // Force explicit pixel dimensions before anything else
-  const cw = window.innerWidth || document.documentElement.clientWidth || 360;
-  const ch = Math.max((window.innerHeight || 600) - 200, 200);
-  container.style.width = cw + 'px';
-  container.style.height = ch + 'px';
-  const wrap = container.parentElement;
-  if (wrap) { wrap.style.height = ch + 'px'; wrap.style.minHeight = ch + 'px'; }
+  // Destroy previous chart
+  if (chartInst) { try { chartInst.remove(); } catch(e) {} }
+  chartInst = null; mainSeries = null; predSeries = null;
+  el.innerHTML = '';
+  if (errEl) errEl.textContent = 'Loading chart...';
 
+  // Step 1: Check library loaded
+  if (typeof LightweightCharts === 'undefined') {
+    if (errEl) errEl.textContent = 'Chart library failed to load';
+    return;
+  }
+
+  // Step 2: Fetch candle data
+  let candles = [];
   try {
     const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=120`, { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) { console.warn('Chart fetch failed:', r.status); return; }
+    if (!r.ok) { if (errEl) errEl.textContent = `Candle fetch HTTP ${r.status}`; return; }
     const d = await r.json();
-    if (!d.candles?.length) { console.warn('No candles returned for', asset); return; }
+    if (d.error) { if (errEl) errEl.textContent = d.error; return; }
+    candles = (d.candles || []).filter(c => c.open != null && c.high != null && c.low != null && c.close != null);
+  } catch(e) {
+    if (errEl) errEl.textContent = `Fetch error: ${e.message}`;
+    return;
+  }
+  if (!candles.length) { if (errEl) errEl.textContent = `No candle data for ${asset}`; return; }
 
-    // Determine background format based on library version
-    let bgOpt;
-    try { bgOpt = { background: { type: LightweightCharts.ColorType.Solid, color: '#04080f' } }; }
-    catch(e) { bgOpt = { background: { color: '#04080f' } }; }
+  // Step 3: Clean + sort data (all values must be plain numbers, time ascending)
+  const data = candles.map(c => ({
+    time: Math.floor(Number(c.time)),
+    open: +c.open, high: +c.high, low: +c.low, close: +c.close
+  })).filter(c => c.time > 0 && isFinite(c.open) && isFinite(c.close))
+    .sort((a,b) => a.time - b.time);
 
-    chartInst = LightweightCharts.createChart(container, {
-      width: cw, height: ch,
-      layout: Object.assign(bgOpt, { textColor: '#5a7a9a' }),
-      grid: { vertLines: { color: 'rgba(0,229,255,.08)' }, horzLines: { color: 'rgba(0,229,255,.08)' } },
-      rightPriceScale: { borderColor: 'rgba(0,229,255,.25)', textColor: '#5a7a9a' },
-      timeScale: { borderColor: 'rgba(0,229,255,.25)', timeVisible: true, textColor: '#5a7a9a' },
-      crosshair: { mode: 0 },
+  if (!data.length) { if (errEl) errEl.textContent = 'No valid candle data'; return; }
+
+  // Step 4: Measure container (use parent .chart-wrap which has flex sizing)
+  const rect = el.getBoundingClientRect();
+  const w = Math.floor(rect.width) || window.innerWidth || 360;
+  const h = Math.floor(rect.height) || 300;
+
+  // Step 5: Create chart
+  try {
+    chartInst = LightweightCharts.createChart(el, {
+      width: w,
+      height: h,
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: '#04080f' },
+        textColor: '#5a7a9a',
+      },
+      grid: {
+        vertLines: { color: 'rgba(0,229,255,.08)' },
+        horzLines: { color: 'rgba(0,229,255,.08)' },
+      },
+      rightPriceScale: { borderColor: 'rgba(0,229,255,.25)' },
+      timeScale: { borderColor: 'rgba(0,229,255,.25)', timeVisible: true },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
 
     mainSeries = chartInst.addCandlestickSeries({
-      upColor:'#00e676', downColor:'#ff1744',
-      borderUpColor:'#00e676', borderDownColor:'#ff1744',
-      wickUpColor:'#00e676', wickDownColor:'#ff1744',
+      upColor: '#00e676', downColor: '#ff1744',
+      borderUpColor: '#00e676', borderDownColor: '#ff1744',
+      wickUpColor: '#00e676', wickDownColor: '#ff1744',
     });
 
-    const valid = d.candles.filter(c => c.close != null && c.open != null && c.high != null && c.low != null);
-    if (!valid.length) { console.warn('No valid candles after filter'); return; }
+    mainSeries.setData(data);
+    chartInst.timeScale().fitContent();
 
-    // Ensure time values are numbers (not strings) and sorted ascending
-    const sorted = valid.map(c => ({
-      time: typeof c.time === 'string' ? parseInt(c.time) : c.time,
-      open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)
-    })).sort((a,b) => a.time - b.time);
-
-    mainSeries.setData(sorted);
-
-    const last = sorted[sorted.length-1], prev = sorted[sorted.length-2];
+    // Update price display from chart data
+    const last = data[data.length - 1];
+    const prev = data.length > 1 ? data[data.length - 2] : null;
     if (last) {
-      document.getElementById('plive').textContent = fmtP(last.close);
+      const pe = document.getElementById('plive');
+      if (pe) pe.textContent = fmtP(last.close);
       if (prev) {
-        const chg = (last.close-prev.close)/prev.close*100;
+        const chg = (last.close - prev.close) / prev.close * 100;
         const ce = document.getElementById('pchg');
-        if (ce) { ce.textContent = fmtPct(chg); ce.className = `price-chg ${chg>=0?'up':'dn'}`; }
+        if (ce) { ce.textContent = fmtPct(chg); ce.className = `price-chg ${chg >= 0 ? 'up' : 'dn'}`; }
       }
     }
-    chartInst.timeScale().fitContent();
-  } catch(e) { console.error('Chart error:', e); }
+    if (errEl) errEl.textContent = '';
+  } catch(e) {
+    console.error('Chart create error:', e);
+    if (errEl) errEl.textContent = `Chart error: ${e.message}`;
+  }
 }
 
 window.addEventListener('resize', () => {
-  if (chartInst) {
-    const c = document.getElementById('chart');
-    if (c) {
-      const w = window.innerWidth || document.documentElement.clientWidth || 360;
-      const h = Math.max((window.innerHeight || 600) - 200, 200);
-      c.style.width = w + 'px';
-      c.style.height = h + 'px';
-      chartInst.applyOptions({ width: w, height: h });
-    }
-  }
+  if (!chartInst) return;
+  const el = document.getElementById('chart');
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const w = Math.floor(rect.width) || window.innerWidth || 360;
+  const h = Math.floor(rect.height) || 300;
+  try { chartInst.resize(w, h); } catch(e) {}
 });
 
 async function predict() {
