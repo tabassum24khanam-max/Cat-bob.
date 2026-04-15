@@ -533,7 +533,7 @@ function openHistDetail(id) {
       <div onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-width:420px;margin:0 auto">
         <div style="display:flex;justify-content:space-between;margin-bottom:12px">
           <div style="font-family:'Bebas Neue';font-size:18px;color:var(--cyan)">${e.asset} · ${e.decision.replace('_',' ')} · ${e.horizon_label||e.horizon+'H'}</div>
-          <button onclick="this.closest('[onclick]').click()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+          <button onclick="event.stopPropagation();this.closest('[style*=z-index]').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
         </div>
         <div style="margin-bottom:10px">${verdictHtml}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:10px">
@@ -543,7 +543,7 @@ function openHistDetail(id) {
         ${e.gate_reason?`<div style="font-size:8px;color:var(--red);padding:4px 10px;margin-bottom:8px">${e.gate_reason}</div>`:''}
         ${e.primary_reason?`<div style="font-size:8px;color:var(--text);padding:4px 10px;margin-bottom:6px"><strong>Key factor:</strong> ${e.primary_reason}</div>`:''}
         ${e.insight?`<div style="font-size:8px;color:var(--muted);line-height:1.6;padding:6px 10px;margin-bottom:8px"><strong style="color:var(--cyan)">R1 Reasoning:</strong><br>${e.insight}</div>`:''}
-        ${expired&&!e.outcome_price?`<button onclick="event.stopPropagation();checkOutcome('${e.id}');this.closest('[onclick]').click();" class="check-btn" style="width:100%;padding:9px;font-size:10px;margin-top:4px">🔄 GET PRICE AT EXPIRY</button>`:''}
+        ${expired&&!e.outcome_price?`<button onclick="event.stopPropagation();checkOutcome('${e.id}');this.closest('[style*=z-index]').remove();" class="check-btn" style="width:100%;padding:9px;font-size:10px;margin-top:4px">🔄 GET PRICE AT EXPIRY</button>`:''}
       </div>
     </div>`);
 }
