@@ -2,10 +2,15 @@
 ULTRAMAX Decision Agent — DeepSeek R1
 Resolves conflict between Quant and News with historical evidence
 """
+import asyncio
 import httpx
 import json
 import re
+import traceback
 from typing import Dict, Any, Optional
+
+# Track R1 failures for logging
+_last_r1_error = None
 
 
 async def run_decision_agent(
@@ -96,45 +101,97 @@ DECISION RULES:
 Respond with ONLY this JSON:
 {{"decision":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<final 0-100>,"agent_agreement":"<agree|partial|conflict>","price_target":<realistic target>,"price_target_bull":<optimistic>,"price_target_bear":<pessimistic>,"predicted_path":[<5 prices zigzag to target>],"volatility":"<low|moderate|high>","insight":"<3-4 sentences: what quant found + what news found + historical evidence + final reasoning>","primary_reason":"<one clear sentence: the single most decisive factor>"}}"""
 
-    # Try R1 first for long horizons or when explicitly requested
+    # Try R1 with retry — R1 is the primary decision maker
+    global _last_r1_error
     if use_r1 and ds_key:
-        try:
-            async with httpx.AsyncClient(timeout=600) as client:  # 10 min timeout
-                resp = await client.post(
-                    "https://api.deepseek.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": "deepseek-reasoner",
-                        "max_tokens": 3000,
-                        "stream": False,
-                        "messages": [
-                            {"role": "system", "content": "You are an expert trading AI. Respond ONLY with valid JSON."},
-                            {"role": "user", "content": prompt}
-                        ]
-                    }
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                msg = data['choices'][0]['message']
-                text = msg.get('content') or msg.get('reasoning_content') or ''
-                text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE).strip()
-                m = re.search(r'\{[\s\S]*\}', text)
-                if m:
-                    result = json.loads(m.group())
-                    result['_model'] = 'deepseek-r1'
-                    return result
-        except Exception as e:
-            print(f"R1 failed: {e}")
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"R1 attempt {attempt}/{max_retries} for {asset}...")
+                async with httpx.AsyncClient(timeout=httpx.Timeout(
+                    connect=30.0, read=600.0, write=30.0, pool=30.0
+                )) as client:
+                    resp = await client.post(
+                        "https://api.deepseek.com/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": "deepseek-reasoner",
+                            "max_tokens": 8000,
+                            "stream": False,
+                            "messages": [
+                                {"role": "user", "content": prompt}
+                            ]
+                        }
+                    )
 
-    # Fallback: GPT-4o
+                    # Handle rate limiting with backoff
+                    if resp.status_code == 429:
+                        wait = min(30, 5 * attempt)
+                        print(f"R1 rate limited, waiting {wait}s before retry...")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    if resp.status_code == 503 or resp.status_code == 502:
+                        wait = 10 * attempt
+                        print(f"R1 server error {resp.status_code}, waiting {wait}s before retry...")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    resp.raise_for_status()
+                    data = resp.json()
+                    msg = data['choices'][0]['message']
+
+                    # R1 returns answer in 'content', reasoning chain in 'reasoning_content'
+                    # Try content first (final answer), then reasoning_content
+                    text = msg.get('content', '') or ''
+                    reasoning = msg.get('reasoning_content', '') or ''
+
+                    # Extract JSON from content first
+                    result = _extract_json(text)
+                    if not result and reasoning:
+                        # Sometimes R1 puts the JSON inside reasoning_content
+                        result = _extract_json(reasoning)
+
+                    if result:
+                        result['_model'] = 'deepseek-r1'
+                        _last_r1_error = None
+                        print(f"R1 success on attempt {attempt}: {result.get('decision')} {result.get('confidence')}%")
+                        return result
+                    else:
+                        # R1 responded but no valid JSON found
+                        preview = (text or reasoning)[:200]
+                        print(f"R1 attempt {attempt}: no JSON found in response. Preview: {preview}")
+                        _last_r1_error = f"No JSON in R1 response (attempt {attempt})"
+                        if attempt < max_retries:
+                            await asyncio.sleep(3)
+                            continue
+
+            except httpx.ReadTimeout:
+                _last_r1_error = f"R1 read timeout on attempt {attempt}"
+                print(f"R1 timeout attempt {attempt}/{max_retries}")
+                if attempt < max_retries:
+                    await asyncio.sleep(5)
+                    continue
+            except Exception as e:
+                _last_r1_error = f"R1 error attempt {attempt}: {str(e)[:100]}"
+                print(f"R1 failed attempt {attempt}/{max_retries}: {e}")
+                traceback.print_exc()
+                if attempt < max_retries:
+                    await asyncio.sleep(5 * attempt)
+                    continue
+
+        print(f"R1 exhausted all {max_retries} retries. Last error: {_last_r1_error}. Falling back to GPT-4o.")
+
+    # Fallback: GPT-4o (only if R1 completely failed)
+    print(f"⚠ Using GPT-4o fallback for {asset} (R1 unavailable: {_last_r1_error})")
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "gpt-4o",
-                    "max_tokens": 1200,
+                    "max_tokens": 2000,
                     "messages": [
                         {"role": "system", "content": "You are an expert trading AI. Respond ONLY with valid JSON."},
                         {"role": "user", "content": prompt}
@@ -143,13 +200,13 @@ Respond with ONLY this JSON:
             )
             resp.raise_for_status()
             text = resp.json()['choices'][0]['message']['content']
-            m = re.search(r'\{[\s\S]*\}', text)
-            if m:
-                result = json.loads(m.group())
+            result = _extract_json(text)
+            if result:
                 result['_model'] = 'gpt-4o'
+                result['_r1_error'] = _last_r1_error or 'R1 not attempted'
                 return result
     except Exception as e:
-        print(f"GPT-4o failed: {e}")
+        print(f"GPT-4o also failed: {e}")
 
     return {
         "decision": "NO_TRADE",
@@ -158,7 +215,32 @@ Respond with ONLY this JSON:
         "price_target": None, "price_target_bull": None, "price_target_bear": None,
         "predicted_path": [],
         "volatility": "high",
-        "insight": "All agents failed — cannot make prediction",
+        "insight": f"All agents failed — R1: {_last_r1_error or 'no key'}, GPT-4o: also failed",
         "primary_reason": "API error",
         "_model": "error"
     }
+
+
+def _extract_json(text: str) -> Optional[dict]:
+    """Extract JSON object from text, handling markdown code blocks and think tags."""
+    if not text:
+        return None
+    # Strip think tags
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE).strip()
+    # Strip markdown code blocks
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Find JSON object in text
+    m = re.search(r'\{[\s\S]*\}', text)
+    if m:
+        try:
+            return json.loads(m.group())
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None

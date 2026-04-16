@@ -424,7 +424,10 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         req.asset, ind, req.horizon, quant_result, news_result,
         mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1
     )
-    slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{decision.get('_model')}]")
+    model_used = decision.get('_model', 'unknown')
+    slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
+    if model_used == 'gpt-4o' and decision.get('_r1_error'):
+        slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
 
     # ── Post-processing gates ────────────────────────────────────────────
     gate_reason = None
