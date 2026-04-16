@@ -578,6 +578,10 @@ function openHistDetail(id) {
     ['🌊 Regime',e.regime||'—'],['🏄 Hurst',e.hurst_exp!=null?e.hurst_exp.toFixed(3):'—'],
   ];
 
+  // Build mini price chart (entry → target → actual)
+  const hasChartData = e.entry_price && (e.target_price || e.predicted_price || e.outcome_price);
+  const chartId = 'hist-chart-' + Date.now();
+
   document.body.insertAdjacentHTML('beforeend',`
     <div onclick="this.remove()" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.88);z-index:500;overflow-y:auto;padding:16px">
       <div onclick="event.stopPropagation()" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;max-width:420px;margin:0 auto">
@@ -586,6 +590,7 @@ function openHistDetail(id) {
           <button onclick="event.stopPropagation();this.closest('[style*=z-index]').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
         </div>
         <div style="margin-bottom:10px">${verdictHtml}</div>
+        ${hasChartData?`<canvas id="${chartId}" style="width:100%;height:140px;border:1px solid rgba(0,229,255,.12);border-radius:6px;margin-bottom:10px"></canvas>`:''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:10px">
           ${rows.map(([l,v])=>`<div style="background:var(--surface);padding:7px 10px"><div style="font-size:7px;color:var(--muted)">${l}</div><div style="font-size:10px">${v}</div></div>`).join('')}
         </div>
@@ -596,6 +601,129 @@ function openHistDetail(id) {
         ${expired&&!e.outcome_price?`<button onclick="event.stopPropagation();checkOutcome('${e.id}');this.closest('[style*=z-index]').remove();" class="check-btn" style="width:100%;padding:9px;font-size:10px;margin-top:4px">🔄 GET PRICE AT EXPIRY</button>`:''}
       </div>
     </div>`);
+
+  // Draw mini chart after DOM insert
+  if (hasChartData) drawHistoryChart(chartId, e);
+}
+
+function drawHistoryChart(canvasId, e) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+
+  const entry = e.entry_price;
+  const target = e.target_price || e.predicted_price;
+  const actual = e.outcome_price;
+  const bull = e.target_bull;
+  const bear = e.target_bear;
+
+  // Collect all price levels to determine scale
+  const prices = [entry];
+  if (target) prices.push(target);
+  if (actual) prices.push(actual);
+  if (bull) prices.push(bull);
+  if (bear) prices.push(bear);
+  const pMin = Math.min(...prices);
+  const pMax = Math.max(...prices);
+  const range = pMax - pMin || entry * 0.02;
+  const pad = range * 0.25;
+  const yMin = pMin - pad;
+  const yMax = pMax + pad;
+
+  const toY = p => H - ((p - yMin) / (yMax - yMin)) * (H - 30) - 15;
+
+  // Background
+  ctx.fillStyle = '#04080f';
+  ctx.fillRect(0, 0, W, H);
+
+  // Time labels
+  const leftX = 60, rightX = W - 10;
+  const midX = (leftX + rightX) / 2;
+  ctx.fillStyle = '#2d4d6e';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('ENTRY', leftX, H - 2);
+  ctx.fillText(`${e.horizon_label || e.horizon + 'H'}`, midX, H - 2);
+  ctx.fillText('EXPIRY', rightX, H - 2);
+
+  // Grid lines (faint)
+  ctx.strokeStyle = 'rgba(0,229,255,.06)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < 5; i++) {
+    const gy = 15 + (H - 30) / 4 * i;
+    ctx.beginPath(); ctx.moveTo(leftX, gy); ctx.lineTo(rightX, gy); ctx.stroke();
+  }
+
+  const entryY = toY(entry);
+
+  // Bull target zone (faint green area)
+  if (bull && bear) {
+    const bullY = toY(bull), bearY = toY(bear);
+    ctx.fillStyle = 'rgba(0,230,118,.06)';
+    ctx.fillRect(leftX, Math.min(bullY, entryY), rightX - leftX, Math.abs(bullY - entryY));
+    ctx.fillStyle = 'rgba(255,23,68,.06)';
+    ctx.fillRect(leftX, Math.min(bearY, entryY), rightX - leftX, Math.abs(bearY - entryY));
+  }
+
+  // Entry price line (cyan, solid)
+  ctx.strokeStyle = '#00e5ff';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, entryY); ctx.stroke();
+  ctx.fillStyle = '#00e5ff';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText(fmtP(entry), leftX - 4, entryY + 3);
+
+  // Target price line (purple, dashed)
+  if (target) {
+    const targetY = toY(target);
+    ctx.strokeStyle = '#a855f7';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, targetY); ctx.stroke();
+    ctx.setLineDash([]);
+    // Target dot + label
+    ctx.beginPath(); ctx.arc(rightX, targetY, 4, 0, Math.PI * 2); ctx.fillStyle = '#a855f7'; ctx.fill();
+    ctx.fillStyle = '#a855f7';
+    ctx.textAlign = 'right';
+    ctx.fillText('Target ' + fmtP(target), rightX - 10, targetY - 7);
+  }
+
+  // Actual outcome line (green if profit, red if loss)
+  if (actual) {
+    const actualY = toY(actual);
+    const isUp = actual >= entry;
+    const color = isUp ? '#00e676' : '#ff1744';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, actualY); ctx.stroke();
+    // Actual dot + label
+    ctx.beginPath(); ctx.arc(rightX, actualY, 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'right';
+    const pctStr = ((actual - entry) / entry * 100).toFixed(2);
+    ctx.fillText(fmtP(actual) + ' (' + (pctStr >= 0 ? '+' : '') + pctStr + '%)', rightX - 10, actualY + (actualY < entryY ? 16 : -8));
+  }
+
+  // Entry dot
+  ctx.beginPath(); ctx.arc(leftX, entryY, 4, 0, Math.PI * 2); ctx.fillStyle = '#00e5ff'; ctx.fill();
+
+  // Legend
+  ctx.font = '7px monospace';
+  ctx.textAlign = 'left';
+  let ly = 12;
+  ctx.fillStyle = '#00e5ff'; ctx.fillText('— Entry', 5, ly);
+  if (target) { ctx.fillStyle = '#a855f7'; ctx.fillText('--- Target', 55, ly); }
+  if (actual) { ctx.fillStyle = actual >= entry ? '#00e676' : '#ff1744'; ctx.fillText('— Actual', 115, ly); }
 }
 
 async function checkOutcome(id) {
