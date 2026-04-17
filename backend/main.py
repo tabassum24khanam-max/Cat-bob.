@@ -70,6 +70,7 @@ class PredictRequest(BaseModel):
     api_key: str
     ds_key: Optional[str] = None
     worker_url: Optional[str] = None
+    use_r1: Optional[bool] = True
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -418,8 +419,9 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     slog(f"✓ News: {news_result.get('sentiment')} ({news_result.get('sentiment_score',0):+d}) — {news_result.get('reasoning','')[:60]}")
 
     # ── Agent 3: Decision (R1) ───────────────────────────────────────────
-    use_r1 = bool(req.ds_key)
-    slog(f"🧠 Agent 3 ({'R1' if use_r1 else 'GPT-4o'}) making final decision...")
+    use_r1 = bool(req.ds_key) and (req.use_r1 is not False)
+    model_name = 'R1' if use_r1 else ('V3' if req.ds_key else 'GPT-4o')
+    slog(f"🧠 Agent 3 ({model_name}) making final decision...")
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
         mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1

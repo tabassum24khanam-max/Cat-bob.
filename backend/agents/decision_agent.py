@@ -180,10 +180,40 @@ Respond with ONLY this JSON:
                     await asyncio.sleep(5 * attempt)
                     continue
 
-        print(f"R1 exhausted all {max_retries} retries. Last error: {_last_r1_error}. Falling back to GPT-4o.")
+        print(f"R1 exhausted all {max_retries} retries. Last error: {_last_r1_error}. Falling back.")
 
-    # Fallback: GPT-4o (only if R1 completely failed)
-    print(f"⚠ Using GPT-4o fallback for {asset} (R1 unavailable: {_last_r1_error})")
+    # DeepSeek V3 (fast mode) — used when R1 is off or R1 failed
+    if ds_key:
+        try:
+            print(f"Using DeepSeek V3 (fast) for {asset}...")
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)) as client:
+                resp = await client.post(
+                    "https://api.deepseek.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": "deepseek-chat",
+                        "max_tokens": 3000,
+                        "messages": [
+                            {"role": "system", "content": "You are an expert trading AI. Respond ONLY with valid JSON."},
+                            {"role": "user", "content": prompt}
+                        ]
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data['choices'][0]['message'].get('content', '')
+                    result = _extract_json(text)
+                    if result:
+                        result['_model'] = 'deepseek-v3'
+                        print(f"V3 success for {asset}: {result.get('decision')} {result.get('confidence')}%")
+                        return result
+                else:
+                    print(f"V3 HTTP {resp.status_code}")
+        except Exception as e:
+            print(f"V3 failed: {e}")
+
+    # Last fallback: GPT-4o
+    print(f"⚠ Using GPT-4o fallback for {asset}")
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(

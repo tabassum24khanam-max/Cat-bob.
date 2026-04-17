@@ -17,6 +17,7 @@ let currentTab = 'crypto';
 let lastResult = null;
 let _predicting = false;
 let _alertsCache = [];
+let useR1 = localStorage.getItem('um_use_r1') !== 'false'; // default ON
 
 const ASSETS = {
   crypto: ['BTC','ETH','SOL','BNB','XRP','DOGE'],
@@ -34,6 +35,7 @@ const fmtPct = p => p == null || isNaN(p) ? '—' : `${p >= 0 ? '+' : ''}${Numbe
 
 window.addEventListener('DOMContentLoaded', () => {
   renderAssets();
+  syncR1Toggle();
   setDot('idle','READY'); checkBackend();
   setInterval(checkBackend, 30000);
   setInterval(tickPrice, 15000);
@@ -44,13 +46,27 @@ window.addEventListener('DOMContentLoaded', () => {
   pushSettingsToBackend();
 });
 
+function toggleR1() {
+  useR1 = !useR1;
+  localStorage.setItem('um_use_r1', useR1 ? 'true' : 'false');
+  syncR1Toggle();
+  showToast(useR1 ? 'R1 ON — Deep reasoning (slower)' : 'R1 OFF — V3 fast mode');
+}
+
+function syncR1Toggle() {
+  const el = document.getElementById('r1-toggle');
+  const lbl = document.getElementById('r1-label');
+  if (el) el.className = `r1-toggle ${useR1 ? 'on' : ''}`;
+  if (lbl) lbl.textContent = useR1 ? 'R1' : 'V3';
+}
+
 async function checkBackend() {
   try {
     const r = await fetch(`${backendUrl}/health`, { signal: AbortSignal.timeout(10000) });
     const d = await r.json();
     document.getElementById('backend-dot').className = 'backend-dot ok';
     document.getElementById('backend-txt').textContent = `Backend v${d.version} · ${backendUrl}`;
-    setDot('on', dsKey ? 'READY — R1 + V3.2' : 'READY');
+    setDot('on', dsKey ? (useR1 ? 'READY — R1 mode' : 'READY — V3 fast') : 'READY');
     return true;
   } catch {
     document.getElementById('backend-dot').className = 'backend-dot err';
@@ -240,13 +256,14 @@ async function predict() {
 
   const t1 = setTimeout(() => { setAgentStep(1,'running'); document.getElementById('lstep').textContent = '📐 Quant: 30+ indicators...'; }, 1000);
   const t2 = setTimeout(() => { setAgentStep(1,'done'); setAgentStep(2,'running'); document.getElementById('lstep').textContent = '📰 News: scanning 10+ feeds...'; }, 9000);
-  const t3 = setTimeout(() => { setAgentStep(2,'done'); setAgentStep(3,'running'); document.getElementById('lstep').textContent = `🧠 ${dsKey?'DeepSeek R1':'GPT-4o'} deciding...`; }, 20000);
+  const modelLabel = useR1 ? 'DeepSeek R1' : 'DeepSeek V3';
+  const t3 = setTimeout(() => { setAgentStep(2,'done'); setAgentStep(3,'running'); document.getElementById('lstep').textContent = `🧠 ${modelLabel} deciding...`; }, useR1 ? 20000 : 8000);
 
   try {
     const r = await fetch(`${backendUrl}/predict`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null }),
-      signal: AbortSignal.timeout(680000)
+      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null, use_r1:useR1 }),
+      signal: AbortSignal.timeout(useR1 ? 680000 : 120000)
     });
     [t1,t2,t3].forEach(clearTimeout);
 
@@ -320,7 +337,7 @@ function displayResult(r) {
   set('rp-hurst', ind.hurst_exp != null
     ? `${ind.hurst_exp.toFixed(3)} (${ind.hurst_exp>0.55?'trending':ind.hurst_exp<0.45?'mean-rev':'random'})` : '—');
 
-  const modelMap = {'deepseek-r1':'🧠 R1','deepseek-chat':'🤖 V3','gpt-4o':'🎯 GPT-4o','error':'❌ Error'};
+  const modelMap = {'deepseek-r1':'🧠 R1','deepseek-v3':'⚡ V3','deepseek-chat':'⚡ V3','gpt-4o':'🎯 GPT-4o','error':'❌ Error'};
   let confLine = modelMap[r.agent_model] || r.agent_model || '—';
   if (r.raw_ai_conf) confLine += ` · AI:${r.raw_ai_conf}%`;
   if (r.bayesian_conf) confLine += ` B:${r.bayesian_conf?.toFixed(0)}%`;
