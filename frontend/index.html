@@ -159,7 +159,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .modal-input { width: 100%; background: rgba(0,229,255,.05); border: 1px solid var(--border); color: var(--text); font-family: 'Space Mono'; font-size: 10px; padding: 8px 10px; border-radius: 4px; }
 .modal-save { width: 100%; margin-top: 14px; padding: 10px; background: var(--cyan); color: #000; font-family: 'Bebas Neue'; font-size: 16px; letter-spacing: 2px; border: none; border-radius: 4px; cursor: pointer; }
 
-/* Backend status bar */
+/* R1 toggle */
+.r1-toggle { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+.r1-toggle .r1-switch { width: 28px; height: 14px; border-radius: 7px; background: var(--muted); position: relative; transition: background .2s; }
+.r1-toggle .r1-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #555; transition: transform .2s, background .2s; }
+.r1-toggle.on .r1-switch { background: var(--cyan); }
+.r1-toggle.on .r1-switch::after { transform: translateX(14px); background: #fff; }
+.r1-toggle .r1-label { font-size: 7px; color: var(--muted); letter-spacing: 1px; }
+.r1-toggle.on .r1-label { color: var(--cyan); }
 .backend-bar { padding: 3px 14px; font-size: 7px; color: var(--muted); background: var(--surface); border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
 .backend-dot { width: 4px; height: 4px; border-radius: 50%; }
 .backend-dot.ok { background: var(--green); }
@@ -215,6 +222,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <button class="hz-btn" onclick="setHz(24,this)">1D</button>
       <button class="hz-btn" onclick="setHz(72,this)">3D</button>
       <button class="hz-btn" onclick="setHz(168,this)">1W</button>
+      <div class="r1-toggle" id="r1-toggle" onclick="toggleR1()">
+        <div class="r1-switch"></div>
+        <span class="r1-label" id="r1-label">R1</span>
+      </div>
       <button class="predict-btn" id="pb" onclick="predict()">PREDICT</button>
     </div>
   </div>
