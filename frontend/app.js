@@ -578,8 +578,7 @@ function openHistDetail(id) {
     ['🌊 Regime',e.regime||'—'],['🏄 Hurst',e.hurst_exp!=null?e.hurst_exp.toFixed(3):'—'],
   ];
 
-  // Build mini price chart (entry → target → actual)
-  const hasChartData = e.entry_price && (e.target_price || e.predicted_price || e.outcome_price);
+  // Build mini price chart with real candles
   const chartId = 'hist-chart-' + Date.now();
 
   document.body.insertAdjacentHTML('beforeend',`
@@ -590,7 +589,7 @@ function openHistDetail(id) {
           <button onclick="event.stopPropagation();this.closest('[style*=z-index]').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
         </div>
         <div style="margin-bottom:10px">${verdictHtml}</div>
-        ${hasChartData?`<canvas id="${chartId}" style="width:100%;height:140px;border:1px solid rgba(0,229,255,.12);border-radius:6px;margin-bottom:10px"></canvas>`:''}
+        <div id="${chartId}" style="width:100%;height:200px;border:1px solid rgba(0,229,255,.12);border-radius:6px;margin-bottom:10px;position:relative;overflow:hidden"></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);margin-bottom:10px">
           ${rows.map(([l,v])=>`<div style="background:var(--surface);padding:7px 10px"><div style="font-size:7px;color:var(--muted)">${l}</div><div style="font-size:10px">${v}</div></div>`).join('')}
         </div>
@@ -602,128 +601,150 @@ function openHistDetail(id) {
       </div>
     </div>`);
 
-  // Draw mini chart after DOM insert
-  if (hasChartData) drawHistoryChart(chartId, e);
+  // Render real candlestick chart
+  drawHistoryChart(chartId, e);
 }
 
-function drawHistoryChart(canvasId, e) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-  const W = rect.width, H = rect.height;
+async function drawHistoryChart(containerId, e) {
+  const container = document.getElementById(containerId);
+  if (!container || typeof LightweightCharts === 'undefined') return;
 
   const entry = e.entry_price;
   const target = e.target_price || e.predicted_price;
   const actual = e.outcome_price;
-  const bull = e.target_bull;
-  const bear = e.target_bear;
+  const entryTime = Math.floor(e.saved_at / 1000);
+  const expiryTime = entryTime + e.horizon * 3600;
 
-  // Collect all price levels to determine scale
-  const prices = [entry];
-  if (target) prices.push(target);
-  if (actual) prices.push(actual);
-  if (bull) prices.push(bull);
-  if (bear) prices.push(bear);
-  const pMin = Math.min(...prices);
-  const pMax = Math.max(...prices);
-  const range = pMax - pMin || entry * 0.02;
-  const pad = range * 0.25;
-  const yMin = pMin - pad;
-  const yMax = pMax + pad;
+  // Fetch real candle data
+  let candles = [];
+  try {
+    const r = await fetch(`${backendUrl}/candles?asset=${e.asset}&interval=1h&limit=200`, { signal: AbortSignal.timeout(15000) });
+    if (r.ok) {
+      const d = await r.json();
+      candles = (d.candles || [])
+        .filter(c => c.open != null && c.close != null && c.high != null && c.low != null)
+        .map(c => ({ time: Math.floor(Number(c.time)), open: +c.open, high: +c.high, low: +c.low, close: +c.close }))
+        .filter(c => c.time > 0 && isFinite(c.open))
+        .sort((a, b) => a.time - b.time);
+    }
+  } catch (err) { console.warn('History chart candle fetch:', err); }
 
-  const toY = p => H - ((p - yMin) / (yMax - yMin)) * (H - 30) - 15;
-
-  // Background
-  ctx.fillStyle = '#04080f';
-  ctx.fillRect(0, 0, W, H);
-
-  // Time labels
-  const leftX = 60, rightX = W - 10;
-  const midX = (leftX + rightX) / 2;
-  ctx.fillStyle = '#2d4d6e';
-  ctx.font = '8px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('ENTRY', leftX, H - 2);
-  ctx.fillText(`${e.horizon_label || e.horizon + 'H'}`, midX, H - 2);
-  ctx.fillText('EXPIRY', rightX, H - 2);
-
-  // Grid lines (faint)
-  ctx.strokeStyle = 'rgba(0,229,255,.06)';
-  ctx.lineWidth = 0.5;
-  for (let i = 0; i < 5; i++) {
-    const gy = 15 + (H - 30) / 4 * i;
-    ctx.beginPath(); ctx.moveTo(leftX, gy); ctx.lineTo(rightX, gy); ctx.stroke();
+  if (!candles.length) {
+    container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:8px;color:var(--muted)">No candle data available</div>';
+    return;
   }
 
-  const entryY = toY(entry);
+  const rect = container.getBoundingClientRect();
+  const w = Math.floor(rect.width) || 380;
+  const h = Math.floor(rect.height) || 200;
 
-  // Bull target zone (faint green area)
-  if (bull && bear) {
-    const bullY = toY(bull), bearY = toY(bear);
-    ctx.fillStyle = 'rgba(0,230,118,.06)';
-    ctx.fillRect(leftX, Math.min(bullY, entryY), rightX - leftX, Math.abs(bullY - entryY));
-    ctx.fillStyle = 'rgba(255,23,68,.06)';
-    ctx.fillRect(leftX, Math.min(bearY, entryY), rightX - leftX, Math.abs(bearY - entryY));
+  const chart = LightweightCharts.createChart(container, {
+    width: w, height: h,
+    layout: { background: { type: LightweightCharts.ColorType.Solid, color: '#04080f' }, textColor: '#5a7a9a' },
+    grid: { vertLines: { color: 'rgba(0,229,255,.06)' }, horzLines: { color: 'rgba(0,229,255,.06)' } },
+    rightPriceScale: { borderColor: 'rgba(0,229,255,.2)', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    timeScale: { borderColor: 'rgba(0,229,255,.2)', timeVisible: true, rightOffset: 3 },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: false, handleScale: false,
+  });
+
+  // Candlestick series
+  const series = chart.addCandlestickSeries({
+    upColor: '#00e676', downColor: '#ff1744',
+    borderUpColor: '#00e676', borderDownColor: '#ff1744',
+    wickUpColor: '#00e676', wickDownColor: '#ff1744',
+  });
+  series.setData(candles);
+
+  // Entry price line (cyan, dashed)
+  if (entry) {
+    series.createPriceLine({
+      price: entry, color: '#00e5ff', lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: 'ENTRY',
+    });
   }
-
-  // Entry price line (cyan, solid)
-  ctx.strokeStyle = '#00e5ff';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([]);
-  ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, entryY); ctx.stroke();
-  ctx.fillStyle = '#00e5ff';
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText(fmtP(entry), leftX - 4, entryY + 3);
 
   // Target price line (purple, dashed)
   if (target) {
-    const targetY = toY(target);
-    ctx.strokeStyle = '#a855f7';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, targetY); ctx.stroke();
-    ctx.setLineDash([]);
-    // Target dot + label
-    ctx.beginPath(); ctx.arc(rightX, targetY, 4, 0, Math.PI * 2); ctx.fillStyle = '#a855f7'; ctx.fill();
-    ctx.fillStyle = '#a855f7';
-    ctx.textAlign = 'right';
-    ctx.fillText('Target ' + fmtP(target), rightX - 10, targetY - 7);
+    series.createPriceLine({
+      price: target, color: '#a855f7', lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true, title: 'TARGET',
+    });
   }
 
-  // Actual outcome line (green if profit, red if loss)
+  // Actual outcome price line (green/red, solid)
   if (actual) {
-    const actualY = toY(actual);
-    const isUp = actual >= entry;
-    const color = isUp ? '#00e676' : '#ff1744';
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([]);
-    ctx.beginPath(); ctx.moveTo(leftX, entryY); ctx.lineTo(rightX, actualY); ctx.stroke();
-    // Actual dot + label
-    ctx.beginPath(); ctx.arc(rightX, actualY, 5, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
-    ctx.fillStyle = color;
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'right';
-    const pctStr = ((actual - entry) / entry * 100).toFixed(2);
-    ctx.fillText(fmtP(actual) + ' (' + (pctStr >= 0 ? '+' : '') + pctStr + '%)', rightX - 10, actualY + (actualY < entryY ? 16 : -8));
+    const outcomeColor = actual >= entry ? '#00e676' : '#ff1744';
+    series.createPriceLine({
+      price: actual, color: outcomeColor, lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true,
+      title: (actual >= entry ? '✓' : '✗') + ' OUTCOME',
+    });
   }
 
-  // Entry dot
-  ctx.beginPath(); ctx.arc(leftX, entryY, 4, 0, Math.PI * 2); ctx.fillStyle = '#00e5ff'; ctx.fill();
+  // Bull/bear target lines (faint)
+  if (e.target_bull) {
+    series.createPriceLine({
+      price: e.target_bull, color: 'rgba(0,230,118,.3)', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: false, title: '',
+    });
+  }
+  if (e.target_bear) {
+    series.createPriceLine({
+      price: e.target_bear, color: 'rgba(255,23,68,.3)', lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: false, title: '',
+    });
+  }
 
-  // Legend
-  ctx.font = '7px monospace';
-  ctx.textAlign = 'left';
-  let ly = 12;
-  ctx.fillStyle = '#00e5ff'; ctx.fillText('— Entry', 5, ly);
-  if (target) { ctx.fillStyle = '#a855f7'; ctx.fillText('--- Target', 55, ly); }
-  if (actual) { ctx.fillStyle = actual >= entry ? '#00e676' : '#ff1744'; ctx.fillText('— Actual', 115, ly); }
+  // Markers: entry point and expiry point on the candles
+  const markers = [];
+  // Find candle closest to entry time
+  let entryIdx = candles.findIndex(c => c.time >= entryTime);
+  if (entryIdx < 0) entryIdx = candles.length - 1;
+  markers.push({
+    time: candles[entryIdx].time, position: 'aboveBar', color: '#00e5ff',
+    shape: 'arrowDown', text: 'ENTRY'
+  });
+
+  // Find candle closest to expiry time
+  if (actual) {
+    let expiryIdx = candles.findIndex(c => c.time >= expiryTime);
+    if (expiryIdx < 0) expiryIdx = candles.length - 1;
+    const outcomeColor = actual >= entry ? '#00e676' : '#ff1744';
+    markers.push({
+      time: candles[expiryIdx].time, position: 'belowBar', color: outcomeColor,
+      shape: 'arrowUp', text: (actual >= entry ? '✓' : '✗') + ' OUTCOME'
+    });
+  }
+
+  series.setMarkers(markers.sort((a, b) => a.time - b.time));
+
+  // Scroll to show the entry area
+  const entryCandle = candles[entryIdx];
+  if (entryCandle) {
+    chart.timeScale().setVisibleRange({
+      from: entryCandle.time - e.horizon * 3600 * 2,
+      to: entryCandle.time + e.horizon * 3600 * 3,
+    });
+  } else {
+    chart.timeScale().fitContent();
+  }
+
+  // Expiry time vertical line using a separate line series
+  const expiryCandle = candles.find(c => c.time >= expiryTime);
+  if (expiryCandle) {
+    const timeLabel = new Date(expiryTime * 1000).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    // Create a thin vertical marker via a separate series
+    const vline = chart.addLineSeries({ color: 'rgba(255,214,0,.4)', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const lo = Math.min(...candles.slice(-50).map(c => c.low));
+    const hi = Math.max(...candles.slice(-50).map(c => c.high));
+    vline.setData([{ time: expiryCandle.time, value: lo }, { time: expiryCandle.time, value: hi }]);
+  }
 }
 
 async function checkOutcome(id) {
