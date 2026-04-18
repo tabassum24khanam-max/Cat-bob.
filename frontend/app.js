@@ -915,6 +915,26 @@ async function retrainML() {
   }
 }
 
+async function backfillML() {
+  showToast('Backfilling indicators from history...');
+  try {
+    const r = await fetch(`${backendUrl}/ml/backfill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(600000)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const result = await r.json();
+    if (result.ok) {
+      showToast(`Backfill: ${result.success}/${result.total} recovered, ${result.failed} failed`);
+    } else {
+      showToast(`Backfill failed: ${result.reason || 'unknown error'}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
 let _toastTimer;
 function showToast(msg) {
   const t=document.getElementById('toast');

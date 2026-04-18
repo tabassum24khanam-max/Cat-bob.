@@ -14,13 +14,17 @@ except ImportError:
     HAS_YFINANCE = False
 
 
-async def fetch_binance_candles(symbol: str, interval: str = '1h', limit: int = 300) -> list:
-    """Fetch candles from Binance API."""
+async def fetch_binance_candles(symbol: str, interval: str = '1h', limit: int = 300,
+                                 end_time_ms: int = None) -> list:
+    """Fetch candles from Binance API. Optionally pass end_time_ms for historical data."""
     try:
+        params = {'symbol': symbol, 'interval': interval, 'limit': limit}
+        if end_time_ms:
+            params['endTime'] = int(end_time_ms)
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(
                 "https://api.binance.com/api/v3/klines",
-                params={'symbol': symbol, 'interval': interval, 'limit': limit}
+                params=params
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -89,6 +93,65 @@ async def fetch_candles(asset: str, interval: str = '1h', limit: int = 300,
 
     symbol = YAHOO_SYMBOLS.get(asset, asset)
     return await fetch_yahoo_candles(symbol, interval, limit, worker_url)
+
+
+async def fetch_candles_before(asset: str, end_time_sec: int, interval: str = '1h',
+                                limit: int = 300) -> list:
+    """Fetch historical candles ending at `end_time_sec` (unix seconds).
+    Used for backfilling indicator snapshots on past predictions.
+    """
+    # Crypto: use Binance endTime param
+    if asset in BINANCE_SYMBOLS:
+        candles = await fetch_binance_candles(
+            BINANCE_SYMBOLS[asset], interval, limit,
+            end_time_ms=end_time_sec * 1000,
+        )
+        if candles:
+            return candles
+
+        # Binance blocked — fall back to direct Yahoo with period window
+        crypto_yahoo = {'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD',
+                        'BNB': 'BNB-USD', 'XRP': 'XRP-USD', 'DOGE': 'DOGE-USD',
+                        'ADA': 'ADA-USD', 'AVAX': 'AVAX-USD', 'DOT': 'DOT-USD',
+                        'MATIC': 'MATIC-USD', 'LINK': 'LINK-USD', 'UNI': 'UNI-USD'}
+        yahoo_sym = crypto_yahoo.get(asset)
+        if not yahoo_sym:
+            return []
+    else:
+        yahoo_sym = YAHOO_SYMBOLS.get(asset, asset)
+
+    # Yahoo historical window
+    return await _fetch_yahoo_window(yahoo_sym, end_time_sec, interval, limit)
+
+
+async def _fetch_yahoo_window(symbol: str, end_time_sec: int, interval: str = '1h',
+                               limit: int = 300) -> list:
+    """Direct Yahoo fetch with period1/period2 window ending at end_time_sec."""
+    # Interval spacing in seconds
+    sec_per = {'1h': 3600, '4h': 14400, '1d': 86400}.get(interval, 3600)
+    # Get extra buffer before (2x limit) to ensure enough indicator history
+    period1 = end_time_sec - (limit * 2 * sec_per)
+    period2 = end_time_sec
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            resp = await client.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                params={'period1': period1, 'period2': period2, 'interval': interval},
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            d = resp.json()
+            res = d.get('chart', {}).get('result', [{}])[0]
+            q = res.get('indicators', {}).get('quote', [{}])[0]
+            ts_list = res.get('timestamp', [])
+            candles = []
+            for i, t in enumerate(ts_list):
+                if q.get('close', [None])[i] is not None:
+                    candles.append({'time': t, 'open': q['open'][i], 'high': q['high'][i],
+                                   'low': q['low'][i], 'close': q['close'][i],
+                                   'volume': (q.get('volume') or [0])[i] or 0})
+            return [c for c in candles if c['time'] <= end_time_sec][-limit:]
+    except Exception:
+        return []
 
 
 async def fetch_macro(worker_url: str = None) -> dict:

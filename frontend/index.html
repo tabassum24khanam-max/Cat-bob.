@@ -299,7 +299,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <button class="hp-close" onclick="closeHistory()">✕</button>
   </div>
   <div style="display:flex;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--surface)">
-    <button class="key-btn" onclick="checkAllOutcomes()" style="flex:1">⚡ CHECK ALL OUTCOMES</button>
+    <button class="key-btn" onclick="checkAllOutcomes()" style="flex:1">⚡ CHECK ALL</button>
+    <button class="key-btn" onclick="backfillML()" style="flex:1">📥 BACKFILL</button>
     <button class="key-btn" onclick="retrainML()" style="flex:1">🤖 RETRAIN ML</button>
   </div>
   <div class="hp-list" id="hp-list"></div>

@@ -20,7 +20,7 @@ from config import BINANCE_SYMBOLS, ASSET_NAMES, WORKER_URL, ALL_ASSETS, get_ass
 from database import (init_db, get_predictions, save_prediction, update_prediction_outcome,
                       similarity_search, get_news_history, get_macro_history, DB_PATH,
                       get_accuracy_stats, update_accuracy_stats, get_upcoming_events)
-from data_fetcher import fetch_candles, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
+from data_fetcher import fetch_candles, fetch_candles_before, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
 from indicators import compute_indicators, monte_carlo
 from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
 from agents.quant_agent import run_quant_agent, build_quant_prompt
@@ -707,6 +707,76 @@ async def ml_retrain():
         import traceback
         traceback.print_exc()
         return {"ok": False, "reason": str(e)}
+
+
+@app.post("/ml/backfill")
+async def ml_backfill():
+    """Reconstruct ind_snapshot for existing predictions by re-fetching historical
+    candles at each prediction's saved_at timestamp and recomputing indicators.
+    Enables ML retrain on trades made before indicator snapshots were stored.
+    """
+    import aiosqlite
+    from database import DB_PATH
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, asset, saved_at, horizon FROM predictions "
+            "WHERE ind_snapshot IS NULL OR ind_snapshot = '' OR ind_snapshot = 'null' "
+            "ORDER BY saved_at DESC"
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    total = len(rows)
+    success = 0
+    failed = 0
+    errors = []
+
+    for p in rows:
+        try:
+            asset = p['asset']
+            saved_at_ms = p.get('saved_at', 0)
+            if not saved_at_ms:
+                failed += 1
+                continue
+            saved_at_sec = int(saved_at_ms) // 1000
+
+            candles = await fetch_candles_before(asset, saved_at_sec, '1h', 300)
+            # Keep only candles at or before saved_at
+            candles = [c for c in candles if c.get('time', 0) <= saved_at_sec]
+
+            if len(candles) < 60:
+                failed += 1
+                if len(errors) < 10:
+                    errors.append(f"{asset} @ {saved_at_ms}: only {len(candles)} candles")
+                continue
+
+            ind = compute_indicators(candles[-300:])
+            if not ind:
+                failed += 1
+                if len(errors) < 10:
+                    errors.append(f"{asset} @ {saved_at_ms}: compute_indicators returned None")
+                continue
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute(
+                    "UPDATE predictions SET ind_snapshot=? WHERE id=?",
+                    (json.dumps(ind), p['id']),
+                )
+                await db.commit()
+            success += 1
+        except Exception as e:
+            failed += 1
+            if len(errors) < 10:
+                errors.append(f"{p.get('asset')} @ {p.get('saved_at')}: {str(e)}")
+
+    return {
+        "ok": True,
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "errors": errors,
+    }
 
 
 @app.get("/history/check-all")
