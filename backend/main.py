@@ -693,11 +693,19 @@ async def ml_retrain():
     try:
         preds = await get_predictions(limit=2000)
         model = await train_ensemble(preds)
-        if model:
-            _ml_cache['all'] = model
-            return {"ok": True, "samples": model['n_samples'], "accuracy": model.get('train_accuracy', 0)}
-        return {"ok": False, "reason": "Not enough rated predictions"}
+        if not model:
+            return {"ok": False, "reason": "No result from train_ensemble"}
+        if model.get('ok') is False:
+            return {"ok": False, "reason": model.get('error', 'Training failed')}
+        _ml_cache['all'] = model
+        return {
+            "ok": True,
+            "samples": model.get('n_samples', 0),
+            "accuracy": model.get('train_accuracy', 0),
+        }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"ok": False, "reason": str(e)}
 
 

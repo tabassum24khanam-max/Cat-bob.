@@ -458,6 +458,7 @@ function saveToHistory(result) {
     quant_verdict:`${result.quant?.direction||'—'} ${result.quant?.confidence||0}%`,
     news_verdict:`${result.news?.sentiment||'neutral'} (${result.news?.sentiment_score||0})`,
     regime:result.ind?.regime, hurst_exp:result.ind?.hurst_exp,
+    ind_snapshot:result.ind||null,
     feedback:null, outcome_price:null, target_hit:null,
   };
   const history = getHistory();
@@ -900,15 +901,14 @@ async function retrainML() {
     const r = await fetch(`${backendUrl}/ml/retrain`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(60000)
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const result = await r.json();
     if (result.ok) {
-      const top = result.top_features ? result.top_features.map(f => f[0]).join(', ') : '';
-      showToast(`ML retrained: ${result.n_train} samples, top features: ${top}`);
+      showToast(`ML retrained: ${result.samples} samples, accuracy: ${(result.accuracy*100).toFixed(0)}%`);
     } else {
-      showToast(`ML retrain: ${result.error}`);
+      showToast(`ML retrain failed: ${result.reason || 'unknown error'}`);
     }
   } catch (e) {
     showToast(`Error: ${e.message}`);

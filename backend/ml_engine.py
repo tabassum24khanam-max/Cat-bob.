@@ -99,14 +99,23 @@ async def train_ensemble(predictions: list) -> dict:
     except ImportError as e:
         return {"ok": False, "error": f"Missing dependency: {e}"}
 
-    # Filter rated directional trades
-    rated = [p for p in predictions
-             if p.get('feedback') in ('correct', 'wrong')
-             and p.get('decision') in ('BUY', 'SELL')
-             and p.get('ind_snapshot')]
+    # Filter rated trades with indicator data
+    # Include NO_TRADE predictions that have original_decision (gate-blocked trades still have signal value)
+    rated = []
+    for p in predictions:
+        if p.get('feedback') not in ('correct', 'wrong'):
+            continue
+        if not p.get('ind_snapshot'):
+            continue
+        direction = p.get('decision')
+        if direction == 'NO_TRADE':
+            direction = p.get('original_decision')
+        if direction not in ('BUY', 'SELL'):
+            continue
+        rated.append({**p, '_effective_direction': direction})
 
-    if len(rated) < 20:
-        return {"ok": False, "error": f"Need 20+ rated trades, have {len(rated)}"}
+    if len(rated) < 15:
+        return {"ok": False, "error": f"Need 15+ rated trades with indicators, have {len(rated)}"}
 
     X, y = [], []
     for p in rated:
@@ -115,16 +124,16 @@ async def train_ensemble(predictions: list) -> dict:
             if not ind:
                 continue
             features = extract_features(ind)
-            # Label: 1 if price went up, 0 if down
-            moved_up = (p.get('feedback') == 'correct' and p.get('decision') == 'BUY') or \
-                       (p.get('feedback') == 'wrong' and p.get('decision') == 'SELL')
+            direction = p['_effective_direction']
+            moved_up = (p.get('feedback') == 'correct' and direction == 'BUY') or \
+                       (p.get('feedback') == 'wrong' and direction == 'SELL')
             X.append(features)
             y.append(1 if moved_up else 0)
         except Exception:
             continue
 
-    if len(X) < 20:
-        return {"ok": False, "error": "Insufficient valid samples after parsing"}
+    if len(X) < 15:
+        return {"ok": False, "error": f"Insufficient valid samples after parsing ({len(X)})"}
 
     X = np.array(X)
     y = np.array(y)
