@@ -174,10 +174,27 @@ async def init_db():
     print(f"✓ Database: {DB_PATH}")
 
 
+_PREDICTION_COLS = {
+    'id', 'saved_at', 'asset', 'horizon', 'decision', 'confidence',
+    'entry_price', 'target_price', 'target_bull', 'target_bear',
+    'prob_up', 'prob_down', 'predicted_price', 'original_decision',
+    'insight', 'primary_reason', 'agent_model',
+    'quant_verdict', 'news_verdict',
+    'feedback', 'outcome_price', 'outcome_at',
+    'target_hit', 'feedback_note', 'gate_reason',
+    'ind_snapshot', 'ml_score', 'unscored',
+    'ml_confidence', 'cluster_id',
+    'macro_snapshot', 'news_snapshot', 'created_at',
+}
+
+
 async def save_prediction(pred: dict):
+    filtered = {k: v for k, v in pred.items() if k in _PREDICTION_COLS}
+    if not filtered.get('id'):
+        return
     async with aiosqlite.connect(DB_PATH) as db:
-        cols = list(pred.keys())
-        vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in pred.values()]
+        cols = list(filtered.keys())
+        vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in filtered.values()]
         ph = ",".join(["?" for _ in vals])
         await db.execute(f"INSERT OR REPLACE INTO predictions ({','.join(cols)}) VALUES ({ph})", vals)
         await db.commit()
