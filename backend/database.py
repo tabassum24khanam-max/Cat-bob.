@@ -196,7 +196,18 @@ async def save_prediction(pred: dict):
         cols = list(filtered.keys())
         vals = [json.dumps(v) if isinstance(v, (dict, list)) else v for v in filtered.values()]
         ph = ",".join(["?" for _ in vals])
-        await db.execute(f"INSERT OR REPLACE INTO predictions ({','.join(cols)}) VALUES ({ph})", vals)
+        # Use UPSERT: insert if new, update if exists BUT preserve non-null ind_snapshot
+        updates = []
+        for c in cols:
+            if c == 'id':
+                continue
+            if c == 'ind_snapshot':
+                updates.append(f"ind_snapshot=COALESCE(excluded.ind_snapshot, predictions.ind_snapshot)")
+            else:
+                updates.append(f"{c}=excluded.{c}")
+        sql = (f"INSERT INTO predictions ({','.join(cols)}) VALUES ({ph}) "
+               f"ON CONFLICT(id) DO UPDATE SET {','.join(updates)}")
+        await db.execute(sql, vals)
         await db.commit()
 
 

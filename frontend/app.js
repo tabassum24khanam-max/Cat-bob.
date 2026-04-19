@@ -896,38 +896,7 @@ async function checkAllOutcomes() {
 }
 
 async function retrainML() {
-  const history = getHistory();
-  const rated = history.filter(e => e.feedback === 'correct' || e.feedback === 'wrong');
-  const withInd = rated.filter(e => e.ind_snapshot);
-
-  if (rated.length < 15) {
-    alert(`Need 15+ rated predictions to train ML.\n\nYou have: ${rated.length} rated out of ${history.length} total.\n\nMake more predictions and wait for outcomes.`);
-    return;
-  }
-
-  showToast(`Syncing ${history.length} predictions to server...`);
-  let synced = 0;
-  for (const entry of history) {
-    try {
-      const r = await fetch(`${backendUrl}/history/save`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({prediction: entry}), signal: AbortSignal.timeout(10000)
-      });
-      if (r.ok) synced++;
-    } catch {}
-  }
-  showToast(`Synced ${synced}. Now retraining...`);
-
-  if (withInd.length < 15) {
-    showToast('Running backfill for indicator data...');
-    try {
-      await fetch(`${backendUrl}/ml/backfill`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        signal: AbortSignal.timeout(600000)
-      });
-    } catch {}
-  }
-
+  showToast('Retraining ML on server data...');
   try {
     const r = await fetch(`${backendUrl}/ml/retrain`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -938,7 +907,7 @@ async function retrainML() {
     if (result.ok) {
       alert(`ML retrained!\n\nSamples: ${result.samples}\nCV Accuracy: ${result.accuracy}%`);
     } else {
-      alert(`ML retrain failed:\n\n${result.reason || 'unknown error'}\n\nSynced: ${synced} predictions\nRated: ${rated.length}\nWith indicators: ${withInd.length}`);
+      alert(`ML retrain failed:\n\n${result.reason || 'unknown error'}\n\nTip: Run BACKFILL first to sync & populate indicator data.`);
     }
   } catch (e) {
     alert(`Retrain error: ${e.message}`);
@@ -949,6 +918,16 @@ async function exportPredictions() {
   const history = getHistory();
   if (!history.length) { alert('No predictions to export'); return; }
 
+  // Try to fetch indicator data from backend DB (backfilled)
+  let serverMap = {};
+  try {
+    const r = await fetch(`${backendUrl}/history?limit=1000`, {signal: AbortSignal.timeout(10000)});
+    if (r.ok) {
+      const d = await r.json();
+      (d.predictions||[]).forEach(p => { if (p.id) serverMap[p.id] = p; });
+    }
+  } catch {}
+
   const lines = [];
   lines.push('='.repeat(80));
   lines.push('ULTRAMAX PREDICTION EXPORT');
@@ -958,6 +937,13 @@ async function exportPredictions() {
 
   const sorted = [...history].sort((a,b) => (a.saved_at||0) - (b.saved_at||0));
   sorted.forEach((e, i) => {
+    // Merge backend indicator data if localStorage is missing it
+    const srv = serverMap[e.id];
+    if (srv && srv.ind_snapshot && !e.ind_snapshot) {
+      try {
+        e.ind_snapshot = typeof srv.ind_snapshot === 'string' ? JSON.parse(srv.ind_snapshot) : srv.ind_snapshot;
+      } catch {}
+    }
     const savedDt = e.saved_at ? new Date(e.saved_at).toLocaleString('en-US', {timeZone:'UTC'}) + ' UTC' : 'N/A';
     const expiresAt = e.saved_at ? e.saved_at + (e.horizon||4)*3600000 : 0;
     const expDt = expiresAt ? new Date(expiresAt).toLocaleString('en-US', {timeZone:'UTC'}) + ' UTC' : 'N/A';
