@@ -919,7 +919,7 @@ async function exportPredictions() {
   showToast('Exporting all predictions...');
   try {
     const r = await fetch(`${backendUrl}/predictions/export`, { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) { alert(`Export failed: HTTP ${r.status}`); return; }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -931,27 +931,27 @@ async function exportPredictions() {
     URL.revokeObjectURL(url);
     showToast('Export downloaded!');
   } catch (e) {
-    showToast(`Export error: ${e.message}`);
+    alert(`Export error: ${e.message}`);
   }
 }
 
 async function backfillML() {
-  showToast('Backfilling indicators from history...');
+  showToast('Backfilling indicators... this may take 2-3 minutes');
   try {
     const r = await fetch(`${backendUrl}/ml/backfill`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(600000)
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) { alert(`Backfill failed: HTTP ${r.status}`); return; }
     const result = await r.json();
     if (result.ok) {
-      showToast(`Backfill: ${result.success}/${result.total} recovered, ${result.failed} failed`);
+      alert(`Backfill complete!\n\nRecovered: ${result.success}/${result.total}\nFailed: ${result.failed}${result.errors?.length ? '\n\nErrors:\n' + result.errors.join('\n') : ''}`);
     } else {
-      showToast(`Backfill failed: ${result.reason || 'unknown error'}`);
+      alert(`Backfill failed: ${result.reason || 'unknown error'}`);
     }
   } catch (e) {
-    showToast(`Error: ${e.message}`);
+    alert(`Backfill error: ${e.message}`);
   }
 }
 
