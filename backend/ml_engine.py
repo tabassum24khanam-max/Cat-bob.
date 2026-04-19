@@ -22,6 +22,7 @@ FEATURE_COLS = [
     'ich_bull', 'ich_bear', 'supertrend_bull',
     'mom2', 'mom72', 'engulfing', 'doji',
     'pivot_dist_r1', 'pivot_dist_s1',
+    'adx', 'cci', 'mfi', 'stoch_rsi',
 ]
 
 # Cache
@@ -72,6 +73,10 @@ def extract_features(ind: dict) -> list:
         float(ind.get('doji', 0) or 0),
         max(-1, min(1, pivot_dist_r1 / 3)),
         max(-1, min(1, pivot_dist_s1 / 3)),
+        ind.get('adx', 25) / 100,
+        max(-3, min(3, (ind.get('cci', 0) or 0) / 100)) / 3,
+        ind.get('mfi', 50) / 100,
+        ind.get('stoch_rsi', 50) / 100,
     ]
 
 

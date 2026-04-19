@@ -434,6 +434,35 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     # ── Post-processing gates ────────────────────────────────────────────
     gate_reason = None
 
+    # WEEKEND + MARKET HOURS GATE (stocks only)
+    from datetime import datetime, timedelta, timezone
+    riyadh_tz = timezone(timedelta(hours=3))
+    now_riyadh = datetime.now(riyadh_tz)
+    if get_asset_type(req.asset) == 'stock':
+        # Weekend gate: Saturday=5, Sunday=6
+        if now_riyadh.weekday() in (5, 6):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 20)
+            slog(f"Gate: Weekend — stocks confidence -20%")
+        # Market hours gate: NYSE open 4:30 PM - 11:00 PM Riyadh (9:30 AM - 4:00 PM ET)
+        riyadh_hour = now_riyadh.hour + now_riyadh.minute / 60.0
+        if riyadh_hour < 16.5 or riyadh_hour >= 23.0:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 10)
+            slog(f"Gate: NYSE closed — stocks confidence -10%")
+
+    # MACRO BEAR/BULL VIX+DXY CAP GATES
+    if decision.get('decision') != 'NO_TRADE':
+        macro = macro_data or {}
+        if macro.get('vix', 0) > 30 and macro.get('dxy', 0) > 107 and decision.get('decision') == 'BUY':
+            if decision.get('confidence', 0) > 55:
+                decision['confidence'] = 55
+            slog(f"Gate: Macro Bear (VIX>30 + DXY>107) → BUY capped 55%")
+        if macro.get('vix', 0) < 15 and macro.get('dxy', 0) < 100 and decision.get('decision') == 'SELL':
+            if decision.get('confidence', 0) > 55:
+                decision['confidence'] = 55
+            slog(f"Gate: Macro Bull (VIX<15 + DXY<100) → SELL capped 55%")
+
     # MACRO BEAR/BULL GATE
     if decision.get('decision') != 'NO_TRADE':
         fg_val = fg_data.get('value', 50)

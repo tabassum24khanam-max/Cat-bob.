@@ -31,7 +31,7 @@ def is_configured(key_name: str) -> bool:
 ASSETS = {
     'crypto': ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE'],
     'stock':  ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL', 'SPY'],
-    'macro':  ['GC=F', 'CL=F', 'SI=F', 'XOM', 'LMT'],
+    'macro':  ['GC=F', 'CL=F', 'SI=F', 'XOM', 'LMT', 'RTX'],
 }
 
 ALL_ASSETS = ASSETS['crypto'] + ASSETS['stock'] + ASSETS['macro']
@@ -44,7 +44,7 @@ BINANCE_SYMBOLS = {
 YAHOO_SYMBOLS = {
     'AAPL': 'AAPL', 'TSLA': 'TSLA', 'NVDA': 'NVDA', 'MSFT': 'MSFT',
     'GOOGL': 'GOOGL', 'SPY': 'SPY', 'GC=F': 'GC=F', 'CL=F': 'CL=F',
-    'SI=F': 'SI=F', 'XOM': 'XOM', 'LMT': 'LMT',
+    'SI=F': 'SI=F', 'XOM': 'XOM', 'LMT': 'LMT', 'RTX': 'RTX',
 }
 
 ASSET_NAMES = {
@@ -53,7 +53,7 @@ ASSET_NAMES = {
     'NVDA': 'Nvidia', 'MSFT': 'Microsoft', 'GOOGL': 'Alphabet Google',
     'SPY': 'S&P 500 ETF', 'GC=F': 'Gold Futures', 'CL=F': 'WTI Crude Oil',
     'SI=F': 'Silver Futures', 'XOM': 'ExxonMobil', 'LMT': 'Lockheed Martin',
-    'RTX': 'Raytheon', 'NOC': 'Northrop Grumman', 'GD': 'General Dynamics',
+    'RTX': 'Raytheon Technologies', 'NOC': 'Northrop Grumman', 'GD': 'General Dynamics',
 }
 
 def get_asset_type(asset: str) -> str:

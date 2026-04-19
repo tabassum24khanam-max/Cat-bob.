@@ -471,6 +471,57 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
     dist_e50  = (cur - e50) / e50 * 100
     dist_e200 = (cur - e200)/ e200* 100
 
+    # ADX (Average Directional Index, 14-period)
+    plus_dm_list = []
+    minus_dm_list = []
+    tr_list = []
+    for i in range(1, n):
+        up_move = h[i] - h[i - 1]
+        down_move = l[i - 1] - l[i]
+        plus_dm_list.append(up_move if up_move > down_move and up_move > 0 else 0)
+        minus_dm_list.append(down_move if down_move > up_move and down_move > 0 else 0)
+        tr_list.append(max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])))
+    smoothed_tr = ema_arr(tr_list, 14)
+    smoothed_plus_dm = ema_arr(plus_dm_list, 14)
+    smoothed_minus_dm = ema_arr(minus_dm_list, 14)
+    min_len = min(len(smoothed_tr), len(smoothed_plus_dm), len(smoothed_minus_dm))
+    dx_list = []
+    for i in range(min_len):
+        plus_di = (smoothed_plus_dm[i] / (smoothed_tr[i] or 0.0001)) * 100
+        minus_di = (smoothed_minus_dm[i] / (smoothed_tr[i] or 0.0001)) * 100
+        di_sum = plus_di + minus_di
+        dx_list.append(abs(plus_di - minus_di) / (di_sum or 0.0001) * 100)
+    adx = ema(dx_list, 14) if len(dx_list) >= 14 else (sum(dx_list) / len(dx_list) if dx_list else 0)
+
+    # CCI (Commodity Channel Index, 20-period)
+    tp_list = [(h[i] + l[i] + c[i]) / 3 for i in range(n)]
+    tp_window = tp_list[-20:]
+    tp_sma = sum(tp_window) / 20
+    tp_mean_dev = sum(abs(tp - tp_sma) for tp in tp_window) / 20
+    cci = (tp_list[-1] - tp_sma) / (0.015 * (tp_mean_dev or 0.0001))
+
+    # MFI (Money Flow Index, 14-period)
+    tp_prices = [(h[i] + l[i] + c[i]) / 3 for i in range(n)]
+    pos_flow = 0.0
+    neg_flow = 0.0
+    for i in range(n - 14, n):
+        raw_mf = tp_prices[i] * v[i]
+        if i > 0 and tp_prices[i] > tp_prices[i - 1]:
+            pos_flow += raw_mf
+        elif i > 0 and tp_prices[i] < tp_prices[i - 1]:
+            neg_flow += raw_mf
+    money_ratio = pos_flow / (neg_flow or 0.0001)
+    mfi = 100 - 100 / (1 + money_ratio)
+
+    # StochRSI (Stochastic RSI, 14-period)
+    rsi_vals = []
+    for i in range(max(15, n - 28), n + 1):
+        rsi_vals.append(rsi(c[:i], 14))
+    rsi_window = rsi_vals[-14:] if len(rsi_vals) >= 14 else rsi_vals
+    rsi_min = min(rsi_window)
+    rsi_max = max(rsi_window)
+    stoch_rsi = (rsi_vals[-1] - rsi_min) / (rsi_max - rsi_min + 0.0001) * 100
+
     return {
         'cur': cur, 'atr': atr, 'vol_r': vol_r,
         'rsi14': rsi14, 'rsi7': rsi7,
@@ -508,4 +559,5 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
         # New fields
         'engulfing': engulfing, 'doji': doji,
         'hammer': hammer, 'shooting_star': shooting_star,
+        'adx': adx, 'cci': cci, 'mfi': mfi, 'stoch_rsi': stoch_rsi,
     }
