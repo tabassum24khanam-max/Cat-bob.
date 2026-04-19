@@ -896,47 +896,165 @@ async function checkAllOutcomes() {
 }
 
 async function retrainML() {
-  showToast('Retraining ML model...');
+  const history = getHistory();
+  const rated = history.filter(e => e.feedback === 'correct' || e.feedback === 'wrong');
+  const withInd = rated.filter(e => e.ind_snapshot);
+
+  if (rated.length < 15) {
+    alert(`Need 15+ rated predictions to train ML.\n\nYou have: ${rated.length} rated out of ${history.length} total.\n\nMake more predictions and wait for outcomes.`);
+    return;
+  }
+
+  showToast(`Syncing ${history.length} predictions to server...`);
+  let synced = 0;
+  for (const entry of history) {
+    try {
+      const r = await fetch(`${backendUrl}/history/save`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prediction: entry}), signal: AbortSignal.timeout(10000)
+      });
+      if (r.ok) synced++;
+    } catch {}
+  }
+  showToast(`Synced ${synced}. Now retraining...`);
+
+  if (withInd.length < 15) {
+    showToast('Running backfill for indicator data...');
+    try {
+      await fetch(`${backendUrl}/ml/backfill`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        signal: AbortSignal.timeout(600000)
+      });
+    } catch {}
+  }
+
   try {
     const r = await fetch(`${backendUrl}/ml/retrain`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(60000)
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      signal: AbortSignal.timeout(120000)
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const result = await r.json();
     if (result.ok) {
-      showToast(`ML retrained: ${result.samples} samples, CV accuracy: ${result.accuracy}%`);
+      alert(`ML retrained!\n\nSamples: ${result.samples}\nCV Accuracy: ${result.accuracy}%`);
     } else {
-      showToast(`ML retrain failed: ${result.reason || 'unknown error'}`);
+      alert(`ML retrain failed:\n\n${result.reason || 'unknown error'}\n\nSynced: ${synced} predictions\nRated: ${rated.length}\nWith indicators: ${withInd.length}`);
     }
   } catch (e) {
-    showToast(`Error: ${e.message}`);
+    alert(`Retrain error: ${e.message}`);
   }
 }
 
 async function exportPredictions() {
-  showToast('Exporting all predictions...');
-  try {
-    const r = await fetch(`${backendUrl}/predictions/export`, { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) { alert(`Export failed: HTTP ${r.status}`); return; }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'ultramax_predictions_export.txt';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    showToast('Export downloaded!');
-  } catch (e) {
-    alert(`Export error: ${e.message}`);
+  const history = getHistory();
+  if (!history.length) { alert('No predictions to export'); return; }
+
+  const lines = [];
+  lines.push('='.repeat(80));
+  lines.push('ULTRAMAX PREDICTION EXPORT');
+  lines.push(`Total predictions: ${history.length}`);
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push('='.repeat(80));
+
+  const sorted = [...history].sort((a,b) => (a.saved_at||0) - (b.saved_at||0));
+  sorted.forEach((e, i) => {
+    const savedDt = e.saved_at ? new Date(e.saved_at).toLocaleString('en-US', {timeZone:'UTC'}) + ' UTC' : 'N/A';
+    const expiresAt = e.saved_at ? e.saved_at + (e.horizon||4)*3600000 : 0;
+    const expDt = expiresAt ? new Date(expiresAt).toLocaleString('en-US', {timeZone:'UTC'}) + ' UTC' : 'N/A';
+    const entry = e.entry_price || 0;
+    const target = e.predicted_price || e.target_price || 0;
+    const outcome = e.outcome_price || 0;
+    const pct = entry && outcome ? ((outcome-entry)/entry*100).toFixed(2)+'%' : 'N/A';
+    const gap = entry && target && outcome ? (Math.abs(outcome-target)/entry*100).toFixed(2)+'%' : 'N/A';
+
+    lines.push('');
+    lines.push('-'.repeat(80));
+    lines.push(`#${i+1}  ${e.asset||'?'} | ${e.decision||'?'} | ${e.horizon||'?'}H`);
+    lines.push('-'.repeat(80));
+    lines.push(`  Predicted at:     ${savedDt}`);
+    lines.push(`  Expires at:       ${expDt}`);
+    lines.push(`  Model:            ${e.agent_model || 'N/A'}`);
+    lines.push(`  Decision:         ${e.decision||'?'}${e.original_decision && e.original_decision!==e.decision ? '  (original: '+e.original_decision+')' : ''}`);
+    lines.push(`  Confidence:       ${e.confidence||0}%`);
+    lines.push(`  Entry price:      ${entry ? '$'+Number(entry).toFixed(4) : 'N/A'}`);
+    lines.push(`  Predicted target: ${target ? '$'+Number(target).toFixed(4) : 'N/A'}`);
+    lines.push(`  Bull target:      ${e.target_bull ? '$'+Number(e.target_bull).toFixed(4) : 'N/A'}`);
+    lines.push(`  Bear target:      ${e.target_bear ? '$'+Number(e.target_bear).toFixed(4) : 'N/A'}`);
+    lines.push(`  Actual at expiry: ${outcome ? '$'+Number(outcome).toFixed(4) : 'N/A'}`);
+    lines.push(`  Price change:     ${pct}`);
+    lines.push(`  Target gap:       ${gap}`);
+    lines.push(`  Prob up/down:     ${e.prob_up??'N/A'} / ${e.prob_down??'N/A'}`);
+    lines.push(`  Outcome:          ${(e.feedback||'pending').toUpperCase()}`);
+    lines.push(`  Target hit:       ${e.target_hit!=null ? (e.target_hit?'Yes':'No') : 'N/A'}`);
+    lines.push(`  Gate reason:      ${e.gate_reason || 'none'}`);
+    lines.push(`  Regime:           ${e.regime || 'N/A'}`);
+    lines.push(`  Hurst:            ${e.hurst_exp ?? 'N/A'}`);
+    lines.push(`  Quant verdict:    ${e.quant_verdict || 'N/A'}`);
+    lines.push(`  News verdict:     ${e.news_verdict || 'N/A'}`);
+    lines.push(`  Primary reason:   ${e.primary_reason || 'N/A'}`);
+
+    if (e.insight) {
+      lines.push(`  R1 Reasoning:`);
+      String(e.insight).split('\n').forEach(ln => lines.push(`    ${ln.trim()}`));
+    }
+
+    if (e.feedback_note) lines.push(`  Feedback note:    ${e.feedback_note}`);
+
+    const ind = e.ind_snapshot;
+    if (ind && typeof ind === 'object') {
+      lines.push(`  --- Indicators ---`);
+      lines.push(`  RSI14=${ind.rsi14}  StochK=${ind.stoch_k}  MACD=${ind.macd_hist}`);
+      lines.push(`  BB=${ind.bb_pos}  ATR=${ind.atr}  VolR=${ind.vol_r}`);
+      lines.push(`  Trend=${ind.trend_slope}  Hurst=${ind.hurst_exp}  Entropy=${ind.entropy_ratio}`);
+      lines.push(`  Regime=${ind.regime}  VWAP=${ind.dist_vwap}  CMF=${ind.cmf}`);
+      lines.push(`  Supertrend=${ind.supertrend_bull}  Ichimoku=${ind.ich_bull}`);
+      lines.push(`  Momentum=${ind.momentum_score}  Autocorr=${ind.autocorr}  Zscore=${ind.price_zscore}`);
+    } else {
+      lines.push(`  Indicators:       ${ind ? 'present' : 'MISSING'}`);
+    }
+  });
+
+  lines.push('');
+  lines.push('='.repeat(80));
+  lines.push('END OF EXPORT');
+  lines.push('='.repeat(80));
+
+  const blob = new Blob([lines.join('\n')], {type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ultramax_predictions_export.txt';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${history.length} predictions`);
+}
+
+async function syncToBackend() {
+  const history = getHistory();
+  if (!history.length) { alert('No predictions to sync'); return; }
+  showToast(`Syncing ${history.length} predictions to server...`);
+  let ok = 0, fail = 0;
+  for (const entry of history) {
+    try {
+      const r = await fetch(`${backendUrl}/history/save`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({prediction: entry}),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (r.ok) ok++; else fail++;
+    } catch { fail++; }
   }
+  alert(`Sync complete!\n\nSaved: ${ok}/${history.length}\nFailed: ${fail}`);
+  return ok;
 }
 
 async function backfillML() {
-  showToast('Backfilling indicators... this may take 2-3 minutes');
+  showToast('Syncing predictions to server first...');
+  await syncToBackend();
+  showToast('Now backfilling indicators... 2-3 minutes');
   try {
     const r = await fetch(`${backendUrl}/ml/backfill`, {
       method: 'POST',
@@ -945,11 +1063,7 @@ async function backfillML() {
     });
     if (!r.ok) { alert(`Backfill failed: HTTP ${r.status}`); return; }
     const result = await r.json();
-    if (result.ok) {
-      alert(`Backfill complete!\n\nRecovered: ${result.success}/${result.total}\nFailed: ${result.failed}${result.errors?.length ? '\n\nErrors:\n' + result.errors.join('\n') : ''}`);
-    } else {
-      alert(`Backfill failed: ${result.reason || 'unknown error'}`);
-    }
+    alert(`Backfill complete!\n\nRecovered: ${result.success}/${result.total}\nFailed: ${result.failed}${result.errors?.length ? '\n\nErrors:\n' + result.errors.join('\n') : ''}`);
   } catch (e) {
     alert(`Backfill error: ${e.message}`);
   }
