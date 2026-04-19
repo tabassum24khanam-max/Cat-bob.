@@ -906,9 +906,49 @@ async function retrainML() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const result = await r.json();
     if (result.ok) {
-      showToast(`ML retrained: ${result.samples} samples, accuracy: ${(result.accuracy*100).toFixed(0)}%`);
+      showToast(`ML retrained: ${result.samples} samples, CV accuracy: ${result.accuracy}%`);
     } else {
       showToast(`ML retrain failed: ${result.reason || 'unknown error'}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
+async function exportPredictions() {
+  showToast('Exporting all predictions...');
+  try {
+    const r = await fetch(`${backendUrl}/predictions/export`, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ultramax_predictions_export.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Export downloaded!');
+  } catch (e) {
+    showToast(`Export error: ${e.message}`);
+  }
+}
+
+async function backfillML() {
+  showToast('Backfilling indicators from history...');
+  try {
+    const r = await fetch(`${backendUrl}/ml/backfill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(600000)
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const result = await r.json();
+    if (result.ok) {
+      showToast(`Backfill: ${result.success}/${result.total} recovered, ${result.failed} failed`);
+    } else {
+      showToast(`Backfill failed: ${result.reason || 'unknown error'}`);
     }
   } catch (e) {
     showToast(`Error: ${e.message}`);

@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -20,7 +20,7 @@ from config import BINANCE_SYMBOLS, ASSET_NAMES, WORKER_URL, ALL_ASSETS, get_ass
 from database import (init_db, get_predictions, save_prediction, update_prediction_outcome,
                       similarity_search, get_news_history, get_macro_history, DB_PATH,
                       get_accuracy_stats, update_accuracy_stats, get_upcoming_events)
-from data_fetcher import fetch_candles, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
+from data_fetcher import fetch_candles, fetch_candles_before, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
 from indicators import compute_indicators, monte_carlo
 from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
 from agents.quant_agent import run_quant_agent, build_quant_prompt
@@ -687,6 +687,117 @@ async def save_history(req: SavePredRequest):
     return {"ok": True}
 
 
+@app.get("/predictions/export")
+async def export_predictions(asset: str = None):
+    """Export all predictions as formatted text log — every field, R1 reasoning, etc."""
+    from datetime import datetime
+    preds = await get_predictions(asset, limit=5000)
+    preds.sort(key=lambda p: p.get('saved_at', 0))
+
+    lines = []
+    lines.append("=" * 80)
+    lines.append("ULTRAMAX PREDICTION EXPORT")
+    lines.append(f"Total predictions: {len(preds)}")
+    lines.append(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append("=" * 80)
+
+    for i, p in enumerate(preds, 1):
+        saved_ms = p.get('saved_at', 0)
+        saved_dt = datetime.utcfromtimestamp(saved_ms / 1000).strftime('%Y-%m-%d %H:%M:%S UTC') if saved_ms else 'N/A'
+        outcome_at = p.get('outcome_at')
+        outcome_dt = datetime.utcfromtimestamp(outcome_at / 1000).strftime('%Y-%m-%d %H:%M:%S UTC') if outcome_at else 'N/A'
+
+        entry = p.get('entry_price') or 0
+        target = p.get('target_price') or p.get('predicted_price') or 0
+        outcome = p.get('outcome_price') or 0
+        conf = p.get('confidence') or 0
+        decision = p.get('decision', '?')
+        orig_decision = p.get('original_decision', '')
+        feedback = p.get('feedback', 'pending')
+
+        pct_change = ''
+        if entry and outcome:
+            pct_change = f"{((outcome - entry) / entry) * 100:+.2f}%"
+
+        gap = ''
+        if entry and target and outcome:
+            gap = f"{abs(outcome - target) / entry * 100:.2f}%"
+
+        lines.append("")
+        lines.append(f"{'─' * 80}")
+        lines.append(f"#{i}  {p.get('asset', '?')} · {decision} · {p.get('horizon', '?')}H")
+        lines.append(f"{'─' * 80}")
+        lines.append(f"  Predicted at:     {saved_dt}")
+        lines.append(f"  Expires at:       {outcome_dt}")
+        lines.append(f"  Model:            {p.get('agent_model', 'N/A')}")
+        lines.append(f"  Decision:         {decision}" + (f"  (original: {orig_decision})" if orig_decision and orig_decision != decision else ""))
+        lines.append(f"  Confidence:       {conf}%")
+        lines.append(f"  Entry price:      ${entry:,.2f}" if entry else "  Entry price:      N/A")
+        lines.append(f"  Predicted target: ${target:,.2f}" if target else "  Predicted target: N/A")
+        lines.append(f"  Bull target:      ${p.get('target_bull', 0):,.2f}" if p.get('target_bull') else "  Bull target:      N/A")
+        lines.append(f"  Bear target:      ${p.get('target_bear', 0):,.2f}" if p.get('target_bear') else "  Bear target:      N/A")
+        lines.append(f"  Actual at expiry: ${outcome:,.2f}" if outcome else "  Actual at expiry: N/A")
+        lines.append(f"  Price change:     {pct_change}" if pct_change else "  Price change:     N/A")
+        lines.append(f"  Target gap:       {gap}" if gap else "  Target gap:       N/A")
+        lines.append(f"  Prob up:          {p.get('prob_up', 'N/A')}")
+        lines.append(f"  Prob down:        {p.get('prob_down', 'N/A')}")
+        lines.append(f"  Outcome:          {feedback.upper()}")
+        lines.append(f"  Target hit:       {'Yes' if p.get('target_hit') else 'No' if p.get('target_hit') is not None else 'N/A'}")
+        lines.append(f"  Gate reason:      {p.get('gate_reason') or 'none'}")
+        lines.append(f"  ML score:         {p.get('ml_score', 'N/A')}")
+        lines.append(f"  ML confidence:    {p.get('ml_confidence', 'N/A')}")
+        lines.append(f"  Cluster ID:       {p.get('cluster_id', 'N/A')}")
+
+        lines.append(f"  Quant verdict:    {p.get('quant_verdict', 'N/A')}")
+        lines.append(f"  News verdict:     {p.get('news_verdict', 'N/A')}")
+        lines.append(f"  Primary reason:   {p.get('primary_reason', 'N/A')}")
+
+        insight = p.get('insight', '')
+        if insight:
+            lines.append(f"  R1 Reasoning:")
+            for line in str(insight).split('\n'):
+                lines.append(f"    {line.strip()}")
+
+        note = p.get('feedback_note', '')
+        if note:
+            lines.append(f"  Feedback note:    {note}")
+
+        ind_snap = p.get('ind_snapshot')
+        if ind_snap:
+            try:
+                ind = json.loads(ind_snap) if isinstance(ind_snap, str) else ind_snap
+                lines.append(f"  --- Indicators snapshot ---")
+                lines.append(f"  RSI14: {ind.get('rsi14', 'N/A')}  Stoch K: {ind.get('stoch_k', 'N/A')}  MACD hist: {ind.get('macd_hist', 'N/A')}")
+                lines.append(f"  BB pos: {ind.get('bb_pos', 'N/A')}  ATR: {ind.get('atr', 'N/A')}  Vol ratio: {ind.get('vol_r', 'N/A')}")
+                lines.append(f"  Trend slope: {ind.get('trend_slope', 'N/A')}  Hurst: {ind.get('hurst_exp', 'N/A')}  Entropy: {ind.get('entropy_ratio', 'N/A')}")
+                lines.append(f"  Regime: {ind.get('regime', 'N/A')}  VWAP dist: {ind.get('dist_vwap', 'N/A')}  CMF: {ind.get('cmf', 'N/A')}")
+                lines.append(f"  Supertrend bull: {ind.get('supertrend_bull', 'N/A')}  Ichimoku bull: {ind.get('ich_bull', 'N/A')}")
+            except Exception:
+                lines.append(f"  Indicator data: (present but unparseable)")
+        else:
+            lines.append(f"  Indicator data:   MISSING (run backfill)")
+
+        macro_snap = p.get('macro_snapshot')
+        if macro_snap:
+            try:
+                macro = json.loads(macro_snap) if isinstance(macro_snap, str) else macro_snap
+                lines.append(f"  --- Macro snapshot ---")
+                for mk, mv in macro.items():
+                    lines.append(f"  {mk}: {mv}")
+            except Exception:
+                pass
+
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append("END OF EXPORT")
+    lines.append("=" * 80)
+
+    text = "\n".join(lines)
+    return PlainTextResponse(text, headers={
+        "Content-Disposition": "attachment; filename=ultramax_predictions_export.txt"
+    })
+
+
 @app.post("/ml/retrain")
 async def ml_retrain():
     """Retrain ML ensemble on rated prediction history."""
@@ -698,15 +809,87 @@ async def ml_retrain():
         if model.get('ok') is False:
             return {"ok": False, "reason": model.get('error', 'Training failed')}
         _ml_cache['all'] = model
+        cv = model.get('cv_accuracy', {})
+        avg_cv = (cv.get('xgb', 0) + cv.get('rf', 0)) / 2 if cv else 0
         return {
             "ok": True,
-            "samples": model.get('n_samples', 0),
-            "accuracy": model.get('train_accuracy', 0),
+            "samples": model.get('n_train', 0),
+            "accuracy": round(avg_cv, 1),
         }
     except Exception as e:
         import traceback
         traceback.print_exc()
         return {"ok": False, "reason": str(e)}
+
+
+@app.post("/ml/backfill")
+async def ml_backfill():
+    """Reconstruct ind_snapshot for existing predictions by re-fetching historical
+    candles at each prediction's saved_at timestamp and recomputing indicators.
+    Enables ML retrain on trades made before indicator snapshots were stored.
+    """
+    import aiosqlite
+    from database import DB_PATH
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, asset, saved_at, horizon FROM predictions "
+            "WHERE ind_snapshot IS NULL OR ind_snapshot = '' OR ind_snapshot = 'null' "
+            "ORDER BY saved_at DESC"
+        )
+        rows = [dict(r) for r in await cur.fetchall()]
+
+    total = len(rows)
+    success = 0
+    failed = 0
+    errors = []
+
+    for p in rows:
+        try:
+            asset = p['asset']
+            saved_at_ms = p.get('saved_at', 0)
+            if not saved_at_ms:
+                failed += 1
+                continue
+            saved_at_sec = int(saved_at_ms) // 1000
+
+            candles = await fetch_candles_before(asset, saved_at_sec, '1h', 300)
+            # Keep only candles at or before saved_at
+            candles = [c for c in candles if c.get('time', 0) <= saved_at_sec]
+
+            if len(candles) < 60:
+                failed += 1
+                if len(errors) < 10:
+                    errors.append(f"{asset} @ {saved_at_ms}: only {len(candles)} candles")
+                continue
+
+            ind = compute_indicators(candles[-300:])
+            if not ind:
+                failed += 1
+                if len(errors) < 10:
+                    errors.append(f"{asset} @ {saved_at_ms}: compute_indicators returned None")
+                continue
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute(
+                    "UPDATE predictions SET ind_snapshot=? WHERE id=?",
+                    (json.dumps(ind), p['id']),
+                )
+                await db.commit()
+            success += 1
+        except Exception as e:
+            failed += 1
+            if len(errors) < 10:
+                errors.append(f"{p.get('asset')} @ {p.get('saved_at')}: {str(e)}")
+
+    return {
+        "ok": True,
+        "total": total,
+        "success": success,
+        "failed": failed,
+        "errors": errors,
+    }
 
 
 @app.get("/history/check-all")

@@ -298,9 +298,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <button class="hp-close" onclick="closeHistory()">✕</button>
   </div>
-  <div style="display:flex;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--surface)">
-    <button class="key-btn" onclick="checkAllOutcomes()" style="flex:1">⚡ CHECK ALL OUTCOMES</button>
-    <button class="key-btn" onclick="retrainML()" style="flex:1">🤖 RETRAIN ML</button>
+  <div style="display:flex;gap:6px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--surface);flex-wrap:wrap">
+    <button class="key-btn" onclick="checkAllOutcomes()" style="flex:1;min-width:45%">⚡ CHECK ALL</button>
+    <button class="key-btn" onclick="backfillML()" style="flex:1;min-width:45%">📥 BACKFILL</button>
+    <button class="key-btn" onclick="retrainML()" style="flex:1;min-width:45%">🤖 RETRAIN ML</button>
+    <button class="key-btn" onclick="exportPredictions()" style="flex:1;min-width:45%">📄 EXPORT LOG</button>
   </div>
   <div class="hp-list" id="hp-list"></div>
 </div>
