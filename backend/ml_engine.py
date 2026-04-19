@@ -2,6 +2,7 @@
 ULTRAMAX ML Engine — Random Forest + XGBoost Ensemble with Calibration
 Replaces both the quant_agent.py embedded ML and ml_classifier.py
 """
+import gzip
 import json
 import pickle
 import numpy as np
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 MODEL_PATH = Path(__file__).parent / "data" / "ml_ensemble.pkl"
+MODEL_PATH_GZ = Path(__file__).parent / "data" / "ml_ensemble.pkl.gz"
 MODEL_PATH.parent.mkdir(exist_ok=True)
 
 # Expanded feature set (~30 features)
@@ -81,13 +83,20 @@ def extract_features(ind: dict) -> list:
 
 
 def load_ensemble():
-    """Load ensemble model from disk."""
+    """Load ensemble model from disk (supports gzip-compressed pickle)."""
     global _ensemble_cache, _cache_mtime
     try:
-        mtime = MODEL_PATH.stat().st_mtime
+        path = MODEL_PATH_GZ if MODEL_PATH_GZ.exists() else MODEL_PATH
+        if not path.exists():
+            return None
+        mtime = path.stat().st_mtime
         if _ensemble_cache is None or mtime != _cache_mtime:
-            with open(MODEL_PATH, 'rb') as f:
-                _ensemble_cache = pickle.load(f)
+            if path.suffix == '.gz':
+                with gzip.open(path, 'rb') as f:
+                    _ensemble_cache = pickle.load(f)
+            else:
+                with open(path, 'rb') as f:
+                    _ensemble_cache = pickle.load(f)
             _cache_mtime = mtime
         return _ensemble_cache
     except Exception:
@@ -205,13 +214,13 @@ async def train_ensemble(predictions: list) -> dict:
         'cv_scores': cv_scores,
         'top_features': top_features,
     }
-    with open(MODEL_PATH, 'wb') as f:
+    with gzip.open(MODEL_PATH_GZ, 'wb', compresslevel=6) as f:
         pickle.dump(model_data, f)
 
     # Update global cache
     global _ensemble_cache, _cache_mtime
     _ensemble_cache = model_data
-    _cache_mtime = MODEL_PATH.stat().st_mtime
+    _cache_mtime = MODEL_PATH_GZ.stat().st_mtime
 
     avg_xgb_cv = sum(cv_scores['xgb']) / len(cv_scores['xgb']) if cv_scores['xgb'] else 0
     avg_rf_cv = sum(cv_scores['rf']) / len(cv_scores['rf']) if cv_scores['rf'] else 0
@@ -237,22 +246,27 @@ def predict_ensemble(ind: dict, direction: str = 'BUY') -> dict:
 
         xgb_model = model_data['xgb']
         rf_model = model_data['rf']
+        gb_model = model_data.get('gb')
 
         xgb_proba = xgb_model.predict_proba(X)[0]
         rf_proba = rf_model.predict_proba(X)[0]
 
-        # Ensemble: XGBoost 60%, Random Forest 40%
-        ensemble_prob_up = xgb_proba[1] * 0.6 + rf_proba[1] * 0.4
+        if gb_model:
+            gb_proba = gb_model.predict_proba(X)[0]
+            ensemble_prob_up = xgb_proba[1] * 0.4 + rf_proba[1] * 0.3 + gb_proba[1] * 0.3
+        else:
+            gb_proba = None
+            ensemble_prob_up = xgb_proba[1] * 0.6 + rf_proba[1] * 0.4
 
-        # Adjust score based on direction
         score = ensemble_prob_up * 100 if direction == 'BUY' else (1 - ensemble_prob_up) * 100
 
-        # Check agreement between models
         xgb_up = xgb_proba[1] > 0.5
         rf_up = rf_proba[1] > 0.5
-        agreement = xgb_up == rf_up
+        gb_up = gb_proba[1] > 0.5 if gb_proba is not None else xgb_up
+        votes_up = sum([xgb_up, rf_up, gb_up])
+        agreement = votes_up >= 2 if direction == 'BUY' else votes_up <= 1
 
-        return {
+        result = {
             "score": round(score, 1),
             "available": True,
             "n_train": model_data.get('n_train', 0),
@@ -261,6 +275,9 @@ def predict_ensemble(ind: dict, direction: str = 'BUY') -> dict:
             "agreement": agreement,
             "top_features": model_data.get('top_features', []),
         }
+        if gb_proba is not None:
+            result["gb_score"] = round(gb_proba[1] * 100, 1)
+        return result
     except Exception:
         return {"score": 50, "available": False, "n_train": 0}
 
