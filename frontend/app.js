@@ -896,18 +896,21 @@ async function checkAllOutcomes() {
 }
 
 async function retrainML() {
-  showToast('Retraining ML on server data...');
+  const history = getHistory();
+  if (!history.length) { alert('No predictions to train on'); return; }
+  showToast(`Syncing ${history.length} predictions + backfilling + training...`);
   try {
-    const r = await fetch(`${backendUrl}/ml/retrain`, {
+    const r = await fetch(`${backendUrl}/ml/sync-and-retrain`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      signal: AbortSignal.timeout(120000)
+      body: JSON.stringify({prediction: history}),
+      signal: AbortSignal.timeout(600000)
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const result = await r.json();
     if (result.ok) {
-      alert(`ML retrained!\n\nSamples: ${result.samples}\nCV Accuracy: ${result.accuracy}%`);
+      alert(`ML retrained!\n\nSaved: ${result.saved}\nBackfilled: ${result.backfilled}\nTraining samples: ${result.samples}\nCV Accuracy: ${result.accuracy}%`);
     } else {
-      alert(`ML retrain failed:\n\n${result.reason || 'unknown error'}\n\nTip: Run BACKFILL first to sync & populate indicator data.`);
+      alert(`ML retrain failed:\n\n${result.reason}\n\nSaved: ${result.saved}\nBackfilled: ${result.backfilled}`);
     }
   } catch (e) {
     alert(`Retrain error: ${e.message}`);

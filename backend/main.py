@@ -681,6 +681,74 @@ async def get_history(asset: str = None, limit: int = 200):
     return {"predictions": preds, "total": len(preds)}
 
 
+@app.post("/ml/sync-and-retrain")
+async def sync_and_retrain(req: SavePredRequest):
+    """Receive all predictions from frontend, save them, backfill indicators, retrain.
+    Does everything in one shot — no separate button clicks needed.
+    """
+    import aiosqlite
+    predictions = req.prediction  # actually a list sent as the 'prediction' field
+    if isinstance(predictions, dict):
+        predictions = [predictions]
+
+    # Step 1: Save all predictions
+    saved = 0
+    for p in predictions:
+        try:
+            await save_prediction(p)
+            saved += 1
+        except Exception:
+            pass
+
+    # Step 2: Backfill missing indicators
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, asset, saved_at FROM predictions "
+            "WHERE ind_snapshot IS NULL OR ind_snapshot = '' OR ind_snapshot = 'null'"
+        )
+        missing = [dict(r) for r in await cur.fetchall()]
+
+    backfilled = 0
+    for p in missing:
+        try:
+            a = p['asset']
+            ts = int(float(p.get('saved_at', 0))) // 1000
+            if not ts:
+                continue
+            candles = await fetch_candles_before(a, ts, '1h', 300)
+            candles = [c for c in candles if c.get('time', 0) <= ts]
+            if len(candles) < 60:
+                continue
+            ind = compute_indicators(candles[-300:])
+            if not ind:
+                continue
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("UPDATE predictions SET ind_snapshot=? WHERE id=?",
+                                 (json.dumps(ind), p['id']))
+                await db.commit()
+            backfilled += 1
+        except Exception:
+            pass
+
+    # Step 3: Retrain
+    try:
+        preds = await get_predictions(limit=2000)
+        model = await train_ensemble(preds)
+        if not model or model.get('ok') is False:
+            error = model.get('error', 'Training failed') if model else 'No result'
+            return {"ok": False, "reason": error, "saved": saved, "backfilled": backfilled}
+        _ml_cache['all'] = model
+        cv = model.get('cv_accuracy', {})
+        avg_cv = (cv.get('xgb', 0) + cv.get('rf', 0)) / 2 if cv else 0
+        return {
+            "ok": True, "saved": saved, "backfilled": backfilled,
+            "samples": model.get('n_train', 0), "accuracy": round(avg_cv, 1),
+        }
+    except Exception as e:
+        return {"ok": False, "reason": str(e), "saved": saved, "backfilled": backfilled}
+
+
 @app.post("/history/save")
 async def save_history(req: SavePredRequest):
     await save_prediction(req.prediction)
