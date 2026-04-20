@@ -24,7 +24,8 @@ async def run_decision_agent(
     similarity_results: list,
     ds_key: str,
     api_key: str,
-    use_r1: bool = True
+    use_r1: bool = True,
+    ml_result: dict = None
 ) -> dict:
     """Call R1 (or GPT-4o as fallback) for final decision."""
 
@@ -59,11 +60,28 @@ Average 4H forward return in similar conditions: {avg_fwd:+.2f}%
 Strongest match similarity: {similarity_results[0]['similarity']:.3f}
 Note: This is ACTUAL historical evidence — weight it heavily."""
 
-    prompt = f"""You are DeepSeek R1, the final decision agent for ULTRAMAX trading AI. You resolve conflicts between the Quant Agent (math) and News Agent (sentiment) using historical evidence.
+    # Build ML context
+    ml_ctx = ""
+    if ml_result and ml_result.get('available'):
+        ml_score = ml_result.get('score', 50)
+        ml_dir = 'BUY' if ml_score > 55 else 'SELL' if ml_score < 45 else 'NEUTRAL'
+        ml_agreement = ml_result.get('agreement', False)
+        ml_n = ml_result.get('n_train', 0)
+        ml_ctx = f"""
+⚡ ML ENSEMBLE PREDICTION (HIGHEST PRIORITY — trained on {ml_n:,} real market samples, 70% historical accuracy):
+Direction: {ml_dir} | Probability up: {ml_score:.1f}%
+XGBoost: {ml_result.get('xgb_score', 50):.1f}% | Random Forest: {ml_result.get('rf_score', 50):.1f}% | Gradient Boosting: {ml_result.get('gb_score', 50):.1f}%
+All models agree: {'YES' if ml_agreement else 'NO'}
+⚠ CRITICAL: This ML model has 70% accuracy on historical data vs ~33% for LLM agents. STRONGLY favor the ML direction unless there is overwhelming contradictory evidence (e.g., breaking regulatory news, flash crash).
+"""
+
+    prompt = f"""You are DeepSeek R1, the final decision agent for ULTRAMAX trading AI.
+
+YOUR PRIMARY JOB: Confirm or refine the ML model's prediction using news context. The ML model is trained on {ml_result.get('n_train', 0) if ml_result else 0:,} real market data points and has 70% historical accuracy. Your LLM-based analysis has only 33% accuracy historically. DEFER to the ML model's direction unless you have SPECIFIC, CONCRETE reasons to override (breaking news, flash crash, etc.).
 
 ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon}h
 VALID PRICE RANGE: {price_min:.4f} to {price_max:.4f} (max {max_pct}% move)
-
+{ml_ctx}
 QUANT AGENT VERDICT:
 Direction: {quant['direction']} | Confidence: {quant['confidence']}%
 Prob up: {quant['prob_up']}% | Prob down: {quant['prob_down']}%
@@ -88,15 +106,13 @@ Probability up: {mc['prob_up']*100:.0f}%
 {sim_ctx}
 
 DECISION RULES:
-1. Use ALL evidence — quant math, news sentiment, AND historical similarity.
-2. Explain your step-by-step reasoning: "Quant said X because [indicators]. News said Y because [headlines]. Historical evidence shows Z. Therefore..."
-3. When quant and news conflict, historical similarity is the tiebreaker.
-4. Hurst < 0.45 = mean reverting market — trust RSI extremes over momentum.
-5. High entropy (>0.6) = noisy market — require extra confidence.
-6. News macro_warning present = reduce confidence 10pts and widen targets.
-7. Output NO_TRADE if: genuine signal conflict with no historical resolution, OR confidence < 45%.
-8. Price targets MUST be within {price_min:.4f} to {price_max:.4f}.
-9. Use ATR ({ind['atr']:.4f}) for realistic path — not a straight line.
+1. ML ENSEMBLE IS THE PRIMARY SIGNAL. Start with the ML direction and adjust only if you have strong counter-evidence.
+2. You may ONLY override ML direction if: (a) there is breaking regulatory/crash news, OR (b) ALL other signals unanimously contradict ML.
+3. Confidence should START at the ML probability score, then adjust ±15 based on news/quant context.
+4. Do NOT output NO_TRADE unless ML itself is neutral (45-55%) AND there is genuine signal conflict.
+5. If ML says BUY/SELL with >60%, you MUST output the same direction. Adjust confidence only.
+6. Price targets MUST be within {price_min:.4f} to {price_max:.4f}.
+7. Use ATR ({ind['atr']:.4f}) for realistic targets.
 
 Respond with ONLY this JSON:
 {{"decision":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<final 0-100>,"agent_agreement":"<agree|partial|conflict>","price_target":<realistic target>,"price_target_bull":<optimistic>,"price_target_bear":<pessimistic>,"predicted_path":[<5 prices zigzag to target>],"volatility":"<low|moderate|high>","insight":"<3-4 sentences: what quant found + what news found + historical evidence + final reasoning>","primary_reason":"<one clear sentence: the single most decisive factor>"}}"""

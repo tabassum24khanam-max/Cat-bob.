@@ -485,11 +485,19 @@ function scorePrediction(e) {
   const movedPct = (e.outcome_price - e.entry_price) / e.entry_price * 100;
   if (e.decision==='BUY') return movedPct>0?'correct':'wrong';
   if (e.decision==='SELL') return movedPct<0?'correct':'wrong';
-  // NO_TRADE: only score if gate-blocked (had original_decision)
+  // NO_TRADE — evaluate AI's prediction accuracy
   const direction = e.original_decision;
-  if (!direction || direction==='NO_TRADE') return null;
-  if (direction==='BUY') return movedPct>0.3?'correct':'wrong';
-  if (direction==='SELL') return movedPct<-0.3?'correct':'wrong';
+  const target = e.predicted_price || e.target_price;
+  if (direction && direction!=='NO_TRADE') {
+    if (direction==='BUY') return movedPct>0.3?'correct':'wrong';
+    if (direction==='SELL') return movedPct<-0.3?'correct':'wrong';
+  }
+  if (target) {
+    const predMovePct = (target - e.entry_price) / e.entry_price * 100;
+    if (Math.abs(predMovePct)<0.01) return null;
+    const dirOk = (predMovePct>0 && movedPct>0) || (predMovePct<0 && movedPct<0);
+    return dirOk ? 'correct' : 'wrong';
+  }
   return null;
 }
 

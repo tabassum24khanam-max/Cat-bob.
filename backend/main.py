@@ -92,10 +92,9 @@ class SavePredRequest(BaseModel):
 
 def _score_prediction(decision: str, original_decision: str, entry_price: float,
                       outcome_price: float, predicted_price: float = None) -> str:
-    """Score a prediction's accuracy.
-    BUY/SELL: simple direction check.
-    NO_TRADE with original_decision (gate-blocked): check if original direction was right.
-    NO_TRADE pure abstention: SKIPPED — the system admitted uncertainty, don't penalize.
+    """Score a prediction's accuracy based on direction + target proximity.
+    For NO_TRADE with original_decision: evaluates the AI's original prediction.
+    For NO_TRADE with predicted_price: checks if direction was right.
     """
     if not entry_price:
         return 'skipped'
@@ -107,16 +106,27 @@ def _score_prediction(decision: str, original_decision: str, entry_price: float,
     if decision == 'SELL':
         return 'correct' if moved < 0 else 'wrong'
 
-    # NO_TRADE — only score if there was a gate-blocked original decision
+    # NO_TRADE — evaluate based on AI's original intent + target accuracy
     direction = original_decision
-    if not direction or direction == 'NO_TRADE':
+    target = predicted_price
+
+    if not direction and not target:
         return 'skipped'
 
-    # Gate-blocked trade: was the original direction right?
-    if direction == 'BUY':
-        return 'correct' if moved_pct > 0.3 else 'wrong'
-    elif direction == 'SELL':
-        return 'correct' if moved_pct < -0.3 else 'wrong'
+    if direction and direction != 'NO_TRADE':
+        if direction == 'BUY':
+            return 'correct' if moved_pct > 0.3 else 'wrong'
+        elif direction == 'SELL':
+            return 'correct' if moved_pct < -0.3 else 'wrong'
+
+    if target:
+        predicted_move_pct = (target - entry_price) / entry_price * 100
+        if abs(predicted_move_pct) < 0.01:
+            return 'skipped'
+        direction_correct = (predicted_move_pct > 0 and moved_pct > 0) or \
+                            (predicted_move_pct < 0 and moved_pct < 0)
+        return 'correct' if direction_correct else 'wrong'
+
     return 'skipped'
 
 
@@ -404,12 +414,31 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     slog(f"🧠 Agent 3 ({model_name}) making final decision...")
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
-        mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1
+        mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
+        ml_result=ml_result
     )
     model_used = decision.get('_model', 'unknown')
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
     if model_used == 'gpt-4o' and decision.get('_r1_error'):
         slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
+
+    # ── ML OVERRIDE: When ML is confident, enforce its direction ─────────
+    if ml_result.get('available'):
+        ml_score = ml_result.get('score', 50)
+        ml_dir = 'BUY' if ml_score > 58 else 'SELL' if ml_score < 42 else None
+        ai_dir = decision.get('decision')
+
+        if ml_dir and ai_dir != ml_dir:
+            if ml_score > 62 or ml_score < 38:
+                slog(f"🔄 ML OVERRIDE: ML says {ml_dir} ({ml_score:.1f}%) but AI said {ai_dir} — forcing ML direction")
+                decision['_original_decision'] = ai_dir
+                decision['decision'] = ml_dir
+                decision['confidence'] = max(decision.get('confidence', 50), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+            elif ai_dir == 'NO_TRADE' and ml_dir:
+                slog(f"🔄 ML activates trade: ML says {ml_dir} ({ml_score:.1f}%) — overriding NO_TRADE")
+                decision['_original_decision'] = 'NO_TRADE'
+                decision['decision'] = ml_dir
+                decision['confidence'] = max(decision.get('confidence', 40), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
 
     # ── Post-processing gates ────────────────────────────────────────────
     gate_reason = None
@@ -602,9 +631,16 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"✓ ML boost: ML={ml_score:.1f} agrees with {decision['decision']} → +{boost}% (confidence {old_conf}% → {decision['confidence']}%)")
 
     # Save predicted price BEFORE nulling target for NO_TRADE
+    # Use ML-informed direction for target instead of bland MC median
     predicted_price = None
     if decision.get('decision') == 'NO_TRADE':
-        predicted_price = decision.get('price_target') or mc.get('median')
+        ml_score_final = ml_result.get('score', 50) if ml_result.get('available') else 50
+        if ml_score_final > 55:
+            predicted_price = decision.get('price_target') or mc.get('bull')
+        elif ml_score_final < 45:
+            predicted_price = decision.get('price_target') or mc.get('bear')
+        else:
+            predicted_price = decision.get('price_target') or mc.get('median')
         decision['price_target'] = None
         decision['price_target_bull'] = None
         decision['price_target_bear'] = None
