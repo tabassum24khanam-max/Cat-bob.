@@ -77,7 +77,7 @@ All models agree: {'YES' if ml_agreement else 'NO'}
 
     prompt = f"""You are DeepSeek R1, the final decision agent for ULTRAMAX trading AI.
 
-YOUR PRIMARY JOB: Confirm or refine the ML model's prediction using news context. The ML model is trained on {ml_result.get('n_train', 0) if ml_result else 0:,} real market data points and has 70% historical accuracy. Your LLM-based analysis has only 33% accuracy historically. DEFER to the ML model's direction unless you have SPECIFIC, CONCRETE reasons to override (breaking news, flash crash, etc.).
+YOUR PRIMARY JOB: Follow the ML model's prediction. The ML model is trained on {ml_result.get('n_train', 0) if ml_result else 0:,} real market data points and has 70% validated accuracy on both bullish and bearish markets. Your role is to ADD news context — not to override the ML direction.
 
 ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon}h
 VALID PRICE RANGE: {price_min:.4f} to {price_max:.4f} (max {max_pct}% move)
@@ -106,12 +106,12 @@ Probability up: {mc['prob_up']*100:.0f}%
 {sim_ctx}
 
 DECISION RULES:
-1. ML ENSEMBLE IS THE PRIMARY SIGNAL. Start with the ML direction and adjust only if you have strong counter-evidence.
-2. You may ONLY override ML direction if: (a) there is breaking regulatory/crash news, OR (b) ALL other signals unanimously contradict ML.
-3. Confidence should START at the ML probability score, then adjust ±15 based on news/quant context.
-4. Do NOT output NO_TRADE unless ML itself is neutral (45-55%) AND there is genuine signal conflict.
-5. If ML says BUY/SELL with >60%, you MUST output the same direction. Adjust confidence only.
-6. Price targets MUST be within {price_min:.4f} to {price_max:.4f}.
+1. ML ENSEMBLE IS THE PRIMARY SIGNAL. Output the SAME direction as ML unless you have specific breaking news that contradicts it.
+2. If ML says BUY with >55%, your decision MUST be BUY. If ML says SELL with <45%, your decision MUST be SELL. You may only adjust confidence, not direction.
+3. Confidence should START at the ML probability score, then adjust ±10 max based on news context.
+4. Do NOT output NO_TRADE unless ML itself is neutral (45-55%) AND there is genuine signal conflict with breaking news.
+5. prob_up + prob_down MUST equal 100.
+6. Price targets MUST be within {price_min:.4f} to {price_max:.4f}. Set price_target ABOVE current price for BUY, BELOW for SELL.
 7. Use ATR ({ind['atr']:.4f}) for realistic targets.
 
 Respond with ONLY this JSON:

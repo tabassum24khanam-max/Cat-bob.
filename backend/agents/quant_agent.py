@@ -108,10 +108,10 @@ Prob up: {mc.get('prob_up', 0.5)*100:.0f}%
 {f"PATTERN MEMORY: {pattern_mem}" if pattern_mem else ""}
 
 RULES:
+- prob_up + prob_down MUST sum to exactly 100.
 - Hurst > 0.55: use momentum signals. Hurst < 0.45: use RSI extremes.
 - High entropy (>0.6): require strong confirmation before trading.
-- Ichimoku inside cloud + low confluence = NO_TRADE.
-- VWAP RULE: BUY below VWAP = -10 confidence.
+- Pick a direction (BUY or SELL) based on the weight of evidence. Only output NO_TRADE if indicators are genuinely contradictory with no clear majority.
 - Candle patterns add confirmation only — never trade on pattern alone.
 
 Respond ONLY with this JSON:
