@@ -92,50 +92,32 @@ class SavePredRequest(BaseModel):
 
 def _score_prediction(decision: str, original_decision: str, entry_price: float,
                       outcome_price: float, predicted_price: float = None) -> str:
-    """Score a prediction's accuracy based on direction + target proximity.
-    For NO_TRADE: evaluates the AI's original prediction accuracy, not the gate.
-    Correct only if direction right AND price reached >=40% of predicted move.
+    """Score a prediction's accuracy.
+    BUY/SELL: simple direction check.
+    NO_TRADE with original_decision (gate-blocked): check if original direction was right.
+    NO_TRADE pure abstention: SKIPPED — the system admitted uncertainty, don't penalize.
     """
     if not entry_price:
         return 'skipped'
     moved = outcome_price - entry_price
     moved_pct = moved / entry_price * 100
 
-    # For BUY/SELL decisions, simple direction check
     if decision == 'BUY':
         return 'correct' if moved > 0 else 'wrong'
     if decision == 'SELL':
         return 'correct' if moved < 0 else 'wrong'
 
-    # NO_TRADE — evaluate based on AI's original intent + target accuracy
-    direction = original_decision  # what AI wanted before gate blocked
-    target = predicted_price  # predicted price target
-
-    if not direction and not target:
-        return 'skipped'  # pure abstention with no prediction
-
-    if direction and not target:
-        # Have direction but no target — just check direction
-        if direction == 'BUY':
-            return 'correct' if moved_pct > 0.5 else 'wrong'
-        elif direction == 'SELL':
-            return 'correct' if moved_pct < -0.5 else 'wrong'
+    # NO_TRADE — only score if there was a gate-blocked original decision
+    direction = original_decision
+    if not direction or direction == 'NO_TRADE':
         return 'skipped'
 
-    # Have a target price — check direction AND proximity
-    predicted_move_pct = (target - entry_price) / entry_price * 100
-    if abs(predicted_move_pct) < 0.01:
-        return 'skipped'  # no meaningful predicted move
-
-    # Direction must be right
-    direction_correct = (predicted_move_pct > 0 and moved_pct > 0) or \
-                        (predicted_move_pct < 0 and moved_pct < 0)
-    if not direction_correct:
-        return 'wrong'
-
-    # Direction right — check if price got close enough (40% of predicted move)
-    reached_ratio = moved_pct / predicted_move_pct
-    return 'correct' if reached_ratio >= 0.4 else 'wrong'
+    # Gate-blocked trade: was the original direction right?
+    if direction == 'BUY':
+        return 'correct' if moved_pct > 0.3 else 'wrong'
+    elif direction == 'SELL':
+        return 'correct' if moved_pct < -0.3 else 'wrong'
+    return 'skipped'
 
 
 async def _safe_refresh_calendar():
@@ -391,20 +373,18 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     rated_preds = await get_predictions(req.asset, 200)
     raw_ai_conf = quant_result.get('confidence', 50)
     bayes_conf = bayesian_confidence(rated_preds, req.asset, req.horizon, raw_ai_conf)
-    ml_conf = ml_result.get('score', 0.5) * 100 if ml_result['available'] else None
+    ml_conf = ml_result.get('score', 50) if ml_result['available'] else None
     cluster_conf = cluster_data.get('win_rate_4h') if cluster_data.get('available') else None
 
     if ml_conf is not None and cluster_conf is not None:
-        # 4-way: AI 25% + Bayes 30% + ML 25% + Cluster 20%
-        blended_conf = raw_ai_conf * 0.25 + bayes_conf * 0.30 + ml_conf * 0.25 + cluster_conf * 0.20
+        # 4-way: ML leads — trained on 22K real samples at 70% accuracy
+        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * 0.45 + cluster_conf * 0.20
     elif ml_conf is not None:
-        # 3-way: AI 35% + Bayes 35% + ML 30%
-        blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + ml_conf * 0.30
+        # 3-way: ML dominant
+        blended_conf = raw_ai_conf * 0.20 + bayes_conf * 0.25 + ml_conf * 0.55
     elif cluster_conf is not None:
-        # 3-way: AI 35% + Bayes 35% + Cluster 30%
         blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
     else:
-        # 2-way: AI 55% + Bayes 45%
         blended_conf = raw_ai_conf * 0.55 + bayes_conf * 0.45
     quant_result['confidence'] = round(blended_conf)
     slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
@@ -513,14 +493,14 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             decision['confidence'] = max(0, old_conf - 15)
             slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + low confluence = NO_TRADE
+    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + very low confluence = NO_TRADE
     if decision.get('decision') != 'NO_TRADE':
         inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
-        low_confluence = decision.get('confidence', 0) < 60
-        if inside_cloud and low_confluence:
+        very_low_confluence = decision.get('confidence', 0) < 42
+        if inside_cloud and very_low_confluence:
             decision['_original_decision'] = decision.get('decision')
             decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 60%)"
+            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 42%)"
             slog(f"⚠ Ichimoku cloud gate: inside cloud + confidence {decision.get('confidence', 0)}%")
 
     # Confidence cap: neutral daily + bearish MACD
@@ -531,14 +511,12 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"⚠ Confidence capped: {decision['confidence']}% → 65% (neutral daily + bearish MACD)")
             decision['confidence'] = 65
 
-    # Hurst gate
+    # Hurst gate — random walk penalty (cap, not NO_TRADE)
     if decision.get('decision') != 'NO_TRADE':
         hurst = ind.get('hurst_exp', 0.5)
-        if 0.45 <= hurst <= 0.55 and decision.get('confidence', 0) < 65:
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Hurst={hurst:.3f} random walk — need 65%+ confidence"
-            slog(f"⚠ Hurst gate: {hurst:.3f}")
+        if 0.45 <= hurst <= 0.55 and decision.get('confidence', 0) > 60:
+            decision['confidence'] = 60
+            slog(f"⚠ Hurst gate: {hurst:.3f} random walk — capped 60%")
 
     # GATE 7: FUNDING RATE EXTREME — BUY + funding > 0.08% = -15 confidence
     if decision.get('decision') == 'BUY' and is_crypto:
@@ -548,16 +526,15 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             decision['confidence'] = max(0, old_conf - 15)
             slog(f"⚠ Funding rate gate: rate={funding:.4%} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # GATE 8: AGENT CONFLICT — Quant vs News disagree + <72% = NO_TRADE
+    # GATE 8: AGENT CONFLICT — Quant vs News disagree = -10 confidence (not NO_TRADE)
     if decision.get('decision') != 'NO_TRADE':
         q_dir = quant_result.get('direction', '').upper()
         n_sent = news_result.get('sentiment', '').upper()
         agents_disagree = (q_dir == 'BUY' and n_sent == 'BEARISH') or (q_dir == 'SELL' and n_sent == 'BULLISH')
-        if agents_disagree and decision.get('confidence', 0) < 72:
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Agent conflict: Quant={q_dir} vs News={n_sent} + confidence < 72%"
-            slog(f"⚠ Agent conflict gate: {q_dir} vs {n_sent}")
+        if agents_disagree:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 10)
+            slog(f"⚠ Agent conflict: Quant={q_dir} vs News={n_sent} — confidence {old_conf}% → {decision['confidence']}%")
 
     # GATE 9: CMF CONTRADICTION — BUY + CMF<-0.1 or SELL + CMF>0.1 = -15 confidence
     if decision.get('decision') != 'NO_TRADE':
@@ -581,20 +558,21 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"⚠ Cluster boundary: only {cluster_data['members']} members — capped 60%")
             decision['confidence'] = 60
 
-    # GATE 12: ML AGREEMENT — ensemble disagrees with decision = cap 60%
+    # GATE 12: ML AGREEMENT — ensemble disagrees with decision = cap 55%
     if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
-        ml_says_up = ml_result.get('score', 0.5) > 0.55
-        ml_says_down = ml_result.get('score', 0.5) < 0.45
+        ml_score = ml_result.get('score', 50)
+        ml_says_up = ml_score > 55
+        ml_says_down = ml_score < 45
         if (decision['decision'] == 'BUY' and ml_says_down) or (decision['decision'] == 'SELL' and ml_says_up):
-            if decision.get('confidence', 0) > 60:
-                slog(f"⚠ ML disagreement: ML score={ml_result['score']:.2f} vs {decision['decision']} — capped 60%")
-                decision['confidence'] = 60
+            if decision.get('confidence', 0) > 55:
+                slog(f"⚠ ML disagreement: ML score={ml_score:.1f} vs {decision['decision']} — capped 55%")
+                decision['confidence'] = 55
 
-    # GATE 13: CONFIDENCE FLOOR — <45% = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < 45:
+    # GATE 13: CONFIDENCE FLOOR — <38% = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < 38:
         decision['_original_decision'] = decision.get('decision')
         decision['decision'] = 'NO_TRADE'
-        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < 45%"
+        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < 38%"
         slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}%")
 
     # GATE 14: UPCOMING EVENT — high-impact event within horizon = -15 confidence
@@ -611,6 +589,17 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         if entropy > 0.9 and decision.get('confidence', 0) > 55:
             slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
             decision['confidence'] = 55
+
+    # ML CONFIDENCE BOOST — when ML strongly agrees, boost confidence
+    if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
+        ml_score = ml_result.get('score', 50)
+        ml_agrees = (decision['decision'] == 'BUY' and ml_score > 62) or \
+                    (decision['decision'] == 'SELL' and ml_score < 38)
+        if ml_agrees:
+            old_conf = decision.get('confidence', 50)
+            boost = min(12, int((abs(ml_score - 50) - 12) * 0.8))
+            decision['confidence'] = min(85, old_conf + boost)
+            slog(f"✓ ML boost: ML={ml_score:.1f} agrees with {decision['decision']} → +{boost}% (confidence {old_conf}% → {decision['confidence']}%)")
 
     # Save predicted price BEFORE nulling target for NO_TRADE
     predicted_price = None

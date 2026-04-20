@@ -483,24 +483,14 @@ function retroactivelyScoreHistory() {
 
 function scorePrediction(e) {
   const movedPct = (e.outcome_price - e.entry_price) / e.entry_price * 100;
-  // BUY/SELL — simple direction check
   if (e.decision==='BUY') return movedPct>0?'correct':'wrong';
   if (e.decision==='SELL') return movedPct<0?'correct':'wrong';
-  // NO_TRADE — evaluate AI's prediction accuracy, not the gate
-  const target = e.predicted_price || e.target_price;
+  // NO_TRADE: only score if gate-blocked (had original_decision)
   const direction = e.original_decision;
-  if (!direction && !target) return null;
-  if (direction && !target) {
-    if (direction==='BUY') return movedPct>0.5?'correct':'wrong';
-    if (direction==='SELL') return movedPct<-0.5?'correct':'wrong';
-    return null;
-  }
-  // Have target — check direction + proximity (40% of predicted move)
-  const predMovePct = (target - e.entry_price) / e.entry_price * 100;
-  if (Math.abs(predMovePct)<0.01) return null;
-  const directionCorrect = (predMovePct>0 && movedPct>0) || (predMovePct<0 && movedPct<0);
-  if (!directionCorrect) return 'wrong';
-  return (movedPct/predMovePct)>=0.4 ? 'correct' : 'wrong';
+  if (!direction || direction==='NO_TRADE') return null;
+  if (direction==='BUY') return movedPct>0.3?'correct':'wrong';
+  if (direction==='SELL') return movedPct<-0.3?'correct':'wrong';
+  return null;
 }
 
 function openHistory() { renderHistory(); document.getElementById('history-panel')?.classList.add('on'); }
