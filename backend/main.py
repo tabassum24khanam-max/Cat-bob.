@@ -1357,6 +1357,163 @@ async def save_settings(req: SettingsRequest):
     return {"ok": True, "saved": saved}
 
 
+# ─── E1: Backtester Endpoint ───────────────────────────────────────────────
+
+class BacktestRequest(BaseModel):
+    asset: str
+    horizon: int = 4
+    periods: int = 50
+
+
+@app.post("/backtest")
+async def backtest(req: BacktestRequest):
+    """E1: Walk-forward backtest over the last N candle periods.
+
+    For each period, compute indicators on the history available at that point,
+    derive a simple rule-based directional signal, then compare against
+    what actually happened over the next *horizon* candles.
+    Returns win rate and per-period stats.
+    """
+    try:
+        iv = '1h' if req.horizon <= 8 else '4h' if req.horizon <= 72 else '1d'
+        # Need enough candles: warmup (60) + periods + horizon lookahead
+        need = 60 + req.periods + req.horizon
+        candles = await fetch_candles(req.asset, iv, min(need + 50, 500))
+        if not candles or len(candles) < 60 + req.periods + req.horizon:
+            raise HTTPException(400, f"Not enough candle data (got {len(candles) if candles else 0}, need {60 + req.periods + req.horizon})")
+
+        results = []
+        wins = 0
+        losses = 0
+        skipped = 0
+
+        # Walk forward: for each period i, use candles[:end_idx] to compute
+        # indicators and candles[end_idx : end_idx + horizon] as the outcome.
+        total_candles = len(candles)
+        start_offset = total_candles - req.periods - req.horizon
+
+        for i in range(req.periods):
+            end_idx = start_offset + i  # last candle available for indicators
+            if end_idx < 60:
+                skipped += 1
+                continue
+
+            hist = candles[:end_idx + 1]
+            ind = compute_indicators(hist[-300:])
+            if not ind:
+                skipped += 1
+                continue
+
+            # Simple rule-based signal from indicators
+            bull_signals = 0
+            bear_signals = 0
+
+            # RSI
+            if ind['rsi14'] < 35:
+                bull_signals += 1
+            elif ind['rsi14'] > 65:
+                bear_signals += 1
+
+            # MACD
+            if ind['macd_hist'] > 0:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # EMA alignment
+            if ind['ema_align_bull'] >= 3:
+                bull_signals += 1
+            if ind['ema_align_bear'] >= 3:
+                bear_signals += 1
+
+            # Supertrend
+            if ind['supertrend_bull']:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # VWAP
+            if ind['dist_vwap'] > 0:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # CMF
+            if ind['cmf'] > 0.05:
+                bull_signals += 1
+            elif ind['cmf'] < -0.05:
+                bear_signals += 1
+
+            # Ichimoku
+            if ind['ich_bull']:
+                bull_signals += 1
+            elif ind['ich_bear']:
+                bear_signals += 1
+
+            # Determine signal
+            if bull_signals > bear_signals + 1:
+                signal = 'BUY'
+            elif bear_signals > bull_signals + 1:
+                signal = 'SELL'
+            else:
+                signal = 'NO_TRADE'
+                skipped += 1
+                continue
+
+            # Outcome: price change over next horizon candles
+            outcome_idx = min(end_idx + req.horizon, total_candles - 1)
+            entry_price = candles[end_idx]['close']
+            outcome_price = candles[outcome_idx]['close']
+            moved_pct = (outcome_price - entry_price) / entry_price * 100
+
+            correct = (signal == 'BUY' and moved_pct > 0) or (signal == 'SELL' and moved_pct < 0)
+            if correct:
+                wins += 1
+            else:
+                losses += 1
+
+            results.append({
+                'period': i + 1,
+                'signal': signal,
+                'entry': round(entry_price, 6),
+                'outcome': round(outcome_price, 6),
+                'moved_pct': round(moved_pct, 3),
+                'correct': correct,
+                'rsi': round(ind['rsi14'], 1),
+                'macd_hist': round(ind['macd_hist'], 6),
+                'regime': ind['regime'],
+            })
+
+        total_trades = wins + losses
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        avg_move = sum(r['moved_pct'] for r in results) / len(results) if results else 0
+        avg_win = sum(r['moved_pct'] for r in results if r['correct']) / wins if wins > 0 else 0
+        avg_loss = sum(r['moved_pct'] for r in results if not r['correct']) / losses if losses > 0 else 0
+
+        return {
+            'asset': req.asset,
+            'horizon': req.horizon,
+            'periods': req.periods,
+            'interval': iv,
+            'total_trades': total_trades,
+            'wins': wins,
+            'losses': losses,
+            'skipped': skipped,
+            'win_rate': round(win_rate, 1),
+            'avg_move_pct': round(avg_move, 3),
+            'avg_win_pct': round(avg_win, 3),
+            'avg_loss_pct': round(avg_loss, 3),
+            'profit_factor': round(abs(avg_win / avg_loss), 2) if avg_loss != 0 else 0,
+            'results': results,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Backtest failed: {str(e)[:200]}")
+
+
 @app.get("/db/status")
 async def db_status():
     """Database statistics."""
