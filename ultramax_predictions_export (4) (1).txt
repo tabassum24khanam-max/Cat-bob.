@@ -1,0 +1,3369 @@
+================================================================================
+ULTRAMAX PREDICTION EXPORT
+Total predictions: 117
+Generated: 2026-04-24T10:09:18.871Z
+================================================================================
+
+--------------------------------------------------------------------------------
+#1  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/14/2026, 6:54:15 PM UTC
+  Expires at:       4/14/2026, 10:54:15 PM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $73946.8516
+  Predicted target: $73876.4338
+  Bull target:      $74681.0954
+  Bear target:      $73093.3782
+  Actual at expiry: $73901.2578
+  Price change:     -0.06%
+  Target gap:       0.03%
+  Prob up/down:     47 / 53
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.566040400527324
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bearish (-35)
+  Primary reason:   High market entropy and macro warnings indicate insufficient confidence for trading.
+  R1 Reasoning:
+    The Quant Agent indicates a lack of trade action due to a noisy market with weak signals, as evidenced by the Ichimoku inside the cloud and high entropy. The News Agent expresses a bearish sentiment driven by potential rate hikes and regulatory developments. Although historical analysis could provide context, the combination of high entropy and a macro warning flag reduces confidence levels further. Therefore, a NO_TRADE decision is warranted.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#2  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/14/2026, 10:07:33 PM UTC
+  Expires at:       4/15/2026, 2:07:33 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       25%
+  Entry price:      $74234.7969
+  Predicted target: $74261.6497
+  Bull target:      $75101.5858
+  Bear target:      $73410.3729
+  Actual at expiry: $73645.1797
+  Price change:     -0.79%
+  Target gap:       0.83%
+  Prob up/down:     51 / 49
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5625723890879266
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy and macro warning reduce confidence below the 45% threshold required for a trade.
+  R1 Reasoning:
+    Quant found low directional confluence with Ichimoku inside the cloud and high entropy indicating a noisy, uncertain market. News found neutral sentiment with Fed macro warnings adding headwinds but SEC clarity providing partial offset. Historical evidence from similar high-entropy, risk-off regimes shows increased noise and lower trade success rates. Therefore, NO_TRADE is prudent due to insufficient confidence from quant math and news sentiment combined.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#3  BTC | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/14/2026, 10:09:24 PM UTC
+  Expires at:       4/15/2026, 10:09:24 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       25%
+  Entry price:      $74224.8906
+  Predicted target: $73953.0458
+  Bull target:      $77193.8862
+  Bear target:      $71255.8950
+  Actual at expiry: $74358.0000
+  Price change:     0.18%
+  Target gap:       0.55%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4757824073336848
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bearish (-35)
+  Primary reason:   Low confidence from quant indicators and bearish macro news prevents a high-conviction trade signal.
+  R1 Reasoning:
+    Quant analysis found a trending market with high entropy (0.959) and overbought RSI (72.5), leading to low confidence and a slight bearish bias. News analysis found bearish sentiment (-35/100) due to Fed rate cut signals and SEC regulatory uncertainty, with a risk-off regime. Historical evidence from similar high-entropy, overbought periods shows frequent consolidations and low predictability, especially with Hurst near 0.5. Therefore, the conflict between quant's no-trade signal and news bearishness, combined with low confidence, supports avoiding a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#4  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 7:08:07 AM UTC
+  Expires at:       4/15/2026, 11:08:07 AM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $73884.4219
+  Predicted target: $73870.7557
+  Bull target:      $74377.5034
+  Bear target:      $73313.2297
+  Actual at expiry: $75013.8438
+  Price change:     1.53%
+  Target gap:       1.55%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5448038196426735
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   The high market noise and conflicting signals with no clear historical pattern mandate a no trade decision.
+  R1 Reasoning:
+    The Quant Agent indicates no clear trade due to low confidence in signals, with significant noise in the market as reflected by high entropy. News Agent points to a neutral sentiment, influenced by important but non-volatile regulatory news. Historical evidence does not strongly favor either direction, failing to resolve the discrepancy between quant analysis and news sentiment.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#5  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 7:51:06 PM UTC
+  Expires at:       4/15/2026, 11:51:06 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $75025.9531
+  Predicted target: $75008.6278
+  Bull target:      $75882.9730
+  Bear target:      $74249.0392
+  Actual at expiry: $74358.0000
+  Price change:     -0.89%
+  Target gap:       0.87%
+  Prob up/down:     49 / 51
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5349849550799698
+  Quant verdict:    BUY 60%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy and conflicting signals between quant probabilities and news sentiment preclude a clear trading opportunity.
+  R1 Reasoning:
+    Quant found bullish MACD and trending indicators but with high uncertainty and only 49% probability up, indicating weak momentum. News found bullish sentiment from SEC classification and Fed stability, but macro warnings add risk. Historical evidence from Monte Carlo simulations shows nearly equal odds with a median price close to current. Final reasoning: conflict between quant's bearish probabilities and news sentiment, exacerbated by high entropy and macro warnings, leads to insufficient confidence for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#6  AAPL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:40:07 PM UTC
+  Expires at:       4/16/2026, 12:40:07 AM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $266.4300
+  Predicted target: $266.4310
+  Bull target:      $268.0286
+  Bear target:      $264.8314
+  Actual at expiry: $263.5200
+  Price change:     -1.09%
+  Target gap:       1.09%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.48508579529083884
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (28)
+  Primary reason:   Inconclusive quant analysis paired with reduced bullish confidence from news sentiment and macro warning.
+  R1 Reasoning:
+    The Quant Agent indicates no trade due to high entropy in a trending regime and uncertain price movements, with a slightly bearish probability. News Agent suggests a bullish sentiment due to analyst upgrades, but factors in the Q1 earnings as a macro warning, reducing confidence. Historical analysis shows no strong evidence to resolve the conflict, leading to a decision of no trade given the high market noise.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#7  AAPL | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:42:05 PM UTC
+  Expires at:       4/16/2026, 8:42:05 PM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       45%
+  Entry price:      $266.4300
+  Predicted target: $266.4300
+  Bull target:      $273.0907
+  Bear target:      $259.7692
+  Actual at expiry: $263.4000
+  Price change:     -1.14%
+  Target gap:       1.14%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5050836697659874
+  Quant verdict:    NO_TRADE 60%
+  News verdict:     bullish (28)
+  Primary reason:   High market entropy coupled with macroeconomic warnings and conflict between quant and news sentiment led to a decision of no trade.
+  R1 Reasoning:
+    Quant agent is cautious due to high market entropy and a Doji pattern suggesting indecision, despite bullish technicals like MACD and Ichimoku. News sentiment is bullish, driven by favorable analyst opinions and AI strategy anticipation, but potential Fed policy impact remains a macro warning. Historical evidence aligns with caution in volatile regimes without clear directional signals, resulting in a NO_TRADE decision.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#8  TSLA | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:45:02 PM UTC
+  Expires at:       4/16/2026, 12:45:02 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: SELL)
+  Confidence:       20%
+  Entry price:      $391.9500
+  Predicted target: $389.5983
+  Bull target:      $394.3017
+  Bear target:      $389.5983
+  Actual at expiry: $387.2731
+  Price change:     -1.19%
+  Target gap:       0.59%
+  Prob up/down:     47 / 53
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 20% < 45%
+  Regime:           TRENDING
+  Hurst:            0.5858147581167578
+  Quant verdict:    NO_TRADE 60%
+  News verdict:     bearish (-35)
+  Primary reason:   Negative news sentiment combined with overbought technicals and a higher probability of decline suggests a downward correction.
+  R1 Reasoning:
+    Quant found bullish technical indicators like MACD and Ichimoku but high entropy (0.937) prompting a no-trade signal due to market noise. News found bearish sentiment (-35/100) from Tesla earnings risks and AI sector rout, with macro warnings. Historical evidence shows that in trending markets (Hurst 0.586) with overbought RSI (78.0) and negative catalysts, prices often correct downward. Therefore, despite Quant's caution, the higher probability down and strong negative news justify a sell.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#9  TSLA | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:46:57 PM UTC
+  Expires at:       4/16/2026, 8:46:57 PM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE  (original: SELL)
+  Confidence:       40%
+  Entry price:      $391.9500
+  Predicted target: $382.9000
+  Bull target:      $401.7488
+  Bear target:      $382.1513
+  Actual at expiry: $388.9000
+  Price change:     -0.78%
+  Target gap:       1.53%
+  Prob up/down:     45 / 55
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Hurst=0.524 random walk — need 65%+ confidence
+  Regime:           VOLATILE
+  Hurst:            0.5241113388310268
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   News Agent's bearish sentiment combined with macro warning suggests a cautious sell.
+  R1 Reasoning:
+    The Quant Agent indicated a no-trade due to high market noise and conflicting indicators, with a bullish MACD but high RSI, suggesting potential overbought conditions. The News Agent conveyed a bearish outlook driven by sentiment from recent earnings and broader market regimes in a risk-off mode influenced by macroeconomic warnings. Historical similarity reveals bearish outcomes in high entropy settings when sentiments strongly diverge from technical signals, particularly with macro warnings present.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#10  NVDA | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:48:40 PM UTC
+  Expires at:       4/16/2026, 12:48:40 AM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       50%
+  Entry price:      $198.8700
+  Predicted target: $198.9244
+  Bull target:      $200.0632
+  Bear target:      $197.6768
+  Actual at expiry: $197.9400
+  Price change:     -0.47%
+  Target gap:       0.49%
+  Prob up/down:     51 / 49
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5147427018438884
+  Quant verdict:    NO_TRADE 60%
+  News verdict:     bullish (65)
+  Primary reason:   High entropy and macro warnings indicate significant market noise and risk of unpredictable movements.
+  R1 Reasoning:
+    The Quant Agent suggests caution due to market volatility and high entropy, aligning with a NO_TRADE verdict primarily guided by indecisive indicators like a Doji pattern. The News Agent is bullish due to recent analyst upgrades and strong earnings, but global AI sector concerns downgrades their confidence. Historical analysis does not provide a clear bias, as similar patterns have led to mixed results. Given the conflicting signals and the macro warning, a NO_TRADE is prudent.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#11  NVDA | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:49:59 PM UTC
+  Expires at:       4/16/2026, 8:49:59 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $198.8700
+  Predicted target: $194.0840
+  Bull target:      $203.8417
+  Bear target:      $193.8982
+  Actual at expiry: $198.3500
+  Price change:     -0.26%
+  Target gap:       2.15%
+  Prob up/down:     45 / 55
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5926808124561824
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (65)
+  Primary reason:   High market entropy and conflicting signals between quant and news result in insufficient confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant found high uncertainty with extreme RSI (98.2), high entropy (0.976), and volatile indicators, advising against trading due to weak signals. News found bullish sentiment (+65/100) from analyst upgrades and AI optimism, suggesting upward potential. Historical evidence shows that in similar high-entropy, conflicting signal environments, prices often lack clear direction, leading to choppy movements. Therefore, the conflict and noise reduce confidence for a decisive trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#12  MSFT | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:52:04 PM UTC
+  Expires at:       4/16/2026, 12:52:04 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $411.2200
+  Predicted target: $411.3053
+  Bull target:      $413.6873
+  Bear target:      $408.7527
+  Actual at expiry: $417.8700
+  Price change:     1.62%
+  Target gap:       1.60%
+  Prob up/down:     50 / 50
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5609069593773681
+  Quant verdict:    BUY 70%
+  News verdict:     bearish (-35)
+  Primary reason:   The neutral historical evidence from Monte Carlo simulations fails to resolve the conflict between quant and news signals.
+  R1 Reasoning:
+    Quant found bullish momentum with indicators like MACD bull and positive CMF, but RSI is overbought at 80.5. News found bearish sentiment due to disappointing Q2 earnings, a price target cut, and sector-wide AI pressure. Historical evidence from Monte Carlo simulations shows a neutral outlook with 50% probability up and median price near current levels. Therefore, due to conflicting signals, high market noise (entropy 0.941), and no clear historical resolution, a NO_TRADE is prudent.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#13  MSFT | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:53:45 PM UTC
+  Expires at:       4/16/2026, 8:53:45 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $411.2200
+  Predicted target: $403.2683
+  Bull target:      $421.5005
+  Bear target:      $400.9395
+  Actual at expiry: $420.2600
+  Price change:     2.20%
+  Target gap:       4.13%
+  Prob up/down:     47 / 53
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.6351873535575133
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bearish (-65)
+  Primary reason:   The quant agent's low confidence and high market entropy make any trade excessively risky.
+  R1 Reasoning:
+    Quant found mixed signals with high entropy and low confidence, suggesting a noisy market requiring strong confirmation. News found strong bearish sentiment due to disappointing earnings and an AI sector rout, indicating downward pressure. Historical evidence from similar earnings events supports short-term selloffs, but high entropy reduces signal reliability. Therefore, the conflict and insufficient confidence lead to a no-trade decision.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#14  GOOGL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:55:54 PM UTC
+  Expires at:       4/16/2026, 12:55:54 AM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       50%
+  Entry price:      $337.1200
+  Predicted target: $337.1200
+  Bull target:      $339.1427
+  Bear target:      $335.0973
+  Actual at expiry: $337.0200
+  Price change:     -0.03%
+  Target gap:       0.03%
+  Prob up/down:     52 / 48
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.44446059174037633
+  Quant verdict:    NO_TRADE 60%
+  News verdict:     bearish (-35)
+  Primary reason:   High entropy and conflicting signals between bullish technical indicators and bearish news sentiment.
+  R1 Reasoning:
+    The Quant Agent suggested a no-trade due to high market entropy and conflicting indicators, even with bullish MACD and high RSI. The News Agent provided a bearish sentiment citing economic uncertainty and a broad AI stock selloff influenced by Fed policy and competitive pressure from China. Historically, similar scenarios do not provide a clear direction and highlight a more mean-reverting behavior as guided by the low Hurst value. Therefore, given the lack of conclusive direction from both agents and historical analysis, a no-trade decision is prudent.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#15  SPY | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 8:57:55 PM UTC
+  Expires at:       4/16/2026, 8:57:55 PM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $699.9400
+  Predicted target: $699.0388
+  Bull target:      $717.4385
+  Bear target:      $682.4415
+  Actual at expiry: $701.6600
+  Price change:     0.25%
+  Target gap:       0.37%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.6096133879274926
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bearish (-35)
+  Primary reason:   Conflicting signals from quant and news agents, amplified by high market entropy, lead to low confidence.
+  R1 Reasoning:
+    Quant found a strong bullish bias from technical indicators, but high entropy suggests an overly noisy market lacking clear direction. News Agent observed bearish sentiment driven by conflicting Fed communications and AI sector anxiety. The historical evidence shows similar high-uncertainty periods leading to indecisiveness. Therefore, no trade is recommended due to unresolved signal conflicts and low confidence levels.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#16  SPY | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 9:00:30 PM UTC
+  Expires at:       4/16/2026, 1:00:30 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $699.9400
+  Predicted target: $699.9700
+  Bull target:      $702.5770
+  Bear target:      $697.3086
+  Actual at expiry: $700.3700
+  Price change:     0.06%
+  Target gap:       0.06%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.45959692550701253
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   The quant agent's low confidence of 40%, reduced further by macro warnings and high entropy, makes any trade signal unreliable.
+  R1 Reasoning:
+    Quant found high uncertainty with a Doji candle and overbought RSI indicating indecision, leading to balanced probabilities and low confidence. News found bearish sentiment driven by Fed policy uncertainty and an AI selloff, creating a risk-off regime. Historical evidence from Monte Carlo simulations shows no directional edge, with median price near current and 50% up probability. Combined with high entropy and macro warnings, the market is too noisy for a reliable trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#17  GOOGL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/15/2026, 9:02:32 PM UTC
+  Expires at:       4/16/2026, 1:02:32 AM UTC
+  Model:            gpt-4o
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $337.1200
+  Predicted target: $337.1200
+  Bull target:      $339.1427
+  Bear target:      $335.0973
+  Actual at expiry: $337.3000
+  Price change:     0.05%
+  Target gap:       0.05%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.44446059174037633
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bearish (-35)
+  Primary reason:   Conflicting signals with no clear historical resolution and insufficient confidence.
+  R1 Reasoning:
+    The Quant Agent found a high-entropy, mean-reverting market with no clear trade direction due to a lack of confirmation. The News Agent identified a bearish sentiment influenced by Fed uncertainty and broader AI selloff. Historical evidence indicates mean-reverting tendencies, but current conflicting indicators and sentiment offer no clear resolution. The market's mean-reverting nature combined with high noise and macro warnings reduce trading confidence.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#18  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 4:40:45 PM UTC
+  Expires at:       4/16/2026, 8:40:45 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $74388.0000
+  Predicted target: $74353.4201
+  Bull target:      $75248.7429
+  Bear target:      $73523.9578
+  Actual at expiry: $75048.0234
+  Price change:     0.89%
+  Target gap:       0.93%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.41171371683196384
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy and macro warning reduce confidence below the required threshold.
+  R1 Reasoning:
+    Quant found a trending market with high uncertainty, Ichimoku inside the cloud, and high entropy (0.927), indicating no clear direction and a slight bearish bias. News reported bullish sentiment (+35) due to Fed rate-cut expectations and SEC regulatory clarity, but with a macro warning for the FOMC meeting. Historical simulations show a nearly flat median price and only a 49% probability of an upward move, offering no edge. Combined with the mean-reverting regime (Hurst 0.412) and reduced confidence from the macro warning, the signals conflict and confidence remains below the threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#19  BTC | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 4:43:27 PM UTC
+  Expires at:       4/17/2026, 12:43:27 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $74409.1094
+  Predicted target: $74383.3004
+  Bull target:      $75897.2916
+  Bear target:      $72920.9272
+  Actual at expiry: $75047.3594
+  Price change:     0.86%
+  Target gap:       0.89%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4130162484343485
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bullish (35)
+  Primary reason:   High market noise and conflicting signals without historical resolution warrant staying sidelined.
+  R1 Reasoning:
+    Quant found indecision: Doji candle, Ichimoku inside cloud, low Hurst (0.413) indicating mean reversion, and high entropy (0.927) signaling noisy markets. News identified bullish catalysts from Fed dovishness and SEC clarity, but with macro warnings on upcoming Fed speeches. Historical evidence shows mean-reverting, high-entropy regimes often lead to choppy, range-bound action where news-driven moves are faded. Given conflicting signals, high noise, and no clear historical edge, a trade lacks sufficient confidence.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#20  ETH | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 4:46:54 PM UTC
+  Expires at:       4/17/2026, 12:46:54 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $2322.9800
+  Predicted target: $2316.5249
+  Bull target:      $2369.4396
+  Bear target:      $2276.5204
+  Actual at expiry: $2339.7400
+  Price change:     0.72%
+  Target gap:       1.00%
+  Prob up/down:     47 / 53
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.45953647202533904
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (25)
+  Primary reason:   High market entropy and conflicting signals result in confidence below the required threshold.
+  R1 Reasoning:
+    Quant indicators show high entropy (0.948) and bearish Ichimoku cloud position, suggesting a noisy market with weak downside bias. News sentiment is bullish due to dovish Fed expectations and UK regulatory progress, but carries a macro warning. Historical evidence indicates that in high-entropy, low-Hurst regimes, price action tends to be choppy without a clear trend, reducing trade viability. Combined with the macro warning reducing confidence, the evidence does not support a high-conviction trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#21  SOL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 4:57:43 PM UTC
+  Expires at:       4/17/2026, 12:57:43 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $86.2300
+  Predicted target: $86.1260
+  Bull target:      $87.9546
+  Bear target:      $84.5054
+  Actual at expiry: $88.4000
+  Price change:     2.52%
+  Target gap:       2.64%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5567931418343324
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy and neutral news sentiment create insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found mixed signals with bullish indicators (MACD, Ichimoku) offset by high entropy and a doji pattern, resulting in near-even probabilities. News found neutral sentiment due to offsetting Fed uncertainty and SEC regulatory clarity, with a macro warning on Fed policy. Historical evidence in high-entropy, risk-off regimes shows SOL typically consolidates within a narrow range. Therefore, with confidence below threshold and no clear edge, NO_TRADE is warranted.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#22  BNB | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:00:37 PM UTC
+  Expires at:       4/17/2026, 1:00:37 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $625.5300
+  Predicted target: $625.6624
+  Bull target:      $636.7895
+  Bear target:      $614.6140
+  Actual at expiry: $629.4400
+  Price change:     0.63%
+  Target gap:       0.60%
+  Prob up/down:     50 / 50
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.46699765947827887
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   Macro warning and high market entropy create insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found mixed signals with bullish MACD and Ichimoku but high entropy (0.938) indicating a noisy, ranging market with no statistical edge. News identified bearish catalysts from the Fed's prolonged high-rate stance and SEC regulatory uncertainty, reinforced by a macro warning. Historical similarity is unavailable, but Monte Carlo simulations show a balanced 50% probability of upward movement. With high entropy requiring extra confirmation and macro warning reducing confidence, overall conviction is insufficient for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#23  XRP | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:03:53 PM UTC
+  Expires at:       4/17/2026, 1:03:53 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $1.4209
+  Predicted target: $1.4197
+  Bull target:      $1.4493
+  Bear target:      $1.3925
+  Actual at expiry: $1.4352
+  Price change:     1.01%
+  Target gap:       1.09%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5106164100793711
+  Quant verdict:    BUY 60%
+  News verdict:     neutral (5)
+  Primary reason:   The combination of high market noise (entropy 0.931) and macro warnings outweighs the mildly bullish technical indicators, resulting in no clear trading edge.
+  R1 Reasoning:
+    Quant found bullish momentum signals (RSI 59.2, MACD bull, Ichimoku above cloud) but high entropy (0.931) and negative autocorrelation suggest a noisy, mean-reverting market. News indicated neutral sentiment with a risk-off regime and macro warnings from Fed events, creating headwinds for crypto. Historical evidence shows that similar high-entropy, risk-off environments often result in choppy, directionless price action, making directional trades low-probability. Therefore, despite some bullish technicals, the lack of clear edge and elevated volatility warrant a NO_TRADE decision.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#24  DOGE | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:06:27 PM UTC
+  Expires at:       4/17/2026, 1:06:27 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $0.0967
+  Predicted target: $0.0967
+  Bull target:      $0.0987
+  Bear target:      $0.0948
+  Actual at expiry: $0.0982
+  Price change:     1.49%
+  Target gap:       1.52%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4909028922634565
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (-5)
+  Primary reason:   High market entropy and neutral catalysts provide no actionable edge.
+  R1 Reasoning:
+    Quant found high entropy (0.950) and mixed technical signals—MACD bearish but Ichimoku above cloud—suggesting no clear directional edge. News found neutral sentiment (-5/100) with offsetting Fed and SEC catalysts, reinforcing uncertainty. Historical evidence (Hurst 0.491 near random walk) and high noise further indicate low predictability. Combined with macro warnings reducing confidence, no trade meets the threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#25  AAPL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:10:32 PM UTC
+  Expires at:       4/17/2026, 1:10:32 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $263.3099
+  Predicted target: $263.8346
+  Bull target:      $265.9430
+  Bear target:      $260.6768
+  Actual at expiry: $263.4000
+  Price change:     0.03%
+  Target gap:       0.17%
+  Prob up/down:     52 / 48
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.48148947678835546
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy and macro warning reduce confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.938) and mixed signals—MACD bearish but price above Ichimoku cloud, RSI at 64.4 not extreme—leading to low confidence. News found neutral sentiment (+5/100) with a macro warning from the Fed, adding uncertainty and offsetting any earnings anticipation. Historical evidence shows that in high-entropy, Doji-candle environments with neutral catalysts, AAPL typically consolidates, especially before earnings. Therefore, the lack of clear directional edge and elevated noise justify NO_TRADE.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#26  AAPL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:12:11 PM UTC
+  Expires at:       4/16/2026, 9:12:11 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       25%
+  Entry price:      $263.5489
+  Predicted target: $263.5888
+  Bull target:      $265.1302
+  Bear target:      $261.9676
+  Actual at expiry: $263.4000
+  Price change:     -0.06%
+  Target gap:       0.07%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.48201120607871156
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy and neutral sentiment with an upcoming earnings report create insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant analysis found high entropy (0.936) and a near-random Hurst (0.482), indicating a noisy market with no clear directional edge. News sentiment is neutral (+5/100) due to mixed Fed signals, with a macro warning from AAPL's upcoming earnings report. Historical simulations show a 50% probability of moving up, with a median price nearly identical to the current price. Combining these factors, both agents align on a lack of conviction, and the high noise plus catalyst risk make any trade low-confidence.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#27  GC=F | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:49:45 PM UTC
+  Expires at:       4/16/2026, 9:49:45 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $4806.2002
+  Predicted target: $4804.8763
+  Bull target:      $4834.8199
+  Bear target:      $4777.3630
+  Actual at expiry: $4807.5000
+  Price change:     0.03%
+  Target gap:       0.05%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.49320986997542043
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (42)
+  Primary reason:   High entropy and conflicting signals reduce confidence below the trading threshold.
+  R1 Reasoning:
+    Quant indicators show bearish momentum (MACD bear, below Ichimoku cloud) and high uncertainty (entropy 0.956), while news sentiment is bullish due to dovish Fed signals and extreme fear. Historical patterns suggest oversold gold with dovish catalysts often rebounds, but high entropy reduces signal reliability. With a macro warning and confidence below threshold, no trade is justified.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#28  LMT | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:53:02 PM UTC
+  Expires at:       4/17/2026, 1:53:02 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       65%
+  Entry price:      $605.9700
+  Predicted target: $606.3321
+  Bull target:      $612.0297
+  Bear target:      $599.9103
+  Actual at expiry: $607.4900
+  Price change:     0.25%
+  Target gap:       0.19%
+  Prob up/down:     51 / 49
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.49902329912598337
+  Quant verdict:    NO_TRADE 70%
+  News verdict:     neutral (5)
+  Primary reason:   The high market entropy and macro warning reduce confidence below the threshold required for a trade.
+  R1 Reasoning:
+    Quant found a slight 51% probability of upside but with high entropy and bearish indicators like MACD and Ichimoku below cloud, suggesting a noisy market not conducive for trading. News found neutral sentiment due to mixed Fed signals but noted LMT's defensive stability amid risk-off sentiment, with a macro warning from the upcoming FOMC meeting. Historical evidence from Monte Carlo simulations confirms only a 51% chance of moving higher, with a median target just above current price, indicating minimal expected edge. Final reasoning: With high noise, macro uncertainty, and a negligible probability edge, the risk-reward is unfavorable, warranting no trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#29  TSLA | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:56:15 PM UTC
+  Expires at:       4/17/2026, 1:56:15 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $388.6618
+  Predicted target: $387.7302
+  Bull target:      $392.5484
+  Bear target:      $384.7752
+  Actual at expiry: $388.9000
+  Price change:     0.06%
+  Target gap:       0.30%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5644840051906552
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   High market entropy (0.96) combined with a macro warning reduces confidence below the 45% trading threshold.
+  R1 Reasoning:
+    Quant found mixed signals: bullish Ichimoku and positive CMF offset by bearish MACD, high RSI (71.5), and very high entropy (0.96) indicating a noisy, uncertain market. News found bearish sentiment (-35/100) due to Fed policy uncertainty and Tesla analyst caution ahead of earnings, with a macro warning adding risk. Historical evidence from similar high-entropy, risk-off regimes shows choppy, unpredictable price action that rarely offers clear edges. Therefore, despite a slight bearish tilt, the combination of low quant confidence, macro warnings, and high noise justifies standing aside.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#30  NVDA | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 5:58:51 PM UTC
+  Expires at:       4/17/2026, 1:58:51 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       20%
+  Entry price:      $198.2800
+  Predicted target: $198.1194
+  Bull target:      $200.2628
+  Bear target:      $196.2972
+  Actual at expiry: $198.3500
+  Price change:     0.04%
+  Target gap:       0.12%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5432224546628076
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High entropy and macro warnings reduce confidence below the 45% threshold, forcing no trade.
+  R1 Reasoning:
+    Quant found a volatile, noisy market with no clear edge (49% up, 51% down) and high entropy (0.910), suggesting caution. News indicated neutral sentiment (+5/100) with macro warnings (Fed uncertainty, China volatility) and risk-off regime. Historical evidence from Monte Carlo simulations shows a median price nearly unchanged (198.1194) and a nearly 50/50 probability, reinforcing no directional bias. Final reasoning: High uncertainty, macro warnings, and lack of historical edge result in confidence below threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#31  MSFT | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 6:01:29 PM UTC
+  Expires at:       4/17/2026, 2:01:29 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $419.4650
+  Predicted target: $419.3321
+  Bull target:      $423.6596
+  Bear target:      $415.2703
+  Actual at expiry: $420.2600
+  Price change:     0.19%
+  Target gap:       0.22%
+  Prob up/down:     40 / 60
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5724616857547086
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     bearish (-35)
+  Primary reason:   The combination of high entropy (0.944) and an imminent high-impact earnings release creates an environment of excessive uncertainty, making any directional trade speculative.
+  R1 Reasoning:
+    Quant indicators show an overbought but trending market with high entropy, suggesting noisy price action and lack of clear direction. News sentiment is bearish due to restrictive Fed policy, pre-earnings downgrade, and sector-wide AI sell-off. Historically, extreme RSI levels ahead of high-impact earnings often lead to elevated volatility and unpredictable moves, especially in risk-off environments. Given the conflicting signals and low confidence, no trade is the prudent course.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#32  GOOGL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 6:04:42 PM UTC
+  Expires at:       4/17/2026, 2:04:42 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $335.2201
+  Predicted target: $334.7895
+  Bull target:      $338.5723
+  Bear target:      $331.8679
+  Actual at expiry: $336.0200
+  Price change:     0.24%
+  Target gap:       0.37%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.45644064627760134
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (-5)
+  Primary reason:   High market entropy and upcoming earnings macro warning reduce confidence below the required threshold for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.939) and slight bearish bias (52% down), while news sentiment is neutral with a macro warning for upcoming earnings, contributing to a risk-off regime. Historical Monte Carlo simulations indicate a median target slightly below current price with only a 48% probability of upward movement. Given the high noise, macro warning reducing confidence, and lack of strong directional confluence, a NO_TRADE decision is warranted.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#33  SPY | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 6:07:41 PM UTC
+  Expires at:       4/17/2026, 2:07:41 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       70%
+  Entry price:      $700.7500
+  Predicted target: $701.1218
+  Bull target:      $706.8302
+  Bear target:      $695.1702
+  Actual at expiry: $701.6600
+  Price change:     0.13%
+  Target gap:       0.08%
+  Prob up/down:     52 / 48
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4758456493377951
+  Quant verdict:    NO_TRADE 70%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.859) combined with a macro warning creates excessive noise and uncertainty for a reliable directional trade.
+  R1 Reasoning:
+    Quant analysis showed a slight bullish bias (52% up) but high entropy (0.859) and random walk (Hurst 0.476) making momentum signals unreliable. News sentiment was neutral (+5/100) with risk-off flows and Fed policy uncertainty, compounded by a macro warning. Historical simulations (Monte Carlo) indicate a median target of 701.12 with only 52% upside probability, insufficient to overcome the high noise and macro risks. Therefore, no trade is warranted.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#34  RTX | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/16/2026, 6:27:58 PM UTC
+  Expires at:       4/17/2026, 2:27:58 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       25%
+  Entry price:      $195.8800
+  Predicted target: $195.5580
+  Bull target:      $197.8388
+  Bear target:      $193.9212
+  Actual at expiry: $195.8500
+  Price change:     -0.02%
+  Target gap:       0.15%
+  Prob up/down:     46 / 54
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5757516681659964
+  Quant verdict:    NO_TRADE 10%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.929) combined with a macro warning (earnings release) creates excessive noise and uncertainty, lowering confidence below the trading threshold.
+  R1 Reasoning:
+    Quant found a ranging market with bearish indicators (Ichimoku below cloud, negative CMF) and extreme oversold RSI (21.3), but high entropy (0.929) indicates excessive noise. News found neutral sentiment in a risk-off regime, with mixed Fed signals and a pending earnings release creating caution. Historical evidence shows that in high-entropy, risk-off environments with oversold conditions but no clear catalyst, prices often churn without direction, especially ahead of earnings. Therefore, the combination of low conviction from both agents, high noise, and the macro warning leads to a no-trade decision.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#35  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:18:57 PM UTC
+  Expires at:       4/17/2026, 4:18:57 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $75753.9219
+  Predicted target: $75753.9219
+  Bull target:      $76376.5339
+  Bear target:      $75151.7881
+  Actual at expiry: $77439.2891
+  Price change:     2.22%
+  Target gap:       2.22%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4215615732495277
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (-5)
+  Primary reason:   Hurst below 0.45 combined with high entropy (0.956) indicates a mean-reverting, noisy market requiring stronger confirmation than currently exists.
+  R1 Reasoning:
+    Quant analysis shows conflicting signals: MACD bullish and Ichimoku above cloud suggest upward momentum, but Hurst at 0.422 indicates mean-reversion and high entropy (0.956) signals a noisy market requiring strong confirmation. News sentiment is neutral (-5/100) with mixed Fed signals and heightened SEC regulatory pressure creating policy uncertainty, though no macro warning is present. Historical evidence in mean-reverting regimes with high entropy shows that without clear directional catalysts, sideways consolidation is most likely. Therefore, despite some bullish technical elements, the combination of mean-reversion signals, high noise, and neutral sentiment creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#36  BTC | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:19:29 PM UTC
+  Expires at:       4/17/2026, 8:19:29 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $75748.4688
+  Predicted target: $75719.3200
+  Bull target:      $77046.1357
+  Bear target:      $74526.6117
+  Actual at expiry: $77431.2813
+  Price change:     2.22%
+  Target gap:       2.26%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.42116761779839684
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (-5)
+  Primary reason:   High entropy (0.941) combined with mean-reverting regime (Hurst 0.421) and neutral news sentiment creates insufficient signal quality for a confident trade.
+  R1 Reasoning:
+    Quant analysis shows a mean-reverting market (Hurst 0.421) with high entropy (0.941) indicating noisy conditions and low directional conviction. News sentiment is neutral (-5/100) with regulatory headwinds and mixed Fed signals creating uncertainty. Historical evidence from similar high-entropy, mean-reverting periods shows random walk behavior with no clear edge. The combination of quant uncertainty, neutral sentiment, and historical randomness yields insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#37  BTC | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:19:58 PM UTC
+  Expires at:       4/18/2026, 12:19:58 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $75755.3828
+  Predicted target: $75755.3828
+  Bull target:      $78785.5981
+  Bear target:      $72725.1675
+  Actual at expiry: $76196.2266
+  Price change:     0.58%
+  Target gap:       0.58%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.47544307603580305
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.960) combined with random walk characteristics (Hurst 0.475) and regulatory uncertainty creates a noisy environment where directional signals lack sufficient confidence for trading.
+  R1 Reasoning:
+    Quant analysis shows a noisy market with high entropy (0.960) and Hurst value (0.475) indicating random walk behavior, reducing confidence in momentum signals despite bullish indicators like MACD and Ichimoku. News sentiment is neutral with mixed signals from Fed rate cut discussions and SEC regulatory uncertainty creating headwinds. Historical evidence shows that in high-entropy environments with random walk characteristics and regulatory uncertainty, price action tends to be choppy without clear directional bias. Therefore, the conflicting signals and low confidence from both agents, combined with the historical pattern of sideways movement in such conditions, justify a no-trade stance.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#38  ETH | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:20:41 PM UTC
+  Expires at:       4/17/2026, 4:20:41 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $2358.2000
+  Predicted target: $2358.2000
+  Bull target:      $2385.3170
+  Bear target:      $2335.7497
+  Actual at expiry: $2436.1001
+  Price change:     3.30%
+  Target gap:       3.30%
+  Prob up/down:     52 / 48
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.4733170674415583
+  Quant verdict:    NO_TRADE 25%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.930) combined with news macro warnings creates insufficient signal clarity despite slightly bullish technical indicators.
+  R1 Reasoning:
+    Quant analysis shows a random walk market (Hurst 0.473) with high entropy (0.930) indicating noisy conditions, though bullish technical signals exist. News sentiment is neutral with mixed Fed signals and regulatory uncertainty, plus a macro warning about upcoming data releases. Historical evidence in similar low-Hurst, high-entropy environments shows false signals are common during Fed uncertainty periods. The combination of noisy quant signals, cautious news sentiment, and historical precedent for whipsaws during such conditions creates insufficient edge for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#39  ETH | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:21:16 PM UTC
+  Expires at:       4/17/2026, 8:21:16 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $2358.4099
+  Predicted target: $2362.7400
+  Bull target:      $2405.5781
+  Bear target:      $2311.2417
+  Actual at expiry: $2438.1001
+  Price change:     3.38%
+  Target gap:       3.20%
+  Prob up/down:     53 / 47
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.47350833500359735
+  Quant verdict:    BUY 65%
+  News verdict:     neutral (5)
+  Primary reason:   Confidence fell below 45% due to high market entropy (0.930), neutral news sentiment during risk-off regime, and upcoming macro data warnings creating excessive uncertainty for an 8-hour horizon.
+  R1 Reasoning:
+    Quant said BUY with 65% confidence because MACD bullish, EMA stack supportive, and Ichimoku above cloud in a ranging market. News said NEUTRAL with +5 sentiment because mixed Fed signals create policy uncertainty despite SEC regulatory clarity, with risk-off regime and macro warnings. Historical evidence shows that in ranging markets (Hurst 0.474) with high entropy (0.930) and neutral sentiment during risk-off periods, price action tends to be noisy without clear directional conviction. Therefore, the combination of high market noise, conflicting signals, and upcoming macro data reduces confidence below the 45% threshold for taking a position.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#40  ETH | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:21:46 PM UTC
+  Expires at:       4/18/2026, 12:21:46 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $2358.6399
+  Predicted target: $2330.0050
+  Bull target:      $2452.9855
+  Bear target:      $2264.2943
+  Actual at expiry: $2357.5901
+  Price change:     -0.04%
+  Target gap:       1.17%
+  Prob up/down:     47 / 53
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.44034626951268946
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.951) combined with mean-reverting regime and neutral news sentiment creates excessive noise without clear directional conviction.
+  R1 Reasoning:
+    Quant analysis shows a mean-reverting market (Hurst 0.44) with elevated entropy (0.951) creating high noise and uncertainty, though slightly bearish momentum (MACD bearish, 53% down probability). News sentiment is neutral (+5/100) with mixed Fed signals and SEC regulatory clarity providing structural positivity but near-term uncertainty amid risk-off conditions. Historical evidence in mean-reverting regimes with high entropy shows false signals are common, requiring stronger confirmation than present. The combination of quant uncertainty, neutral sentiment with macro warnings, and historical patterns of whipsaws in similar conditions creates insufficient conviction for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#41  SOL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:22:30 PM UTC
+  Expires at:       4/17/2026, 4:22:30 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       62%
+  Entry price:      $88.2600
+  Predicted target: $88.9200
+  Bull target:      $89.3191
+  Bear target:      $87.2009
+  Actual at expiry: $89.6200
+  Price change:     1.54%
+  Target gap:       0.79%
+  Prob up/down:     56 / 44
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      Hurst=0.542 random walk — need 65%+ confidence
+  Regime:           VOLATILE
+  Hurst:            0.5415369261936047
+  Quant verdict:    NO_TRADE 50%
+  News verdict:     bullish (35)
+  Primary reason:   SEC regulatory clarity removing securities overhang on SOL combined with positive CMF and Ichimoku above cloud outweighs quant uncertainty in this high-entropy environment.
+  R1 Reasoning:
+    Quant analysis shows mixed signals with bearish MACD but bullish Ichimoku position above cloud and positive CMF, though high entropy (0.945) indicates noisy market requiring caution. News sentiment is strongly bullish (+35/100) due to SEC regulatory clarity naming SOL as commodity and dovish Fed commentary creating risk-on environment. Historical evidence shows that during high-entropy regimes with positive CMF and regulatory catalysts, SOL tends to break upward after initial volatility, with similar setups yielding 58% success rate over 4h. Therefore, despite quant uncertainty, the combination of regulatory tailwind and underlying bullish structure justifies a BUY with reduced confidence due to macro warnings.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#42  SOL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:23:01 PM UTC
+  Expires at:       4/17/2026, 8:23:01 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $88.2200
+  Predicted target: $88.2200
+  Bull target:      $89.9844
+  Bear target:      $86.4556
+  Actual at expiry: $89.4700
+  Price change:     1.42%
+  Target gap:       1.42%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5416900646789998
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   Extreme market entropy (0.955) combined with equal up/down probabilities and macro warnings creates insufficient confidence for any directional trade.
+  R1 Reasoning:
+    Quant said NO_TRADE because high entropy (0.955) indicates extremely noisy market conditions with conflicting signals - MACD bearish but Ichimoku above cloud and CMF positive. News said neutral sentiment (+5/100) with mixed Fed signals providing modest tailwind but SEC regulation clarity not creating bullish catalysts. Historical evidence shows that in high-entropy volatile markets with Hurst near 0.5 (0.542), price tends to oscillate without clear direction, especially when macro warnings are present. Therefore, the combination of extreme noise, equal probability distribution, and upcoming economic data creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#43  SOL | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:23:32 PM UTC
+  Expires at:       4/18/2026, 12:23:32 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $88.0500
+  Predicted target: $87.4383
+  Bull target:      $91.5720
+  Bear target:      $84.5280
+  Actual at expiry: $86.7200
+  Price change:     -1.51%
+  Target gap:       0.82%
+  Prob up/down:     49 / 51
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4880037407071487
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bearish (-35)
+  Primary reason:   Genuine signal conflict between quant's neutral-bullish technicals and news' bearish macro catalysts, combined with high market entropy (0.96), creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a nearly balanced probability (49% up/51% down) with bullish technical indicators (MACD bullish, above Ichimoku cloud, positive CMF) but high entropy (0.96) requiring strong confirmation. News sentiment is bearish (-35/100) due to Fed signaling prolonged high rates and SEC regulatory momentum in a risk-off environment. Historical evidence in high-entropy markets with conflicting signals shows poor directional reliability, and the Monte Carlo median (87.4383) suggests minimal expected movement. The combination of genuine signal conflict, high entropy, and macro warning reduces confidence below the required threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#44  BNB | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:24:25 PM UTC
+  Expires at:       4/17/2026, 4:24:25 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $633.0100
+  Predicted target: $632.9293
+  Bull target:      $637.9449
+  Bear target:      $627.8067
+  Actual at expiry: $642.9300
+  Price change:     1.57%
+  Target gap:       1.58%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.503692395715995
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   High market entropy combined with conflicting signals and negative macro catalysts creates insufficient directional conviction for a 4h horizon trade.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.933) and mixed signals - MACD bearish but Ichimoku above cloud and positive CMF, resulting in nearly balanced probabilities (49% up/51% down). News sentiment is bearish (-35/100) due to Fed signaling prolonged high rates and SEC regulatory pressure amid risk-off regime. Historical evidence in similar high-entropy, conflicting signal environments shows poor directional reliability, with Monte Carlo simulations confirming median reversion near current price. The combination of quant uncertainty, negative news catalysts, and macro warnings creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#45  BNB | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:25:07 PM UTC
+  Expires at:       4/17/2026, 8:25:07 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $633.0100
+  Predicted target: $633.1993
+  Bull target:      $643.2979
+  Bear target:      $623.2353
+  Actual at expiry: $644.3100
+  Price change:     1.79%
+  Target gap:       1.76%
+  Prob up/down:     51 / 49
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.503692395715995
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (-5)
+  Primary reason:   High market entropy (0.933) combined with neutral news sentiment and pending macro events creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found a high-entropy (0.933) ranging market with minimal directional edge (51% up vs 49% down) and MACD bearish divergence despite being above Ichimoku cloud. News found neutral sentiment (-5/100) with macro uncertainty from Fed signaling and SEC regulatory headwinds creating risk-off conditions. Historical evidence shows that in high-entropy markets with neutral sentiment and pending macro events, false signals are common and sideways consolidation typically precedes clearer direction. Therefore, the minimal probability edge doesn't justify risk given the conflicting signals and upcoming catalysts.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#46  BNB | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:25:53 PM UTC
+  Expires at:       4/18/2026, 12:25:53 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $633.0100
+  Predicted target: $625.4985
+  Bull target:      $658.3304
+  Bear target:      $607.6896
+  Actual at expiry: $633.8000
+  Price change:     0.12%
+  Target gap:       1.31%
+  Prob up/down:     46 / 54
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5455572242107156
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (-5)
+  Primary reason:   High market entropy (0.967) combined with a macro warning from upcoming FOMC meeting and SEC rule finalization reduces confidence below the 45% threshold required for trading.
+  R1 Reasoning:
+    Quant analysis shows a trending market (Hurst 0.546) with conflicting signals: bullish MACD and Ichimoku but bearish probability tilt (54% down) and doji indecision pattern. News sentiment is neutral (-5/100) with risk-off regime and regulatory headwinds from SEC proposals, though Fed dovishness provides some support. Historical evidence shows that in high-entropy (0.967), high-uncertainty environments with macro warnings, BNB typically experiences choppy, range-bound movement without clear directional conviction. The combination of quant uncertainty, neutral sentiment, and macro warnings creates insufficient signal quality for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#47  XRP | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:26:44 PM UTC
+  Expires at:       4/17/2026, 4:26:44 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $1.4481
+  Predicted target: $1.4481
+  Bull target:      $1.4655
+  Bear target:      $1.4307
+  Actual at expiry: $1.4864
+  Price change:     2.64%
+  Target gap:       2.64%
+  Prob up/down:     51 / 49
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5365324090284878
+  Quant verdict:    NO_TRADE 50%
+  News verdict:     neutral (-5)
+  Primary reason:   High market entropy (0.96) combined with macro warnings creates insufficient confidence for directional exposure despite slight quant probability edge.
+  R1 Reasoning:
+    Quant found a 51% probability of upward movement with Ichimoku above cloud and positive CMF, but high entropy (0.96) and MACD bearish divergence create uncertainty. News found neutral sentiment (-5/100) with risk-off regime and macro warnings about Fed/SEC developments. Historical evidence shows that during high entropy periods with macro warnings, XRP tends to exhibit choppy, range-bound behavior without clear directional conviction. Therefore, despite slight quant bullish bias, the combination of high noise, macro uncertainty, and minimal edge justifies no trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#48  XRP | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:27:20 PM UTC
+  Expires at:       4/17/2026, 8:27:20 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $1.4453
+  Predicted target: $1.4453
+  Bull target:      $1.4742
+  Bear target:      $1.4164
+  Actual at expiry: $1.4864
+  Price change:     2.84%
+  Target gap:       2.84%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5406254609436177
+  Quant verdict:    BUY 45%
+  News verdict:     neutral (5)
+  Primary reason:   Quant confidence below threshold (45%) combined with news macro warnings and historical evidence of poor performance in high-entropy, conflicting signal environments.
+  R1 Reasoning:
+    Quant found bullish EMA stack and Ichimoku above cloud but with weak MACD bearish signal and RSI neutral at 45.6, indicating technical indecision. News found neutral sentiment (+5/100) with mixed Fed signals offset by SEC regulatory uncertainty, creating a risk-off environment. Historical evidence shows that in high entropy (0.961) markets with Hurst 0.541 (trending but noisy), conflicting signals rarely produce reliable edges. Final reasoning: Quant's BUY recommendation has only 45% confidence, news is neutral with macro warnings, and historical patterns show such setups underperform, falling below the 45% confidence threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#49  XRP | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:28:01 PM UTC
+  Expires at:       4/18/2026, 12:28:01 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $1.4458
+  Predicted target: $1.4458
+  Bull target:      $1.5036
+  Bear target:      $1.3880
+  Actual at expiry: $1.4366
+  Price change:     -0.64%
+  Target gap:       0.64%
+  Prob up/down:     45 / 55
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.512557482219745
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.967) combined with macro warnings creates too much noise for a confident directional trade within the 24-hour horizon.
+  R1 Reasoning:
+    Quant said NO_TRADE because high entropy (0.967) indicates a noisy market with weak trend confirmation despite bullish Ichimoku positioning, while RSI at 73.6 suggests overbought conditions. News said neutral sentiment (+5/100) because mixed Fed signals on 2025 rate cuts provide modest tailwinds but SEC regulatory momentum creates near-term uncertainty. Historical evidence shows that in high-entropy, risk-off regimes with macro warnings, XRP tends to exhibit choppy, range-bound behavior without clear directional conviction. Therefore, the conflicting signals combined with low confidence metrics and macro warnings justify standing aside.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#50  DOGE | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:28:33 PM UTC
+  Expires at:       4/17/2026, 4:28:33 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $0.0991
+  Predicted target: $0.0990
+  Bull target:      $0.1002
+  Bear target:      $0.0979
+  Actual at expiry: $0.1006
+  Price change:     1.50%
+  Target gap:       1.56%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4422954089961709
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High entropy (0.969) combined with macro warnings and mean-reverting regime creates excessive noise for reliable directional prediction within the narrow valid range.
+  R1 Reasoning:
+    Quant found mean-reverting conditions (Hurst 0.442) with conflicting signals: bearish MACD but price above Ichimoku cloud and positive CMF, all in high entropy (0.969) environment. News found neutral sentiment (+5/100) with offsetting catalysts: Fed tailwinds vs SEC regulatory uncertainty plus macro warnings. Historical evidence shows mean-reverting markets with high entropy and macro warnings typically produce choppy, directionless price action within narrow ranges. Therefore, insufficient edge exists despite partial agent alignment on cautious stance.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#51  DOGE | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:29:12 PM UTC
+  Expires at:       4/17/2026, 8:29:12 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $0.0991
+  Predicted target: $0.0990
+  Bull target:      $0.1010
+  Bear target:      $0.0971
+  Actual at expiry: $0.1005
+  Price change:     1.48%
+  Target gap:       1.54%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4422954089961709
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   Mean-reverting market structure combined with regulatory uncertainty creates insufficient directional confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant found mean-reverting behavior (Hurst 0.442) with high entropy (0.969) creating noisy signals, though slightly above VWAP. News found neutral sentiment with conflicting catalysts: Fed rate cuts supportive but SEC regulatory pressure creating immediate uncertainty. Historical evidence shows mean-reverting markets with high entropy and regulatory uncertainty typically produce whipsaw patterns without clear directional bias. Final reasoning: Multiple conflicting signals with no historical resolution, plus macro warning reducing confidence, create insufficient edge for directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#52  DOGE | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:29:50 PM UTC
+  Expires at:       4/18/2026, 12:29:50 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $0.0991
+  Predicted target: $0.0991
+  Bull target:      $0.1030
+  Bear target:      $0.0951
+  Actual at expiry: $0.0959
+  Price change:     -3.18%
+  Target gap:       3.21%
+  Prob up/down:     45 / 55
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5087876002939555
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   Genuine conflict between quant indicators (overbought RSI vs bullish MACD) and news catalysts (Fed tailwinds vs SEC headwinds) in a high-entropy environment with macro warnings, resulting in confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant analysis shows mixed signals with RSI at 71.8 (overbought) but MACD bullish, while Hurst at 0.509 indicates trending behavior in a high-entropy (0.969) noisy environment. News sentiment is neutral (+5/100) with conflicting catalysts: Fed rate cuts as tailwinds versus SEC regulatory pressure as headwinds, plus macro warnings about PCE data and Fed Chair pick. Historical evidence shows similar high-entropy environments with mixed quant/news signals typically result in choppy, directionless price action. Therefore, the combination of genuine signal conflict, high noise, and macro uncertainty creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#53  AAPL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:30:39 PM UTC
+  Expires at:       4/17/2026, 4:30:39 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $263.4000
+  Predicted target: $263.2928
+  Bull target:      $264.9804
+  Bear target:      $261.8196
+  Actual at expiry: $270.2300
+  Price change:     2.59%
+  Target gap:       2.63%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.48102632720258176
+  Quant verdict:    NO_TRADE 50%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.910) combined with macro warnings and conflicting agent signals reduces confidence below the 45% threshold required for trading.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.910) and random walk characteristics (Hurst 0.481), indicating no clear directional edge. News sentiment is neutral (+5/100) with mixed Fed signals creating macro uncertainty that offsets positive Apple-specific commentary. Historical evidence in similar high-entropy, macro-warning environments shows poor directional predictability with frequent whipsaws. The combination of high noise, conflicting signals, and upcoming catalysts creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#54  AAPL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:31:17 PM UTC
+  Expires at:       4/17/2026, 8:31:17 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $263.4000
+  Predicted target: $263.4269
+  Bull target:      $266.0340
+  Bear target:      $260.7660
+  Actual at expiry: $270.2300
+  Price change:     2.59%
+  Target gap:       2.58%
+  Prob up/down:     50 / 50
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.48102632720258176
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.910) combined with a macro warning about imminent earnings creates too much uncertainty for a confident directional bet within the 8-hour horizon.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.910) and a Doji candle indicating indecision, though Ichimoku above cloud provides mild bullish bias. News found neutral sentiment (+5/100) with contradictory signals between Fed uncertainty and Apple earnings anticipation, plus a macro warning about imminent Q1 earnings. Historical evidence shows Hurst at 0.481 suggests near-random behavior, and high entropy markets typically require stronger confirmation signals. Final reasoning: Both agents essentially agree on neutrality (50/50 probabilities), but the combination of high entropy, macro warning, and lack of clear directional conviction from either agent results in insufficient confidence for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#55  AAPL | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 12:32:14 PM UTC
+  Expires at:       4/18/2026, 12:32:14 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $263.4000
+  Predicted target: $263.4000
+  Bull target:      $269.9850
+  Bear target:      $256.8150
+  Actual at expiry: $270.2300
+  Price change:     2.59%
+  Target gap:       2.59%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5010168512478932
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High entropy (0.959) combined with Fed macro warnings creates excessive noise and uncertainty that overrides the weak directional signals from both quant and news analysis.
+  R1 Reasoning:
+    Quant analysis shows a nearly balanced probability distribution (49% up/51% down) with high entropy (0.959) indicating extreme market noise and Kalman volatility, while technicals present mixed signals with MACD bullish but RSI neutral. News sentiment is neutral (+5/100) with offsetting influences between positive Apple earnings anticipation and macro uncertainty from Fed policy warnings. Historical evidence from similar high-entropy, risk-off regimes with mixed signals shows low directional conviction and frequent whipsaws. Therefore, despite partial agent agreement on uncertainty, the combination of high noise, macro warnings, and lack of clear historical precedent for directional bias creates insufficient confidence for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#56  SPY | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:10:39 PM UTC
+  Expires at:       4/17/2026, 5:10:39 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $701.6600
+  Predicted target: $701.9110
+  Bull target:      $704.5789
+  Bear target:      $699.0437
+  Actual at expiry: $710.1400
+  Price change:     1.21%
+  Target gap:       1.17%
+  Prob up/down:     53 / 47
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.47745436275166614
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.870) combined with overbought RSI (71.7) and conflicting Fed signals creates insufficient confidence for a directional trade in the 4h horizon.
+  R1 Reasoning:
+    Quant said NO_TRADE because high entropy (0.870) creates a noisy environment, Doji pattern adds uncertainty, and RSI at 71.7 suggests overbought conditions despite trending regime. News said neutral sentiment because conflicting Fed signals (Hammack hold vs Milan cuts) create policy uncertainty, while safe-haven flows and Extreme Fear sentiment offset dovish interpretations. Historical evidence shows that in high-entropy environments with conflicting Fed signals and RSI >70, SPY tends to consolidate with choppy movement rather than clear directional moves. Therefore, despite 53% probability up, confidence is insufficient due to noise, overbought conditions, and macro uncertainty ahead of FOMC.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#57  SPY | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:11:19 PM UTC
+  Expires at:       4/17/2026, 9:11:19 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $701.6600
+  Predicted target: $702.0626
+  Bull target:      $707.0960
+  Bear target:      $696.0464
+  Actual at expiry: $710.1400
+  Price change:     1.21%
+  Target gap:       1.15%
+  Prob up/down:     52 / 48
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.47745436275166614
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.87) combined with only a 52% probability edge and conflicting signals between quant and news agents creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a market with high uncertainty (entropy 0.87) and conflicting signals: bearish MACD histogram but bullish CMF (+0.375) and RSI at 71.7 indicating overbought conditions. News sentiment is neutral (+5/100) with conflicting Fed signals creating policy uncertainty but a mild dovish tilt. Historical evidence from Monte Carlo simulations shows only a 52% probability of upward movement with minimal expected gains, while high entropy markets historically require stronger confirmation signals. The combination of low directional probability edge, high noise, and conflicting agent signals doesn't meet the confidence threshold for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#58  SPY | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:12:01 PM UTC
+  Expires at:       4/18/2026, 1:12:01 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       48%
+  Entry price:      $701.6600
+  Predicted target: $700.3401
+  Bull target:      $719.2015
+  Bear target:      $684.1185
+  Actual at expiry: $710.1400
+  Price change:     1.21%
+  Target gap:       1.40%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.625234145979318
+  Quant verdict:    BUY 70%
+  News verdict:     neutral (5)
+  Primary reason:   Extreme RSI (94.6) combined with conflicting Fed signals and high market entropy (0.933) creates insufficient confidence for a directional trade despite trending indicators.
+  R1 Reasoning:
+    Quant said BUY with 70% confidence because trending regime (Hurst 0.625), bullish MACD, extreme RSI 94.6, and positive CMF/Z-Score suggest momentum continuation. News said NEUTRAL with +5 sentiment because conflicting Fed signals (Hammack hawkish hold vs Milan dovish cuts) create policy uncertainty in risk-off regime. Historical evidence shows that when quant signals conflict with news sentiment in high-entropy markets (0.933), and RSI is extreme (>94), the market often consolidates or reverses rather than trending further. Therefore, despite trending indicators, the extreme RSI combined with policy uncertainty and high noise creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#59  GOOGL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:12:41 PM UTC
+  Expires at:       4/17/2026, 5:12:41 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $336.0200
+  Predicted target: $336.0200
+  Bull target:      $338.0361
+  Bear target:      $334.0039
+  Actual at expiry: $341.6800
+  Price change:     1.68%
+  Target gap:       1.68%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.4558446878186796
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (25)
+  Primary reason:   The random walk market regime (Hurst 0.456) with extremely high entropy (0.940) makes directional predictions unreliable despite positive news sentiment.
+  R1 Reasoning:
+    Quant said NO_TRADE because Hurst 0.456 indicates random walk, high entropy 0.940 shows noisy market, and MACD bearish despite Ichimoku above cloud. News said bullish due to Fed rate cut expectations and Google earnings beat, but with macro warning about Q4 details. Historical evidence shows in random walk regimes with high entropy, news catalysts often fail to generate directional momentum without strong technical confirmation. Therefore, the conflicting signals combined with low confidence metrics create an unacceptable risk profile.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#60  GOOGL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:13:13 PM UTC
+  Expires at:       4/17/2026, 9:13:13 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       52%
+  Entry price:      $336.0200
+  Predicted target: $338.2500
+  Bull target:      $339.3802
+  Bear target:      $332.6598
+  Actual at expiry: $341.6800
+  Price change:     1.68%
+  Target gap:       1.02%
+  Prob up/down:     58 / 42
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      Hurst=0.456 random walk — need 65%+ confidence
+  Regime:           RANGING
+  Hurst:            0.4558446878186796
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bullish (35)
+  Primary reason:   Tier 1 Fed dovish commentary combined with positive company-specific catalysts creates a stronger directional bias than the quant's technical indecision signals.
+  R1 Reasoning:
+    Quant found a ranging market with bullish indicators (above Ichimoku cloud, positive CMF) but low confidence due to Doji pattern and MACD bearish divergence. News found strong bullish catalysts with dovish Fed commentary and company-specific upgrades, though earnings release adds uncertainty. Historical evidence shows that in similar 'risk-on with Fed dovishness' regimes, GOOGL has averaged +1.2% gains over 8-hour windows despite technical indecision. Therefore, the news catalysts outweigh quant's uncertainty, but targets are conservative due to earnings proximity.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#61  GOOGL | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:13:44 PM UTC
+  Expires at:       4/18/2026, 1:13:44 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $336.0200
+  Predicted target: $336.0200
+  Bull target:      $344.4205
+  Bear target:      $327.6195
+  Actual at expiry: $341.6800
+  Price change:     1.68%
+  Target gap:       1.68%
+  Prob up/down:     46 / 54
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.6102485751302785
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (25)
+  Primary reason:   High market entropy (0.965) combined with overbought RSI (83.7) and conflicting agent signals creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant said NO_TRADE because of high entropy (0.965), overbought RSI (83.7), and lack of clear momentum despite being above Ichimoku cloud. News said bullish because of Fed rate cut expectations and Google's earnings beat, but noted China AI volatility risk. Historical evidence shows that in high-entropy regimes with RSI > 80 and conflicting signals, sideways action prevails 68% of time. Therefore, the conflicting signals combined with high noise create insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#62  MSFT | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:14:19 PM UTC
+  Expires at:       4/17/2026, 5:14:19 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $420.2600
+  Predicted target: $420.2600
+  Bull target:      $422.7816
+  Bear target:      $417.7384
+  Actual at expiry: $422.7900
+  Price change:     0.60%
+  Target gap:       0.60%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5768103576657369
+  Quant verdict:    BUY 70%
+  News verdict:     neutral (-5)
+  Primary reason:   The combination of extreme RSI (82.6), Fed macro warning, and conflicting agent signals creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant said BUY with 70% confidence because Hurst 0.577 shows trending momentum, price above Ichimoku cloud, and positive CMF/Z-Score. News said neutral sentiment (-5/100) with risk_off regime because Fed uncertainty and earnings pressure create macro warning. Historical evidence shows in risk_off regimes with high RSI (82.6) and Fed uncertainty, momentum signals often fail. Therefore, conflicting signals with no clear historical resolution and macro warning reduce confidence below threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#63  MSFT | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:15:00 PM UTC
+  Expires at:       4/17/2026, 9:15:00 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $420.2600
+  Predicted target: $420.2600
+  Bull target:      $424.4626
+  Bear target:      $416.0574
+  Actual at expiry: $422.7900
+  Price change:     0.60%
+  Target gap:       0.60%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5768103576657369
+  Quant verdict:    BUY 70%
+  News verdict:     bearish (-35)
+  Primary reason:   Extreme RSI overbought condition combined with Fed macro warning and perfectly balanced 50/50 historical probability creates unresolvable signal conflict.
+  R1 Reasoning:
+    Quant found bullish momentum with Hurst 0.577 indicating trending regime, price above VWAP, and positive CMF, but RSI at 82.6 shows extreme overbought conditions. News found bearish sentiment (-35/100) due to Fed rate uncertainty and Microsoft earnings disappointment in a risk-off environment. Historical evidence from Monte Carlo simulations shows exactly 50% probability up/down with median price nearly identical to current price, indicating no directional edge. The combination of extreme RSI, news macro warning, and perfect 50/50 historical probability creates unresolvable conflict with insufficient confidence.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#64  MSFT | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:15:49 PM UTC
+  Expires at:       4/18/2026, 1:15:49 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $420.2600
+  Predicted target: $416.3258
+  Bull target:      $430.7665
+  Bear target:      $409.7535
+  Actual at expiry: $422.7900
+  Price change:     0.60%
+  Target gap:       1.54%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.6425902321735575
+  Quant verdict:    BUY 70%
+  News verdict:     neutral (-5)
+  Primary reason:   The imminent MSFT Q2 earnings release combined with conflicting quant/news signals and high market noise (entropy 0.949) creates unacceptable uncertainty for a directional trade.
+  R1 Reasoning:
+    Quant said BUY with 70% confidence because of bullish MACD, strong momentum (Hurst 0.643), and positive CMF, though RSI at 86.5 shows overbought conditions. News said NEUTRAL with risk-off sentiment because of mixed Fed signals, AI sector weakness from China's DeepSeek, and imminent MSFT earnings creating uncertainty. Historical evidence shows that in high-entropy (0.949) markets with imminent earnings warnings, quant momentum signals often fail during risk-off regimes. Therefore, the conflicting signals and reduced confidence from earnings warning create insufficient conviction for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#65  NVDA | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:16:32 PM UTC
+  Expires at:       4/17/2026, 5:16:32 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $198.3500
+  Predicted target: $198.3500
+  Bull target:      $199.5401
+  Bear target:      $197.1599
+  Actual at expiry: $201.6800
+  Price change:     1.68%
+  Target gap:       1.68%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5526389129191632
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.901) combined with macro warnings reduces confidence below the 45% threshold required for trading.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high uncertainty (entropy 0.901) and conflicting signals: MACD bearish but Ichimoku above cloud, with near-equal up/down probabilities. News sentiment is neutral with mixed catalysts: positive Nvidia earnings expectations offset by China AI sector weakness and Fed policy concerns. Historical evidence shows that in high-entropy markets with macro warnings, price action tends to oscillate within tight ranges without clear direction. Therefore, the combination of technical uncertainty, mixed news catalysts, and macro warnings creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#66  NVDA | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:18:05 PM UTC
+  Expires at:       4/17/2026, 9:18:05 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $198.3500
+  Predicted target: $198.3500
+  Bull target:      $200.3335
+  Bear target:      $196.3665
+  Actual at expiry: $201.6800
+  Price change:     1.68%
+  Target gap:       1.68%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5526389129191632
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   High market entropy (0.901) combined with imminent earnings catalyst creates unacceptable uncertainty for any directional trade.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.901) and conflicting signals: Hurst indicates trending (0.553) but autocorrelation is negative (-0.034), while price sits above VWAP (+3.97%). News sentiment is bearish (-35/100) due to AI stock rout and imminent NVIDIA earnings, creating a macro warning. Historical evidence shows that during high-entropy periods with imminent earnings catalysts, price action becomes unpredictable and mean reversion patterns break down. Therefore, despite the bearish news backdrop, the quant's high uncertainty and conflicting signals prevent a clear directional edge.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#67  NVDA | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:18:41 PM UTC
+  Expires at:       4/18/2026, 1:18:41 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $198.3500
+  Predicted target: $195.5901
+  Bull target:      $203.3088
+  Bear target:      $193.3913
+  Actual at expiry: $201.6800
+  Price change:     1.68%
+  Target gap:       3.07%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.6012238154288393
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bearish (-35)
+  Primary reason:   The combination of extreme RSI (94.4), high market entropy (0.969), and conflicting catalysts creates unresolvable uncertainty that falls below the confidence threshold for trading.
+  R1 Reasoning:
+    Quant found mixed signals: bullish MACD and Ichimoku above cloud conflict with extreme RSI (94.4) and high entropy (0.969) suggesting overbought conditions in a noisy market. News found bearish sentiment (-35/100) driven by Fed rate uncertainty and AI stock rout from China's DeepSeek, with a macro warning about imminent earnings. Historical evidence shows that during high entropy regimes (>0.6) with extreme RSI readings and conflicting catalysts, the market tends to consolidate or reverse rather than trend decisively. Therefore, the signal conflict cannot be resolved with sufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#68  NVDA | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:19:14 PM UTC
+  Expires at:       4/17/2026, 9:19:14 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $198.3500
+  Predicted target: $197.8957
+  Bull target:      $200.3335
+  Bear target:      $196.3665
+  Actual at expiry: $201.6800
+  Price change:     1.68%
+  Target gap:       1.91%
+  Prob up/down:     46 / 54
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5526389129191632
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bearish (-35)
+  Primary reason:   The presence of a macro warning (earnings imminent) combined with high entropy and conflicting agent signals reduces confidence below the 45% threshold required for trading.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.901) and bearish MACD, suggesting noisy price action requiring strong confirmation. News identified bearish sentiment (-35/100) with Fed uncertainty and AI sector selloff from China's DeepSeek, plus an imminent NVIDIA earnings macro warning. Historical evidence shows that during high entropy periods with conflicting signals and macro warnings, price action tends to be choppy without clear direction. Therefore, the combination of noisy quant signals, negative news catalysts, and earnings uncertainty creates an environment unsuitable for directional trading.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#69  TSLA | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:19:59 PM UTC
+  Expires at:       4/17/2026, 5:19:59 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $388.9000
+  Predicted target: $389.8138
+  Bull target:      $391.2334
+  Bear target:      $386.5666
+  Actual at expiry: $400.6200
+  Price change:     3.01%
+  Target gap:       2.78%
+  Prob up/down:     53 / 47
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5656634652982822
+  Quant verdict:    BUY 70%
+  News verdict:     bearish (-35)
+  Primary reason:   Historical Monte Carlo simulations showing only 53% probability up combined with news macro warning reduced confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant said BUY because Hurst (0.566) shows trending conditions, price above Ichimoku cloud, and positive CMF/Z-Score. News said bearish because Fed uncertainty creates macro risk-off environment and Tesla-specific downgrades/negative earnings analysis outweigh upgrades. Historical evidence shows Monte Carlo simulations give only 53% probability up with median target at 389.81, insufficient to overcome the conflict. Final reasoning: With high entropy (0.963) indicating noisy markets, news macro warning requiring 10pt confidence reduction, and historical evidence failing to provide clear tiebreaker, confidence falls below threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#70  TSLA | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:20:50 PM UTC
+  Expires at:       4/17/2026, 9:20:50 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $388.9000
+  Predicted target: $388.4309
+  Bull target:      $392.7890
+  Bear target:      $385.0110
+  Actual at expiry: $400.6200
+  Price change:     3.01%
+  Target gap:       3.13%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5656634652982822
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bearish (-35)
+  Primary reason:   High entropy (0.963) combined with news macro warnings creates insufficient signal clarity for a directional trade within the 8-hour horizon.
+  R1 Reasoning:
+    Quant analysis shows a nearly balanced 49% up / 51% down probability with high entropy (0.963) indicating extreme market noise and uncertainty, though positive CMF and Ichimoku above cloud provide mild bullish technical structure. News sentiment is bearish (-35/100) due to conflicting Fed signals and analyst downgrades highlighting Tesla's fundamental challenges, with macro warnings adding risk. Historical evidence from similar high-entropy, macro-warning environments shows these conditions produce unreliable signals with frequent whipsaws. Therefore, despite partial agreement on cautious positioning, the combination of high uncertainty, conflicting signals, and macro risk creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#71  TSLA | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:21:29 PM UTC
+  Expires at:       4/18/2026, 1:21:29 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE  (original: SELL)
+  Confidence:       62%
+  Entry price:      $388.9000
+  Predicted target: $382.5000
+  Bull target:      $398.6225
+  Bear target:      $379.1775
+  Actual at expiry: $400.6200
+  Price change:     3.01%
+  Target gap:       4.66%
+  Prob up/down:     45 / 55
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Hurst=0.538 random walk — need 65%+ confidence
+  Regime:           VOLATILE
+  Hurst:            0.5380653663789547
+  Quant verdict:    SELL 70%
+  News verdict:     bearish (-35)
+  Primary reason:   Overbought RSI(79.4) combined with negative market autocorrelation and bearish sentiment creates high probability of mean-reversion downward.
+  R1 Reasoning:
+    Quant found overbought RSI(79.4) with negative autocorrelation suggesting mean-reversion in a volatile regime (Hurst 0.538, entropy 0.987). News found bearish sentiment (-35/100) driven by Tesla's poor Q2 earnings analysis and Fed uncertainty creating risk-off conditions. Historical evidence shows that in high-entropy markets with overbought RSI and negative sentiment, TSLA typically experiences 2-4% pullbacks within 24 hours. Final reasoning: Both agents point downward with quant providing stronger technical evidence, though news macro warning reduces confidence from quant's 70% to 62%.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#72  GC=F | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:23:12 PM UTC
+  Expires at:       4/17/2026, 5:23:12 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $4904.1001
+  Predicted target: $4902.2663
+  Bull target:      $4933.5247
+  Bear target:      $4874.6755
+  Actual at expiry: $4849.3999
+  Price change:     -1.12%
+  Target gap:       1.08%
+  Prob up/down:     48 / 52
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5029720405003442
+  Quant verdict:    NO_TRADE 50%
+  News verdict:     bullish (65)
+  Primary reason:   High market entropy (0.870) combined with conflicting technical signals and a macro warning creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found a high-entropy (0.870) environment with conflicting signals: bullish MACD and Ichimoku but overbought RSI (75.8) and a Doji pattern suggesting indecision. News found strong bullish sentiment (+65/100) from Fed rate cut expectations and record highs. Historical evidence shows that in high-entropy trending markets (Hurst 0.503), conflicting signals with Doji patterns typically lead to consolidation rather than decisive moves. The macro warning about delayed data reduces confidence further, making this a noisy environment without clear directional conviction.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#73  GC=F | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:23:51 PM UTC
+  Expires at:       4/17/2026, 9:23:51 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       62%
+  Entry price:      $4907.7002
+  Predicted target: $4928.5000
+  Bull target:      $4956.7772
+  Bear target:      $4858.6232
+  Actual at expiry: $4849.3999
+  Price change:     -1.19%
+  Target gap:       1.61%
+  Prob up/down:     55 / 45
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Hurst=0.505 random walk — need 65%+ confidence
+  Regime:           TRENDING
+  Hurst:            0.5045389748040529
+  Quant verdict:    BUY 70%
+  News verdict:     bullish (65)
+  Primary reason:   Historical patterns in high-entropy, risk-off regimes show gold can extend gains when bullish momentum aligns with safe-haven catalysts, despite overbought technicals.
+  R1 Reasoning:
+    Quant analysis shows strong bullish momentum with MACD bullish, CMF +0.275, and price above VWAP, though RSI at 76.9 suggests overbought conditions. News sentiment is bullish (+65) with Fed rate pause signals and geopolitical tensions supporting safe-haven demand. Historical evidence from similar high-entropy (0.877), risk-off regimes shows gold tends to grind higher despite overbought readings when both technical momentum and fundamental catalysts align, though macro warnings about delayed data reduce conviction. The tiebreaker favors a cautious buy given the convergence of trending indicators with supportive fundamentals.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#74  GC=F | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:24:27 PM UTC
+  Expires at:       4/18/2026, 1:24:27 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $4905.7002
+  Predicted target: $4905.7002
+  Bull target:      $5028.3427
+  Bear target:      $4783.0577
+  Actual at expiry: $4857.6001
+  Price change:     -0.98%
+  Target gap:       0.98%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5040795960412487
+  Quant verdict:    NO_TRADE 25%
+  News verdict:     bullish (65)
+  Primary reason:   High entropy (0.943) combined with conflicting agent signals creates insufficient confidence for a directional trade in this noisy market environment.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.943), Doji pattern requiring confirmation, and only 48% probability up despite bullish MACD and Ichimoku positioning. News found strong dovish Fed sentiment (+65/100) and safe-haven demand from geopolitical tensions. Historical evidence shows that during high-entropy, risk-off regimes with Hurst near 0.5, conflicting signals typically lead to whipsaw patterns rather than sustained moves. Final reasoning: The quant's uncertainty metrics override news sentiment due to market noise and lack of directional conviction.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#75  GC=F | NO_TRADE | 72H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:25:36 PM UTC
+  Expires at:       4/20/2026, 1:25:36 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $4904.0000
+  Predicted target: $4904.0000
+  Bull target:      $5198.2400
+  Bear target:      $4609.7600
+  Actual at expiry: N/A
+  Price change:     N/A
+  Target gap:       N/A
+  Prob up/down:     46 / 54
+  Outcome:          PENDING
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5048119392232867
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     bullish (65)
+  Primary reason:   High market entropy (0.936) combined with conflicting agent signals and a news macro warning reduces confidence below the 45% threshold required for trading.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.936) and mixed signals - bullish MACD but neutral Hurst (0.505) and RSI at 67.7 suggesting caution. News sentiment is bullish (+65/100) due to Fed dovishness and geopolitical safe-haven demand, but includes a macro warning about delayed data releases. Historical evidence in similar high-entropy, risk-off environments with conflicting signals shows poor directional reliability. The quant's NO_TRADE recommendation combined with the news macro warning and historical unreliability of signals in this regime creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#76  CL=F | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:26:13 PM UTC
+  Expires at:       4/17/2026, 5:26:13 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $81.3700
+  Predicted target: $81.0237
+  Bull target:      $81.8582
+  Bear target:      $80.8818
+  Actual at expiry: $84.0000
+  Price change:     3.23%
+  Target gap:       3.66%
+  Prob up/down:     45 / 55
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5480424525178595
+  Quant verdict:    SELL 60%
+  News verdict:     bullish (65)
+  Primary reason:   Historical Monte Carlo probability (45% up) confirms quant's bearish bias while news catalysts lack sufficient statistical support in this noisy, high-entropy market.
+  R1 Reasoning:
+    Quant found bearish signals with negative CMF (-0.527), Z-score (-2.42), and MACD/RSI confirming downtrend in a volatile market (entropy 0.936). News found bullish sentiment (+65) from dovish Fed signals and Middle East supply risks, though with a macro warning about US-Iran talks. Historical Monte Carlo simulations show only 45% probability of upward movement, matching quant's bearish bias, and the market's Hurst exponent (0.548) indicates trending behavior where momentum indicators should be trusted over mean reversion. With high entropy requiring extra confidence, conflicting signals, and a macro warning reducing confidence, no clear directional edge emerges.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#77  CL=F | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:27:14 PM UTC
+  Expires at:       4/17/2026, 9:27:14 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $81.5800
+  Predicted target: $81.5800
+  Bull target:      $82.3958
+  Bear target:      $80.7642
+  Actual at expiry: $84.0000
+  Price change:     2.97%
+  Target gap:       2.97%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5429724159523065
+  Quant verdict:    NO_TRADE 10%
+  News verdict:     bullish (65)
+  Primary reason:   High entropy (0.949) combined with quant's bearish indicators conflicting with bullish news creates an unreliable signal environment where historical evidence shows news-driven moves often reverse in such conditions.
+  R1 Reasoning:
+    Quant Agent shows a NO_TRADE signal with 10% confidence due to high entropy (0.949), bearish MACD, negative CMF (-0.519), and price below VWAP (-8.65%), indicating a noisy, volatile environment with slight downward bias. News Agent shows bullish sentiment (+65/100) based on Fed rate cut signals and geopolitical supply risks from Iran/Russia, but includes a macro warning about US-Iran nuclear talks. Historical evidence shows that in high-entropy regimes (>0.6) with Hurst > 0.45 (0.543), news-driven rallies often fail when quant indicators show strong bearish divergence and price below VWAP. Therefore, the conflicting signals and historical precedent of failed bullish news in high-volatility environments warrant caution.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#78  CL=F | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:28:04 PM UTC
+  Expires at:       4/18/2026, 1:28:04 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $81.5600
+  Predicted target: $81.5600
+  Bull target:      $83.5990
+  Bear target:      $79.5210
+  Actual at expiry: $83.8500
+  Price change:     2.81%
+  Target gap:       2.81%
+  Prob up/down:     46 / 54
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.47378565590821975
+  Quant verdict:    SELL 40%
+  News verdict:     bullish (65)
+  Primary reason:   Historical Monte Carlo simulations showing only 46% probability of upward movement failed to resolve the quant-news conflict in this high-entropy environment with macro warnings.
+  R1 Reasoning:
+    Quant said SELL because RSI at 19.4 shows extreme oversold conditions with bearish MACD and negative CMF, but Hurst at 0.474 indicates trending rather than mean-reverting behavior, reducing RSI reliability. News said BULLISH because dovish Fed comments and Middle East supply risks create upward pressure, though macro warnings add uncertainty. Historical evidence from Monte Carlo simulations shows only 46% probability of upward movement with median at the bearish boundary, failing to resolve the conflict. With high entropy (0.970) indicating noisy markets, macro warnings requiring confidence reduction, and no clear historical tiebreaker, the signal conflict remains unresolved.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#79  CL=F | NO_TRADE | 72H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:29:46 PM UTC
+  Expires at:       4/20/2026, 1:29:46 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE  (original: SELL)
+  Confidence:       60%
+  Entry price:      $81.3500
+  Predicted target: $78.5000
+  Bull target:      $86.2310
+  Bear target:      $76.4690
+  Actual at expiry: N/A
+  Price change:     N/A
+  Target gap:       N/A
+  Prob up/down:     34 / 66
+  Outcome:          PENDING
+  Target hit:       N/A
+  Gate reason:      Hurst=0.474 random walk — need 65%+ confidence
+  Regime:           VOLATILE
+  Hurst:            0.47371897658900247
+  Quant verdict:    SELL 70%
+  News verdict:     bullish (65)
+  Primary reason:   Historical Monte Carlo simulations showing only 34% probability of upward movement combined with extreme bearish quant indicators (Z-score -2.75, RSI 19.3) outweigh the bullish news sentiment in this high-entropy environment.
+  R1 Reasoning:
+    Quant found extreme bearish signals with RSI at 19.3 (oversold but not yet mean-reverting since Hurst is 0.474), negative MACD, and Z-score of -2.75 indicating extreme environment. News found bullish sentiment due to dovish Fed signals and geopolitical supply risks. Historical evidence from Monte Carlo shows only 34% probability of moving up, with bearish 20th percentile at the lower bound of 76.4690. Despite bullish news catalysts, the extreme quant signals and historical probability favor the downside, especially given high entropy (0.970) indicating noisy markets where news sentiment may be less reliable.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#80  SI=F | BUY | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:30:52 PM UTC
+  Expires at:       4/17/2026, 5:30:52 PM UTC
+  Model:            deepseek-v3
+  Decision:         BUY
+  Confidence:       55%
+  Entry price:      $81.6550
+  Predicted target: $81.6927
+  Bull target:      $82.1449
+  Bear target:      $81.1651
+  Actual at expiry: $80.9300
+  Price change:     -0.89%
+  Target gap:       0.93%
+  Prob up/down:     51 / 49
+  Outcome:          WRONG
+  Target hit:       No
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5059186692124156
+  Quant verdict:    BUY 70%
+  News verdict:     bullish (35)
+  Primary reason:   The alignment of bullish technical momentum with supportive monetary policy sentiment, despite overbought RSI, creates a favorable risk-reward for a short-term buy.
+  R1 Reasoning:
+    Quant found bullish momentum with MACD, EMA stack, and VWAP distance supporting upward bias, though RSI at 76.2 suggests overbought conditions. News identified dovish Fed signals and weak dollar supporting commodities, but with geopolitical risk warnings. Historical evidence shows that in similar high-entropy (0.947), risk-on regimes with Hurst near 0.5, silver tends to follow momentum when both quant and sentiment align, though volatility remains elevated. Therefore, I'm taking a cautious buy with reduced confidence due to the macro warning and high entropy noise.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#81  SI=F | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:33:13 PM UTC
+  Expires at:       4/18/2026, 1:33:13 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $81.7200
+  Predicted target: $81.7200
+  Bull target:      $83.7630
+  Bear target:      $79.6770
+  Actual at expiry: $81.7380
+  Price change:     0.02%
+  Target gap:       0.02%
+  Prob up/down:     47 / 53
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4798937404679458
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   The random walk market (Hurst 0.480) combined with high entropy (0.975) and conflicting signals from both quant and news agents creates insufficient confidence for any directional trade.
+  R1 Reasoning:
+    Quant found a random walk market (Hurst 0.480) with high entropy (0.975) and conflicting signals - MACD bullish but RSI at 70.2 suggesting overbought conditions, while price is significantly above VWAP (+5.96%). News found neutral sentiment (+5/100) with conflicting Fed signals creating uncertainty for silver, geopolitical tensions providing some support, and a macro warning about US-Iran nuclear talks. Historical evidence shows that in random walk regimes with high entropy and conflicting catalysts, market direction becomes unpredictable with increased noise. Therefore, the combination of random walk dynamics, high uncertainty from both technical and fundamental perspectives, and the macro warning creates an environment unsuitable for directional bets.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#82  SI=F | NO_TRADE | 72H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:33:52 PM UTC
+  Expires at:       4/20/2026, 1:33:52 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $81.6850
+  Predicted target: $81.6850
+  Bull target:      $86.5861
+  Bear target:      $76.7839
+  Actual at expiry: N/A
+  Price change:     N/A
+  Target gap:       N/A
+  Prob up/down:     42 / 58
+  Outcome:          PENDING
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4795360370397466
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (35)
+  Primary reason:   High entropy random walk market with conflicting signals and insufficient confidence for directional exposure.
+  R1 Reasoning:
+    Quant analysis shows a random walk market (Hurst: 0.480) with high entropy (0.981) and bearish probability bias (58% down), despite some bullish indicators like MACD and Ichimoku. News sentiment is bullish (+35) due to Fed rate cut expectations and weak dollar support. Historical evidence shows that in random walk regimes with high entropy, news-driven rallies often fail without technical confirmation, especially when RSI is elevated (69.8) near overbought territory. The combination of conflicting signals, high noise, and macro warnings creates unacceptable uncertainty for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#83  XOM | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:34:42 PM UTC
+  Expires at:       4/17/2026, 5:34:42 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $144.6900
+  Predicted target: $144.6900
+  Bull target:      $145.5581
+  Bear target:      $143.8219
+  Actual at expiry: $146.4400
+  Price change:     1.21%
+  Target gap:       1.21%
+  Prob up/down:     51 / 49
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.412310676406082
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (25)
+  Primary reason:   The mean-reverting market structure (Hurst 0.412) with high entropy (0.960) and FOMC macro warning creates too much noise for the bullish sentiment to overcome technical resistance, resulting in genuine signal conflict without historical resolution.
+  R1 Reasoning:
+    Quant said NO_TRADE because Ichimoku below cloud, VWAP -5.02% dist, and Hurst 0.412 indicates mean reversion with RSI at 34.3 not extreme enough. News said bullish due to analyst upgrades and Fed rate cut expectations despite risk-off regime. Historical evidence shows mean-reverting markets with high entropy (0.960) and FOMC warnings produce whipsaw patterns where sentiment catalysts fail to overcome technical resistance. Therefore, the conflicting signals with no clear historical resolution and reduced confidence from macro warning create insufficient edge.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#84  XOM | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:36:22 PM UTC
+  Expires at:       4/17/2026, 9:36:22 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $143.3300
+  Predicted target: $143.0260
+  Bull target:      $144.7633
+  Bear target:      $141.8967
+  Actual at expiry: $146.4400
+  Price change:     2.17%
+  Target gap:       2.38%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.4297521765378874
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   Extreme market entropy (0.966) combined with conflicting Fed policy signals creates an environment where directional probability is essentially random (48% up vs 52% down).
+  R1 Reasoning:
+    Quant said NO_TRADE because market entropy is extremely high (0.966), Ichimoku is bearish below cloud, and Hurst at 0.43 indicates mean reversion with RSI oversold at 31. News said neutral sentiment (+5/100) with conflicting Fed signals creating policy uncertainty and a risk-off regime. Historical evidence shows mean-reverting markets with high entropy and conflicting macro signals typically produce choppy, directionless price action within tight ranges. Therefore, despite oversold RSI conditions, the combination of extreme noise, conflicting catalysts, and lack of clear directional bias makes any trade statistically unreliable.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#85  XOM | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:37:10 PM UTC
+  Expires at:       4/18/2026, 1:37:10 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $143.5650
+  Predicted target: $143.5650
+  Bull target:      $147.1541
+  Bear target:      $139.9759
+  Actual at expiry: $146.4400
+  Price change:     2.00%
+  Target gap:       2.00%
+  Prob up/down:     46 / 54
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5678383707306696
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   Confidence below threshold (40% < 45%) due to high market noise (entropy 0.966), conflicting quant/news signals, and FOMC macro warning reducing conviction.
+  R1 Reasoning:
+    Quant analysis shows bearish momentum with price below VWAP (-10.45%), oversold RSI (23.9), and negative autocorrelation (-0.238), but Hurst at 0.568 indicates trending rather than mean-reverting behavior. News sentiment is neutral (+5/100) with mixed catalysts: Fed uncertainty offset by positive XOM analyst forecasts in a risk-off environment. Historical evidence shows that during high entropy (0.966) markets with Fed macro warnings, conflicting signals rarely resolve cleanly within 24h. Therefore, despite partial agent agreement on uncertainty, confidence is insufficient for directional trade given conflicting momentum/sentiment signals and macro risk.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#86  LMT | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:37:41 PM UTC
+  Expires at:       4/17/2026, 5:37:41 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       38%
+  Entry price:      $605.6950
+  Predicted target: $605.8216
+  Bull target:      $609.3292
+  Bear target:      $602.0608
+  Actual at expiry: $592.1900
+  Price change:     -2.23%
+  Target gap:       2.25%
+  Prob up/down:     51 / 49
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4899257856605169
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.93) combined with an earnings macro warning creates unacceptable uncertainty for directional trading.
+  R1 Reasoning:
+    Quant found a trending market with high uncertainty (entropy 0.93) and conflicting signals: MACD bullish but RSI neutral and price below Ichimoku cloud, resulting in NO_TRADE with only 20% confidence. News found neutral sentiment (+5/100) with conflicting Fed signals and an earnings macro warning, creating risk-off conditions. Historical evidence shows that in high-entropy environments with earnings warnings, price action tends to be choppy and unpredictable. Therefore, despite Monte Carlo showing 51% probability up, the combination of high noise, conflicting signals, and upcoming earnings creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#87  LMT | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:38:40 PM UTC
+  Expires at:       4/17/2026, 9:38:40 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $603.0850
+  Predicted target: $602.5096
+  Bull target:      $609.1159
+  Bear target:      $597.0542
+  Actual at expiry: $592.1900
+  Price change:     -1.81%
+  Target gap:       1.71%
+  Prob up/down:     47 / 53
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.4688114427085046
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.934) combined with conflicting technical signals and neutral news sentiment creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a bearish technical picture with price below VWAP (-2.22%), bearish MACD, and oversold RSI at 33.7, but high entropy (0.934) indicates noisy market conditions requiring strong confirmation. News sentiment is neutral (+5/100) with mixed Fed signals creating uncertainty for defense stocks and no breaking catalysts. Historical evidence from Monte Carlo simulations shows only 47% probability of upward movement, matching quant's assessment, and the Hurst exponent at 0.469 indicates a slightly mean-reverting regime where oversold RSI might not signal immediate reversal. The combination of noisy markets, conflicting signals, and low confidence from both agents creates insufficient conviction for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#88  LMT | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:39:13 PM UTC
+  Expires at:       4/18/2026, 1:39:13 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $602.4550
+  Predicted target: $602.0282
+  Bull target:      $617.5164
+  Bear target:      $587.3936
+  Actual at expiry: $592.1900
+  Price change:     -1.70%
+  Target gap:       1.63%
+  Prob up/down:     50 / 50
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5025274923094374
+  Quant verdict:    NO_TRADE 20%
+  News verdict:     neutral (5)
+  Primary reason:   Imminent earnings release combined with high market entropy (0.975) and conflicting technical signals creates unacceptable uncertainty for any directional trade.
+  R1 Reasoning:
+    Quant analysis shows a bearish technical setup with Ichimoku below cloud and MACD bearish, but conflicting signals from doji candle and near-neutral RSI indicate high uncertainty. News sentiment is neutral with mixed Fed signals and an imminent earnings warning, creating macro headwinds. Historical evidence from similar high-entropy, earnings-approaching periods shows random walk behavior with no directional edge. The combination of technical indecision, earnings risk, and high entropy creates an environment where any trade would be speculative noise rather than informed action.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#89  RTX | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:39:54 PM UTC
+  Expires at:       4/17/2026, 5:39:54 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $196.9200
+  Predicted target: $196.9200
+  Bull target:      $198.1015
+  Bear target:      $195.7385
+  Actual at expiry: $196.4200
+  Price change:     -0.25%
+  Target gap:       0.25%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5681702960942872
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy (0.922) combined with conflicting signals and macro warnings creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with high entropy (0.922) and bearish technicals (MACD bear, below cloud, negative CMF), suggesting no clear directional edge. News sentiment is bullish (+35) based on Fed rate cuts and geopolitical escalation favoring defense stocks. Historical evidence shows that during high-entropy, risk-off regimes with macro warnings, news catalysts often fail to overcome technical resistance, especially when price is below VWAP (-1.83%). The conflicting signals combined with low confidence and macro warnings create an unacceptable risk-reward scenario.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#90  RTX | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:40:27 PM UTC
+  Expires at:       4/17/2026, 9:40:27 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $197.3100
+  Predicted target: $197.3100
+  Bull target:      $199.2831
+  Bear target:      $195.3369
+  Actual at expiry: $196.4200
+  Price change:     -0.45%
+  Target gap:       0.45%
+  Prob up/down:     52 / 48
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5727690723369749
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy (0.934) combined with conflicting agent signals and FOMC macro warnings reduces confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant said NO_TRADE because the market is ranging with high entropy (0.934), Ichimoku below cloud, and MACD bearish despite neutral RSI at 44.1. News said bullish because Fed rate cut expectations and geopolitical tensions favor defense stocks. Historical evidence shows that in high-entropy environments with Hurst near 0.5, news catalysts often fail to overcome technical resistance, especially with FOMC warnings present. Therefore, the conflicting signals and reduced confidence due to macro warnings create insufficient edge for a trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#91  RTX | NO_TRADE | 24H
+--------------------------------------------------------------------------------
+  Predicted at:     4/17/2026, 1:41:17 PM UTC
+  Expires at:       4/18/2026, 1:41:17 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $197.5250
+  Predicted target: $197.5250
+  Bull target:      $202.4631
+  Bear target:      $192.5869
+  Actual at expiry: $196.4200
+  Price change:     -0.56%
+  Target gap:       0.56%
+  Prob up/down:     45 / 55
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5341718814616986
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy (0.969) combined with conflicting agent signals and macro warnings creates insufficient confidence below the 45% threshold.
+  R1 Reasoning:
+    Quant analysis shows bearish momentum (MACD bear, RSI 33.6) with high uncertainty (entropy 0.969) and no clear trend (Hurst 0.534). News sentiment is bullish (+35) due to Fed rate cuts and geopolitical escalation supporting defense stocks. Historical evidence shows that during high entropy regimes (>0.6) with conflicting signals, RTX tends to exhibit choppy, range-bound behavior rather than directional moves. The combination of quant uncertainty, news macro warnings (FOMC + Iran), and historical patterns of consolidation during noisy markets creates insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#92  ETH | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:49:08 AM UTC
+  Expires at:       4/18/2026, 11:49:08 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $2362.3301
+  Predicted target: $2362.5055
+  Bull target:      $2365.9391
+  Bear target:      $2358.9818
+  Actual at expiry: $2357.9299
+  Price change:     -0.19%
+  Target gap:       0.19%
+  Prob up/down:     52 / 48
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5134949887541954
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High entropy (0.904) combined with conflicting signals and upcoming macro warnings creates insufficient confidence for any directional position.
+  R1 Reasoning:
+    Quant analysis shows a trending market (Hurst 0.513) with high entropy (0.904) and conflicting signals - MACD bearish but RSI oversold (18.8) and positive CMF. News sentiment is neutral (+5/100) with conflicting Fed signals creating offsetting pressures and macro warnings about upcoming data. Historical evidence in similar high-entropy, conflicting-signal environments shows random walk behavior with minimal directional bias. The combination of high market noise, conflicting indicators, and upcoming macro events creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#93  ETH | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:49:51 AM UTC
+  Expires at:       4/18/2026, 2:49:51 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $2362.6101
+  Predicted target: $2362.6101
+  Bull target:      $2384.8711
+  Bear target:      $2339.8887
+  Actual at expiry: $2364.0100
+  Price change:     0.06%
+  Target gap:       0.06%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5761977375860631
+  Quant verdict:    SELL 70%
+  News verdict:     neutral (0)
+  Primary reason:   Genuine signal conflict between quant's bearish momentum indicators and oversold RSI mean reversion potential, combined with neutral news sentiment, results in confidence below the 45% threshold for taking a position.
+  R1 Reasoning:
+    Quant found bearish signals with low RSI (11.2), negative MACD, and trending regime (Hurst 0.576), suggesting 52% probability down. News found neutral sentiment with conflicting Fed signals creating offsetting pressures and no clear directional bias. Historical evidence shows that in trending regimes with high entropy (0.947), RSI extremes below 15 often precede mean reversion bounces, conflicting with momentum indicators. Final reasoning: The quant's bearish momentum signals conflict with oversold RSI mean reversion potential, while news provides no directional clarity, creating genuine signal conflict below confidence threshold.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#94  SOL | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:50:21 AM UTC
+  Expires at:       4/18/2026, 11:50:21 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $86.9300
+  Predicted target: $86.9300
+  Bull target:      $87.0823
+  Bear target:      $86.8017
+  Actual at expiry: $86.7400
+  Price change:     -0.22%
+  Target gap:       0.22%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.4665906907462481
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (25)
+  Primary reason:   High market entropy (0.918) combined with conflicting quant/news signals and Fed macro warnings creates too much uncertainty for a confident directional trade.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.918) and bearish technical indicators (RSI 26.2, MACD bear, below Ichimoku cloud). News found bullish sentiment (+25/100) due to SEC classifying SOL as a commodity, though with macro warnings about Fed uncertainty. Historical evidence shows that in high-entropy markets with Hurst near 0.5, regulatory news often creates short-term volatility but rarely overcomes technical range constraints. Final reasoning: The conflicting signals combined with high noise and macro warnings create insufficient confidence for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#95  SOL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:51:01 AM UTC
+  Expires at:       4/18/2026, 2:51:01 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $86.8400
+  Predicted target: $86.8597
+  Bull target:      $87.7757
+  Bear target:      $85.9924
+  Actual at expiry: $86.8600
+  Price change:     0.02%
+  Target gap:       0.00%
+  Prob up/down:     51 / 49
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.536921124883996
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     bullish (35)
+  Primary reason:   High market entropy (0.876) combined with conflicting agent signals and upcoming macro events creates unacceptable uncertainty for a directional trade.
+  R1 Reasoning:
+    Quant said NO_TRADE because the market is ranging with high entropy (0.876), negative CMF (-0.239), and price below Ichimoku cloud, indicating weak directional momentum despite oversold RSI at 18. News said bullish due to SEC regulatory clarity classifying SOL as a commodity and dovish Fed signals creating favorable macro conditions. Historical evidence shows that during high entropy regimes (>0.6) with upcoming macro events (CPI/PCE/FOMC), conflicting signals typically resolve with sideways movement or false breakouts. Therefore, the conflicting signals combined with macro warnings and insufficient confidence warrant standing aside.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#96  BNB | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:51:37 AM UTC
+  Expires at:       4/18/2026, 11:51:37 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $634.4800
+  Predicted target: $634.4493
+  Bull target:      $635.2771
+  Bear target:      $633.6654
+  Actual at expiry: $633.9300
+  Price change:     -0.09%
+  Target gap:       0.08%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5515351069381674
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.918) combined with conflicting signals and macro warnings creates insufficient probability edge for a directional trade.
+  R1 Reasoning:
+    Quant analysis shows a trending market (Hurst 0.552) with bearish momentum (MACD bear, below cloud, -1.38% VWAP dist) but extreme oversold RSI (27.5) suggesting potential mean reversion, though high entropy (0.918) indicates noisy conditions requiring strong confirmation. News sentiment is neutral (+5/100) with mixed catalysts: Fed's potential rate cuts offset by SEC regulatory uncertainty and risk-off regime. Historical evidence shows that in high-entropy trending markets with conflicting signals and macro warnings, the probability edge is minimal (49% up vs 51% down per Monte Carlo). Therefore, despite RSI extremes suggesting potential bounce, the combination of high uncertainty, agent conflict, and macro warnings justifies standing aside.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#97  BNB | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:52:06 AM UTC
+  Expires at:       4/18/2026, 2:52:06 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       42%
+  Entry price:      $634.3200
+  Predicted target: $634.3200
+  Bull target:      $640.0378
+  Bear target:      $628.4744
+  Actual at expiry: $634.3200
+  Price change:     0.00%
+  Target gap:       0.00%
+  Prob up/down:     51 / 49
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5513872863431363
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.937) combined with offsetting news catalysts and low directional probability spread (51%/49%) creates insufficient confidence for any trade.
+  R1 Reasoning:
+    Quant analysis shows a ranging market with low directional conviction (51% up vs 49% down), Ichimoku inside cloud, and high entropy (0.937) indicating noisy conditions. News sentiment is neutral with conflicting catalysts (Fed rate cut hints vs SEC enforcement) and a macro warning about upcoming data. Historical evidence shows similar high-entropy, low-confluence environments typically produce whipsaw movements without clear direction. The combination of low quant confidence, offsetting news catalysts, and high noise creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#98  XRP | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:53:05 AM UTC
+  Expires at:       4/18/2026, 11:53:05 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $1.4366
+  Predicted target: $1.4368
+  Bull target:      $1.4394
+  Bear target:      $1.4337
+  Actual at expiry: $1.4377
+  Price change:     0.08%
+  Target gap:       0.06%
+  Prob up/down:     52 / 48
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5127041906091591
+  Quant verdict:    NO_TRADE 25%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.932) combined with macro uncertainty creates insufficient confidence for a directional trade within the tight valid range.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.932) and insufficient momentum confirmation, suggesting indecisiveness despite a slight 52% probability up. News found mixed Fed signals creating macro uncertainty (+5 neutral sentiment) with regulatory clarity for other cryptos but no direct XRP resolution. Historical evidence shows that in high-entropy, risk-off environments with conflicting macro signals, price action tends to be choppy and unreliable for directional trades. Therefore, the combination of noisy quant signals, macro uncertainty, and minimal edge justifies standing aside.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#99  XRP | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:53:36 AM UTC
+  Expires at:       4/18/2026, 2:53:36 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $1.4375
+  Predicted target: $1.4372
+  Bull target:      $1.4531
+  Bear target:      $1.4203
+  Actual at expiry: $1.4377
+  Price change:     0.01%
+  Target gap:       0.03%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5411630965455393
+  Quant verdict:    NO_TRADE 10%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.965) combined with a macro warning and conflicting quant/news signals creates insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found a ranging market with high entropy (0.965) and bearish indicators (MACD bear, RSI oversold at 19.7, CMF -0.330), though Hurst at 0.541 suggests trending behavior. News found neutral sentiment (+5/100) with mixed Fed signals offset by positive SEC regulatory clarity, but includes a macro warning about geopolitical dependencies. Historical evidence shows that in high-entropy environments with neutral catalysts, price typically oscillates within the range without clear directional conviction. Therefore, despite partial agent agreement on neutral conditions, confidence is too low (35%) due to high noise, conflicting signals, and the macro warning reducing confidence further.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#100  DOGE | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:54:19 AM UTC
+  Expires at:       4/18/2026, 11:54:19 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       32%
+  Entry price:      $0.0965
+  Predicted target: $0.0965
+  Bull target:      $0.0967
+  Bear target:      $0.0963
+  Actual at expiry: $0.0960
+  Price change:     -0.55%
+  Target gap:       0.56%
+  Prob up/down:     49 / 51
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.49294546010937457
+  Quant verdict:    NO_TRADE 10%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy (0.892) combined with conflicting macro signals creates insufficient directional conviction within the tight price range.
+  R1 Reasoning:
+    Quant said NO_TRADE because the market is ranging with high entropy (0.892), bearish MACD, extremely oversold RSI (10.2), and price below Ichimoku cloud, indicating a noisy environment requiring strong confirmation. News said neutral sentiment (+5/100) with risk-off regime and mixed Fed signals creating macro uncertainty, while SEC commodity clarifications provide only indirect tailwinds for DOGE. Historical evidence shows that in high-entropy, ranging markets with conflicting macro signals, price action tends to oscillate within tight bands without clear directional conviction. Therefore, the combination of technical noise, weak sentiment, and upcoming Fed communications creates insufficient edge for a directional trade.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#101  DOGE | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 10:56:55 AM UTC
+  Expires at:       4/18/2026, 2:56:55 PM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       35%
+  Entry price:      $0.0965
+  Predicted target: $0.0965
+  Bull target:      $0.0977
+  Bear target:      $0.0954
+  Actual at expiry: $0.0962
+  Price change:     -0.35%
+  Target gap:       0.32%
+  Prob up/down:     49 / 51
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           VOLATILE
+  Hurst:            0.5595050273038645
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   The combination of high market entropy (0.964), a macro warning from news, and quant's low confidence (30%) creates insufficient signal quality for a directional trade.
+  R1 Reasoning:
+    Quant found a volatile regime with bearish technicals (MACD bear, RSI extremely oversold at 14, CMF negative) but Hurst at 0.560 indicates trending behavior, not mean reversion. News found neutral sentiment (+5/100) with mixed Fed signals creating uncertainty and a macro warning present. Historical evidence shows that in high entropy (0.964) environments with conflicting Fed guidance, DOGE tends to exhibit choppy, directionless price action. Therefore, despite the oversold RSI, the combination of high uncertainty, conflicting signals, and macro warnings makes any directional trade too risky.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#102  BTC | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 11:26:54 AM UTC
+  Expires at:       4/18/2026, 3:26:54 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       20%
+  Entry price:      $76104.0000
+  Predicted target: $76102.2930
+  Bull target:      $76571.3423
+  Bear target:      $75605.6028
+  Actual at expiry: $76227.9766
+  Price change:     0.16%
+  Target gap:       0.17%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5834518739926845
+  Quant verdict:    NO_TRADE 30%
+  News verdict:     neutral (5)
+  Primary reason:   High market entropy and neutral catalysts provide insufficient confidence for a directional trade.
+  R1 Reasoning:
+    Quant found high entropy (0.914) and low confluence with mixed signals: oversold RSI (18.3) but bearish MACD, Ichimoku inside cloud indicating no clear trend. News found neutral sentiment (+5/100) due to conflicting Fed signals and SEC regulatory clarity, with a macro warning elevating uncertainty. Historical evidence from Monte Carlo simulations shows no statistical edge, with median price near current and 50% probability up. Therefore, with confidence below the 45% threshold after adjusting for macro warning, no trade is justified.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#103  BTC | NO_TRADE | 1H
+--------------------------------------------------------------------------------
+  Predicted at:     4/18/2026, 11:31:15 AM UTC
+  Expires at:       4/18/2026, 12:31:15 PM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       10%
+  Entry price:      $76073.9922
+  Predicted target: $76071.4178
+  Bull target:      $76147.7568
+  Bear target:      $75999.1635
+  Actual at expiry: $76189.3828
+  Price change:     0.15%
+  Target gap:       0.16%
+  Prob up/down:     49 / 51
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5122883659366028
+  Quant verdict:    SELL 20%
+  News verdict:     neutral (5)
+  Primary reason:   Quant confidence is too low (20%) and further reduced by macro warning, falling below the 45% threshold for trade execution.
+  R1 Reasoning:
+    Quant found bearish momentum with oversold RSI (25.5) and high entropy (0.930), but with low confidence (20%). News found neutral sentiment (+5/100) due to conflicting Fed signals and a positive SEC classification that lacks immediate impact. Historical patterns indicate that oversold, high-entropy markets with conflicting signals offer no clear directional edge. Therefore, NO_TRADE is warranted due to low confidence and agent conflict.
+  Indicators:       MISSING
+
+--------------------------------------------------------------------------------
+#104  BTC | BUY | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:51:51 PM UTC
+  Expires at:       4/24/2026, 1:51:51 AM UTC
+  Model:            deepseek-r1
+  Decision:         BUY
+  Confidence:       50%
+  Entry price:      $78029.6328
+  Predicted target: $78035.0513
+  Bull target:      $78861.0000
+  Bear target:      $77743.0000
+  Actual at expiry: $77926.2266
+  Price change:     -0.13%
+  Target gap:       0.14%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       No
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5794392882409571
+  Quant verdict:    BUY 65%
+  News verdict:     neutral (0)
+  Primary reason:   ML model BUY signal with 65% confidence is the primary signal and no conflicting breaking news warrants a direction change.
+  R1 Reasoning:
+    Quant model detects a trending market with above-cloud Ichimoku and positive CMF, supporting a bullish stance despite a doji candle. News sentiment is neutral with macro uncertainty from Fed rate hike speculation and regulatory risks, but no overriding bearish catalyst. Historically, BTC has shown resilience near VWAP with neutral positioning, allowing the ML's 65% confidence buy signal to prevail. Final decision upholds the ML direction as primary, with no breaking news to override.
+  --- Indicators ---
+  RSI14=52.443411575651375  StochK=60.38337589790727  MACD=-6.57536839320572
+  BB=0.6237871019398279  ATR=486.6997767857143  VolR=0
+  Trend=0.000035818912115944746  Hurst=0.5794392882409571  Entropy=0.9342511662241263
+  Regime=TRENDING  VWAP=0.0033585169555049713  CMF=0.08627555635498936
+  Supertrend=true  Ichimoku=true
+  Momentum=0.5155841629739264  Autocorr=-0.009626495618504776  Zscore=0.495148669450663
+
+--------------------------------------------------------------------------------
+#105  BTC | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:52:54 PM UTC
+  Expires at:       4/24/2026, 5:52:54 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       30%
+  Entry price:      $78033.1875
+  Predicted target: $78519.0000
+  Bull target:      $79593.8513
+  Bear target:      $76472.5237
+  Actual at expiry: $77915.2813
+  Price change:     -0.15%
+  Target gap:       0.77%
+  Prob up/down:     48 / 52
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 30% < 38%
+  Regime:           TRENDING
+  Hurst:            0.5794263796975941
+  Quant verdict:    BUY 65%
+  News verdict:     bearish (-30)
+  Primary reason:   ML model's bullish signal with 65% confidence overrides bearish news sentiment due to decision protocol.
+  R1 Reasoning:
+    Quant agent detected bullish momentum from positive CMF and supertrend, with Hurst above 0.5 indicating trending behavior. News agent flagged bearish sentiment due to Fed rate hike signals and risk-off macro environment. Monte Carlo simulations show a near-equal probability split (48% up, 52% down), aligning with the news but conflicting with quant's conviction. Per protocol, the ML ensemble with >55% confidence dictates a BUY, but the bearish news context reduces final confidence to 55%.
+  --- Indicators ---
+  RSI14=52.5170850872677  StochK=60.58845185432763  MACD=-6.789474325787889
+  BB=0.6280833887387599  ATR=486.09095982142856  VolR=0
+  Trend=0.00003448962995748694  Hurst=0.5794263796975941  Entropy=0.9488809412555684
+  Regime=TRENDING  VWAP=0.008150547550203932  CMF=0.07056149219187659
+  Supertrend=true  Ichimoku=true
+  Momentum=0.5201632116981194  Autocorr=-0.00955931698919427  Zscore=0.5123338186982498
+
+--------------------------------------------------------------------------------
+#106  ETH | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:55:53 PM UTC
+  Expires at:       4/24/2026, 1:55:53 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       20%
+  Entry price:      $2328.9800
+  Predicted target: $2342.0000
+  Bull target:      $2356.9277
+  Bear target:      $2303.8290
+  Actual at expiry: $2318.2200
+  Price change:     -0.46%
+  Target gap:       1.02%
+  Prob up/down:     53 / 47
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 20% < 38%
+  Regime:           TRENDING
+  Hurst:            0.5502858938846238
+  Quant verdict:    BUY 65%
+  News verdict:     bearish (-35)
+  Primary reason:   ML ensemble with 65% confidence and bullish technicals (Hurst, MACD) overrides bearish news sentiment, as per decision rules.
+  R1 Reasoning:
+    Quant agent identifies a bullish trend with strong Hurst momentum and MACD confirmation, signaling upward bias. News agent highlights bearish sentiment from hawkish Fed signals and DeFi regulatory warnings, creating a conflict. Historically, the ML model's validated accuracy of 70% in both bullish and bearish markets supports following its direction over transient news. Thus, the BUY signal is maintained with reduced confidence due to the news headwinds.
+  --- Indicators ---
+  RSI14=45.172233550884975  StochK=73.92409025942946  MACD=0.9910164573072127
+  BB=0.4776229662138611  ATR=17.069248744419642  VolR=0
+  Trend=-0.0006354459955943886  Hurst=0.5502858938846238  Entropy=0.946874186986748
+  Regime=TRENDING  VWAP=-1.4810139000552547  CMF=-0.034971232275233376
+  Supertrend=true  Ichimoku=false
+  Momentum=0.23149059160579136  Autocorr=0.07230701964271259  Zscore=-0.08950457272750194
+
+--------------------------------------------------------------------------------
+#107  ETH | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:56:14 PM UTC
+  Expires at:       4/24/2026, 1:56:14 AM UTC
+  Model:            deepseek-v3
+  Decision:         NO_TRADE
+  Confidence:       70%
+  Entry price:      $2328.9800
+  Predicted target: $2325.8500
+  Bull target:      $2355.7409
+  Bear target:      $2301.0322
+  Actual at expiry: $2318.3799
+  Price change:     -0.46%
+  Target gap:       0.32%
+  Prob up/down:     45 / 55
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           TRENDING
+  Hurst:            0.5502858938846238
+  Quant verdict:    NO_TRADE 70%
+  News verdict:     bearish (-30)
+  Primary reason:   Quant model's neutral NO_TRADE signal (45-55% probability range) aligns with bearish news sentiment, providing no clear directional edge.
+  R1 Reasoning:
+    Quant model indicates high uncertainty with a Doji candle and mixed indicators (MACD bullish but RSI below 50, Ichimoku below cloud, CMF negative), leading to a neutral NO_TRADE signal at 70% confidence. News sentiment is bearish due to Fed hawkish signals and SEC regulatory tightening, which aligns with the quant's hesitation. Historical context shows that such risk-off events often suppress momentum, supporting inactivity. Final reasoning follows ML neutrality under signal conflict, with no strong catalyst to override.
+  --- Indicators ---
+  RSI14=45.172233550884975  StochK=73.92409025942946  MACD=0.9910164573072127
+  BB=0.4776229662138611  ATR=17.069248744419642  VolR=0
+  Trend=-0.0006354459955943886  Hurst=0.5502858938846238  Entropy=0.946874186986748
+  Regime=TRENDING  VWAP=-1.4810139000552547  CMF=-0.034971232275233376
+  Supertrend=true  Ichimoku=false
+  Momentum=0.23149059160579136  Autocorr=0.07230701964271259  Zscore=-0.08950457272750194
+
+--------------------------------------------------------------------------------
+#108  ETH | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:56:47 PM UTC
+  Expires at:       4/24/2026, 5:56:47 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       15%
+  Entry price:      $2328.3601
+  Predicted target: $2345.4700
+  Bull target:      $2374.9273
+  Bear target:      $2281.7929
+  Actual at expiry: $2318.2200
+  Price change:     -0.44%
+  Target gap:       1.17%
+  Prob up/down:     55 / 45
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 15% < 38%
+  Regime:           TRENDING
+  Hurst:            0.5496885282443582
+  Quant verdict:    BUY 60%
+  News verdict:     bearish (-35)
+  Primary reason:   ML ensemble BUY signal with 60% confidence overrides bearish news, as per decision rules.
+  R1 Reasoning:
+    The quant model detects a bullish MACD histogram and trending regime, giving a 60% confidence BUY signal despite mixed indicators and high uncertainty. News sentiment is sharply bearish due to hawkish Fed signals and DeFi security concerns, creating a clear conflict. Historical validation shows the ML model maintains 70% accuracy across market conditions, so the bullish direction is retained but confidence is trimmed to 50% given the negative news context. The final decision is a cautious BUY with a target near 2345, reflecting the quant's primary signal while acknowledging the bearish headwinds.
+  --- Indicators ---
+  RSI14=44.936513743366724  StochK=72.86138882204905  MACD=0.9532848299767096
+  BB=0.4666037771191963  ATR=17.109950474330358  VolR=0
+  Trend=-0.0006391436638355639  Hurst=0.5496885282443582  Entropy=0.9568273036287808
+  Regime=TRENDING  VWAP=-1.50727283729425  CMF=-0.03272268310956217
+  Supertrend=true  Ichimoku=false
+  Momentum=0.2048133337560538  Autocorr=0.07139914301311648  Zscore=-0.13358141213286587
+
+--------------------------------------------------------------------------------
+#109  SOL | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:57:34 PM UTC
+  Expires at:       4/24/2026, 1:57:34 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       25%
+  Entry price:      $85.9500
+  Predicted target: $86.2000
+  Bull target:      $86.9142
+  Bear target:      $85.0350
+  Actual at expiry: $85.5900
+  Price change:     -0.42%
+  Target gap:       0.71%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 25% < 38%
+  Regime:           RANGING
+  Hurst:            0.5939556842159334
+  Quant verdict:    BUY 70%
+  News verdict:     bearish (-25)
+  Primary reason:   ML model with 70% confidence signals BUY, and decision rules mandate following the ML direction when confidence exceeds 55%.
+  R1 Reasoning:
+    Quant detected weak upward momentum with bullish MACD and Supertrend (70% confidence), but news reveals bearish sentiment from Fed hawkish signals and DeFi security concerns. Historical evidence shows the ML ensemble maintains 70% validated accuracy in both bullish and bearish markets, so the primary signal is kept. However, the bearish news context reduces confidence by 10 points to 60%, resulting in a cautious BUY.
+  --- Indicators ---
+  RSI14=53.61442599141923  StochK=67.60230358971137  MACD=0.050275876067152836
+  BB=0.6336598637183151  ATR=0.5328576224190849  VolR=0
+  Trend=-0.0001425917660451288  Hurst=0.5939556842159334  Entropy=0.9653530998080294
+  Regime=RANGING  VWAP=-1.3381456813895514  CMF=-0.002515128465259088
+  Supertrend=true  Ichimoku=false
+  Momentum=0.3330378661242491  Autocorr=0.11847288306258912  Zscore=0.5348639100430969
+
+--------------------------------------------------------------------------------
+#110  SOL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:58:19 PM UTC
+  Expires at:       4/24/2026, 5:58:19 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       55%
+  Entry price:      $85.9300
+  Predicted target: $85.9300
+  Bull target:      $87.6486
+  Bear target:      $84.2114
+  Actual at expiry: $85.5900
+  Price change:     -0.40%
+  Target gap:       0.40%
+  Prob up/down:     48 / 52
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5942524827708366
+  Quant verdict:    NO_TRADE 50%
+  News verdict:     bearish (-35)
+  Primary reason:   ML model shows no clear directional bias (50% confidence) while news adds bearish pressure, but neither is strong enough to justify a trade.
+  R1 Reasoning:
+    Quant analysis reveals a ranging regime with mixed signals (MACD bullish, Ichimoku inside cloud, CMF near zero) and high entropy (0.972), indicating no clear directional conviction. News sentiment turns bearish (-35/100) due to hawkish Fed minutes and macro uncertainty from Kevin Warsh confirmation hearings, pushing risk-off across assets. Historically, such neutral quant signals combined with bearish macro cues have led to sideways-to-slightly-negative price action within a tight range. With ML confidence at 50% and no strong breaking news to override, the safest decision is to refrain from trading.
+  --- Indicators ---
+  RSI14=53.293435058705285  StochK=66.6635369191136  MACD=0.048999737022447476
+  BB=0.6170466526317966  ATR=0.5342859540666852  VolR=0
+  Trend=-0.00014594935577101322  Hurst=0.5942524827708366  Entropy=0.9723721179243193
+  Regime=RANGING  VWAP=-1.3610997937120946  CMF=-0.002515128465259088
+  Supertrend=true  Ichimoku=false
+  Momentum=0.3096949456214678  Autocorr=0.11422611208954102  Zscore=0.46840556998576127
+
+--------------------------------------------------------------------------------
+#111  BNB | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:59:06 PM UTC
+  Expires at:       4/24/2026, 1:59:06 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       40%
+  Entry price:      $638.5600
+  Predicted target: $641.0000
+  Bull target:      $642.9122
+  Bear target:      $633.8206
+  Actual at expiry: $637.2800
+  Price change:     -0.20%
+  Target gap:       0.58%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Ichimoku inside cloud + low confluence (40% < 42%)
+  Regime:           RANGING
+  Hurst:            0.5627839098899774
+  Quant verdict:    BUY 60%
+  News verdict:     bearish (-45)
+  Primary reason:   The ML model's BUY signal with 60% confidence takes precedence over bearish news sentiment.
+  R1 Reasoning:
+    Quant detected bullish MACD and rising OBV slope, but high entropy and low CMF signal caution; news hit bearish due to Fed hawkish minutes and policy uncertainty, while Monte Carlo simulations show a 48% probability of upward movement. Despite the conflicting signals, the ML model's BUY verdict with 60% confidence is the primary driver, so we follow it while reducing confidence to 50% to account for bearish news and simulation downside bias. The price target is set within the valid range using ATR-based realistic projections.
+  --- Indicators ---
+  RSI14=56.37203413407219  StochK=78.43908034049338  MACD=0.4148896626546372
+  BB=0.7969137570304934  ATR=2.7878635951450894  VolR=0
+  Trend=0.00017302802758747322  Hurst=0.5627839098899774  Entropy=0.9228953044099958
+  Regime=RANGING  VWAP=-0.5220151126761703  CMF=-0.19517829154266517
+  Supertrend=true  Ichimoku=false
+  Momentum=0.6809576766793853  Autocorr=0.24137773174085647  Zscore=1.1876952103932232
+
+--------------------------------------------------------------------------------
+#112  BNB | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 9:59:44 PM UTC
+  Expires at:       4/24/2026, 5:59:44 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       20%
+  Entry price:      $638.4100
+  Predicted target: $641.0000
+  Bull target:      $647.9242
+  Bear target:      $628.4320
+  Actual at expiry: $637.2800
+  Price change:     -0.18%
+  Target gap:       0.58%
+  Prob up/down:     55 / 45
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 20% < 38%
+  Regime:           RANGING
+  Hurst:            0.5632609522758103
+  Quant verdict:    BUY 65%
+  News verdict:     bearish (-45)
+  Primary reason:   ML ensemble signal shows clear BUY with 65% confidence, overriding bearish news based on primary rule.
+  R1 Reasoning:
+    Quant agent identified a bullish MACD and EMA stack signal despite ranging conditions, with Hurst indicating trending behavior and RSI neutral. News agent flagged a bearish risk-off sentiment from Fed minutes hinting at rate hikes and policy uncertainty. Historical evidence shows that in similar conflicts, the ML ensemble has performed well with 70% accuracy, so following the quant signal is prudent. The final decision is BUY with reduced confidence due to news headwinds.
+  --- Indicators ---
+  RSI14=56.02594761626157  StochK=76.81369457521828  MACD=0.40239412753815096
+  BB=0.7813730282318481  ATR=2.7928641183035716  VolR=0
+  Trend=0.0001681095230975664  Hurst=0.5632609522758103  Entropy=0.9228953044099958
+  Regime=RANGING  VWAP=-0.5453495105292224  CMF=-0.19928697006712656
+  Supertrend=true  Ichimoku=false
+  Momentum=0.6573035145952513  Autocorr=0.23895546980147783  Zscore=1.125531782379393
+
+--------------------------------------------------------------------------------
+#113  XRP | BUY | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 10:00:30 PM UTC
+  Expires at:       4/24/2026, 2:00:30 AM UTC
+  Model:            deepseek-r1
+  Decision:         BUY
+  Confidence:       45%
+  Entry price:      $1.4346
+  Predicted target: $1.4336
+  Bull target:      $1.4518
+  Bear target:      $1.4174
+  Actual at expiry: $1.4353
+  Price change:     0.05%
+  Target gap:       0.12%
+  Prob up/down:     55 / 45
+  Outcome:          CORRECT
+  Target hit:       No
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5190946060782009
+  Quant verdict:    BUY 55%
+  News verdict:     neutral (0)
+  Primary reason:   The ML model's buy direction, supported by bullish technical indicators and no conflicting news, overrides the neutral probability skew.
+  R1 Reasoning:
+    The quant model detected bullish MACD and Supertrend support in a ranging market, but with high entropy and neutral probabilities (48% up vs 52% down) suggesting caution. News is neutral with mixed macro catalysts (Fed hawkishness vs SEC crypto-friendly shift) and no direct XRP catalyst. Historical evidence shows that inside-cloud Ichimoku often leads to indecision, but the positive CMF and Z-score indicate slight accumulation. Final decision follows the ML buy signal given no strong contradicting news, with moderate volatility expected.
+  --- Indicators ---
+  RSI14=64.8045250817485  StochK=77.950379473379  MACD=0.0021339146887459147
+  BB=0.8132962718815725  ATR=0.008228548935481481  VolR=0
+  Trend=0.000752718092523956  Hurst=0.5190946060782009  Entropy=0.9195371848880952
+  Regime=RANGING  VWAP=-0.2356864104875369  CMF=0.184545428041833
+  Supertrend=true  Ichimoku=false
+  Momentum=0.6917907580980673  Autocorr=-0.1283592189967655  Zscore=1.263554873290268
+
+--------------------------------------------------------------------------------
+#114  XRP | BUY | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 10:01:13 PM UTC
+  Expires at:       4/24/2026, 6:01:13 AM UTC
+  Model:            deepseek-r1
+  Decision:         BUY
+  Confidence:       50%
+  Entry price:      $1.4361
+  Predicted target: $1.4363
+  Bull target:      $1.4612
+  Bear target:      $1.4092
+  Actual at expiry: $1.4353
+  Price change:     -0.06%
+  Target gap:       0.07%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       No
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.5217358505261543
+  Quant verdict:    BUY 60%
+  News verdict:     neutral (0)
+  Primary reason:   ML ensemble BUY signal supported by MACD bullishness and Supertrend positivity, with no conflicting fundamental catalyst strong enough to override.
+  R1 Reasoning:
+    Quant indicators show a MACD bullish crossover and positive Supertrend, but high Kalman Trend uncertainty and conflicting oscillators limit conviction to moderate. News sentiment is neutral with mixed macro catalysts—hawkish Fed speculation offset by SEC regulatory easing and a weak dollar—providing no clear overriding signal. Historically, XRP has exhibited ranging behavior in similar low-volatility environments, and the ML model's 60% BUY vote aligns with the technical setup. Given no breaking news contradicts the ML direction, the decision remains BUY with cautious confidence.
+  --- Indicators ---
+  RSI14=66.60311855892911  StochK=82.60880260907591  MACD=0.002152973719594488
+  BB=0.8635545560234542  ATR=0.008285692759922572  VolR=0
+  Trend=0.0007481624543674941  Hurst=0.5217358505261543  Entropy=0.9129539275966412
+  Regime=RANGING  VWAP=-0.13012324023576774  CMF=0.15129642390080003
+  Supertrend=true  Ichimoku=false
+  Momentum=0.7970735845987884  Autocorr=-0.1396000665926654  Zscore=1.4652789641447415
+
+--------------------------------------------------------------------------------
+#115  DOGE | NO_TRADE | 4H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 10:02:08 PM UTC
+  Expires at:       4/24/2026, 2:02:08 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE  (original: BUY)
+  Confidence:       10%
+  Entry price:      $0.0974
+  Predicted target: $0.0980
+  Bull target:      $0.0985
+  Bear target:      $0.0962
+  Actual at expiry: $0.0980
+  Price change:     0.65%
+  Target gap:       0.02%
+  Prob up/down:     50 / 50
+  Outcome:          CORRECT
+  Target hit:       N/A
+  Gate reason:      Confidence floor: 10% < 38%
+  Regime:           RANGING
+  Hurst:            0.5233327390209132
+  Quant verdict:    BUY 60%
+  News verdict:     bearish (-35)
+  Primary reason:   ML ensemble BUY signal with 60% confidence and bullish technical alignment outweighs bearish news sentiment.
+  R1 Reasoning:
+    The quant model identifies bullish MACD and EMA stack with above-cloud Ichimoku, providing a 60% confidence BUY signal despite high uncertainty. However, the news sentiment is bearish due to Fed rate hike signals and a DeFi hack, creating a risk-off environment for speculative assets. Historical evidence suggests the ML model has 70% validated accuracy across market regimes, and its BUY signal with >55% confidence is the primary driver. Given the rule to follow the ML direction, I maintain a BUY but reduce confidence to 50% due to the news conflict and neutral probability estimates.
+  --- Indicators ---
+  RSI14=65.90039079783848  StochK=72.75870568395695  MACD=0.00011685057156906512
+  BB=0.8672526564039404  ATR=0.0007157155445643834  VolR=0
+  Trend=0.0006847639093914211  Hurst=0.5233327390209132  Entropy=0.9505945694400567
+  Regime=RANGING  VWAP=0.42949557535480554  CMF=-0.13478204654359022
+  Supertrend=true  Ichimoku=true
+  Momentum=1.444746303306912  Autocorr=0.2546330836425104  Zscore=1.624135453899755
+
+--------------------------------------------------------------------------------
+#116  DOGE | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 10:02:36 PM UTC
+  Expires at:       4/24/2026, 6:02:36 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       40%
+  Entry price:      $0.0973
+  Predicted target: $0.0973
+  Bull target:      $0.0993
+  Bear target:      $0.0954
+  Actual at expiry: $0.0980
+  Price change:     0.68%
+  Target gap:       0.70%
+  Prob up/down:     50 / 50
+  Outcome:          WRONG
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.524007991608852
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (0)
+  Primary reason:   ML model indicates no directional bias (50% up, 50% down) with low confidence, and news provides no conflicting catalyst.
+  R1 Reasoning:
+    The quant model shows a neutral Kalman trend with high entropy (0.943) and mixed signals (bullish MACD/RSI but negative CMF), resulting in 50/50 probabilities and low confidence. News sentiment is flat due to Fed uncertainty and DeFi hacks, with no direct DOGE catalyst. Historical evidence indicates that such high-entropy ranging phases often precede breakouts only after a clear catalyst. Given the ML's neutral stance and lack of strong breaking news, the correct action is to stay out.
+  --- Indicators ---
+  RSI14=65.82521125599118  StochK=71.72410360842979  MACD=0.00011201522925492505
+  BB=0.8622511392652539  ATR=0.0007200012249605996  VolR=0
+  Trend=0.000670064027099457  Hurst=0.524007991608852  Entropy=0.9429275151824317
+  Regime=RANGING  VWAP=0.3985571373318297  CMF=-0.14368357622660158
+  Supertrend=true  Ichimoku=true
+  Momentum=1.4134808056889994  Autocorr=0.25069481227557894  Zscore=1.605714484721242
+
+--------------------------------------------------------------------------------
+#117  AAPL | NO_TRADE | 8H
+--------------------------------------------------------------------------------
+  Predicted at:     4/23/2026, 10:03:57 PM UTC
+  Expires at:       4/24/2026, 6:03:57 AM UTC
+  Model:            deepseek-r1
+  Decision:         NO_TRADE
+  Confidence:       30%
+  Entry price:      $273.4300
+  Predicted target: $273.4300
+  Bull target:      $276.1643
+  Bear target:      $270.6957
+  Actual at expiry: $273.4300
+  Price change:     0.00%
+  Target gap:       0.00%
+  Prob up/down:     50 / 50
+  Outcome:          SKIPPED
+  Target hit:       N/A
+  Gate reason:      none
+  Regime:           RANGING
+  Hurst:            0.4518944735820833
+  Quant verdict:    NO_TRADE 40%
+  News verdict:     neutral (5)
+  Primary reason:   The ML model indicates high uncertainty and a neutral stance, with no clear directional bias.
+  R1 Reasoning:
+    The quant model finds a ranging market with high uncertainty, no directional conviction (50% up/down), and mixed technicals. News is neutral with conflicting catalysts ahead of Apple earnings. Historical patterns suggest mean-reversion in such low-entropy, uncertain regimes. Final reasoning: without a clear edge, the safest action is to stand aside.
+  --- Indicators ---
+  RSI14=60.135937487024904  StochK=51.14701003757381  MACD=-0.06428670681079729
+  BB=0.6661464036079742  ATR=1.282928466796875  VolR=0
+  Trend=0.0015255234728089617  Hurst=0.4518944735820833  Entropy=0.9403515824304607
+  Regime=RANGING  VWAP=1.792337728171292  CMF=0.07684954588887113
+  Supertrend=true  Ichimoku=true
+  Momentum=1.2304190702174622  Autocorr=-0.2891550433853627  Zscore=0.6646082748896939
+
+================================================================================
+END OF EXPORT
+================================================================================
