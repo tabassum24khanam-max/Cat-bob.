@@ -198,10 +198,10 @@ Respond with ONLY this JSON:
 
         print(f"R1 exhausted all {max_retries} retries. Last error: {_last_r1_error}. Falling back.")
 
-    # DeepSeek V3 (fast mode) — used when R1 is off or R1 failed
+    # DeepSeek V4 (fast mode) — used when R1 is off or R1 failed
     if ds_key:
         try:
-            print(f"Using DeepSeek V3 (fast) for {asset}...")
+            print(f"Using DeepSeek V4 (fast) for {asset}...")
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=15.0)) as client:
                 resp = await client.post(
                     "https://api.deepseek.com/v1/chat/completions",
@@ -220,13 +220,13 @@ Respond with ONLY this JSON:
                     text = data['choices'][0]['message'].get('content', '')
                     result = _extract_json(text)
                     if result:
-                        result['_model'] = 'deepseek-v3'
-                        print(f"V3 success for {asset}: {result.get('decision')} {result.get('confidence')}%")
+                        result['_model'] = 'deepseek-v4'
+                        print(f"V4 success for {asset}: {result.get('decision')} {result.get('confidence')}%")
                         return result
                 else:
-                    print(f"V3 HTTP {resp.status_code}")
+                    print(f"V4 HTTP {resp.status_code}")
         except Exception as e:
-            print(f"V3 failed: {e}")
+            print(f"V4 failed: {e}")
 
     # Last fallback: GPT-4o
     print(f"⚠ Using GPT-4o fallback for {asset}")

@@ -277,6 +277,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="rp-cell"><div class="rp-lbl">💬 SENTIMENT</div><div class="rp-val" id="rp-sentiment">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">🔗 CORRELATION</div><div class="rp-val" id="rp-corr">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">🤖 ML ENSEMBLE</div><div class="rp-val" id="rp-ml">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">⭐ PQS SCORE</div><div class="rp-val" id="rp-pqs">—</div></div>
+    <div class="rp-cell"><div class="rp-lbl">↔ RSI DIVERGENCE</div><div class="rp-val" id="rp-rsidiv">—</div></div>
   </div>
   <div class="insight" id="rp-insight">—</div>
   <div id="gate-box" style="padding:6px 14px;border-top:1px solid var(--border);font-size:8px;color:var(--red);display:none"></div>
@@ -315,7 +317,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <input class="modal-input" id="k-backend" type="text" placeholder="http://localhost:8000" autocomplete="off">
     <div class="modal-lbl">OPENAI API KEY (Agents 1 & 2)</div>
     <input class="modal-input" id="k-openai" type="password" placeholder="sk-..." autocomplete="off">
-    <div class="modal-lbl">DEEPSEEK API KEY (R1 + V3 News)</div>
+    <div class="modal-lbl">DEEPSEEK API KEY (R1 + V4)</div>
     <input class="modal-input" id="k-deepseek" type="password" placeholder="sk-..." autocomplete="off">
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
       <div style="font-size:8px;color:var(--muted);margin-bottom:8px">OPTIONAL — unlock extra data sources</div>
@@ -329,6 +331,13 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <input class="modal-input" id="k-alpaca-key" type="password" placeholder="Alpaca API key" autocomplete="off">
       <div class="modal-lbl">ALPACA SECRET</div>
       <input class="modal-input" id="k-alpaca-secret" type="password" placeholder="Alpaca secret" autocomplete="off">
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+        <div style="font-size:8px;color:var(--muted);margin-bottom:6px">TELEGRAM — get alerts on your phone</div>
+        <div class="modal-lbl">TELEGRAM BOT TOKEN</div>
+        <input class="modal-input" id="k-tg-token" type="password" placeholder="From @BotFather" autocomplete="off">
+        <div class="modal-lbl">TELEGRAM CHAT ID</div>
+        <input class="modal-input" id="k-tg-chat" type="text" placeholder="Your chat ID (from @userinfobot)" autocomplete="off">
+      </div>
     </div>
     <button class="modal-save" onclick="saveKeys()">SAVE & CONNECT</button>
   </div>
@@ -346,6 +355,6 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 
 <div class="toast" id="toast"></div>
 
-<script src="/app.js?v=5.1"></script>
+<script src="/app.js?v=6.0"></script>
 </body>
 </html>

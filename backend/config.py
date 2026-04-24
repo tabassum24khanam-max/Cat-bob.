@@ -21,6 +21,8 @@ REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 ALPACA_KEY = os.getenv("ALPACA_KEY", "")
 ALPACA_SECRET = os.getenv("ALPACA_SECRET", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 def is_configured(key_name: str) -> bool:
     """Check if an API key is set."""

@@ -114,6 +114,42 @@ def detect_shooting_star(candles: list) -> int:
     return 0
 
 
+# ─── RSI Divergence Detection ──────────────────────────────────────────────
+
+def detect_rsi_divergence(closes: list, period: int = 14, lookback: int = 20) -> dict:
+    """Detect bullish/bearish RSI divergence by comparing price vs RSI extremes."""
+    if len(closes) < period + lookback:
+        return {'bullish': False, 'bearish': False, 'bull_strength': 0, 'bear_strength': 0}
+
+    rsi_vals = []
+    for i in range(len(closes) - lookback, len(closes) + 1):
+        rsi_vals.append(rsi(closes[:i], period))
+
+    recent_prices = closes[-lookback:]
+    recent_rsi = rsi_vals[-lookback:]
+    half = lookback // 2
+
+    first_prices = recent_prices[:half]
+    second_prices = recent_prices[half:]
+    first_rsi = recent_rsi[:half]
+    second_rsi = recent_rsi[half:]
+
+    price_low_drop = (min(second_prices) - min(first_prices)) / (abs(min(first_prices)) + 1e-9) * 100
+    rsi_low_rise = min(second_rsi) - min(first_rsi)
+    bullish = price_low_drop < -0.5 and rsi_low_rise > 3
+
+    price_high_rise = (max(second_prices) - max(first_prices)) / (abs(max(first_prices)) + 1e-9) * 100
+    rsi_high_drop = max(second_rsi) - max(first_rsi)
+    bearish = price_high_rise > 0.5 and rsi_high_drop < -3
+
+    return {
+        'bullish': bullish,
+        'bearish': bearish,
+        'bull_strength': round(abs(rsi_low_rise), 1) if bullish else 0,
+        'bear_strength': round(abs(rsi_high_drop), 1) if bearish else 0,
+    }
+
+
 # ─── Kalman Filter ──────────────────────────────────────────────────────────
 
 def kalman_filter(prices: list):
@@ -166,8 +202,8 @@ def hmm_regime(closes: list, ranges: list):
 
 # ─── Monte Carlo ────────────────────────────────────────────────────────────
 
-def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = True) -> dict:
-    """1000 Monte Carlo price path simulations."""
+def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = True, fat_tails: bool = True) -> dict:
+    """1000 Monte Carlo price path simulations with fat-tail support."""
     import random
     n_sims = 1000
     steps = max(1, round(horizon_h))
@@ -180,6 +216,8 @@ def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = 
             u1 = max(1e-10, random.random())
             u2 = random.random()
             z = (-2 * math.log(u1)) ** 0.5 * math.cos(2 * math.pi * u2)
+            if fat_tails and random.random() < 0.05:
+                z *= random.uniform(2.0, 4.0)
             price *= (1 + step_vol * z)
         finals.append(price)
 
@@ -460,11 +498,14 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
     # HMM regime
     hmm = hmm_regime(c[-50:], [x['high'] - x['low'] for x in candles[-50:]])
 
-    # Candle patterns — NEW
+    # Candle patterns
     engulfing = detect_engulfing(candles)
     doji = detect_doji(candles)
     hammer = detect_hammer(candles)
     shooting_star = detect_shooting_star(candles)
+
+    # RSI divergence (B5)
+    rsi_div = detect_rsi_divergence(c, 14, 20)
 
     dist_e9   = (cur - e9)  / e9  * 100
     dist_e20  = (cur - e20) / e20 * 100
@@ -560,4 +601,6 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
         'engulfing': engulfing, 'doji': doji,
         'hammer': hammer, 'shooting_star': shooting_star,
         'adx': adx, 'cci': cci, 'mfi': mfi, 'stoch_rsi': stoch_rsi,
+        'rsi_div_bull': rsi_div['bullish'], 'rsi_div_bear': rsi_div['bearish'],
+        'rsi_div_bull_str': rsi_div['bull_strength'], 'rsi_div_bear_str': rsi_div['bear_strength'],
     }

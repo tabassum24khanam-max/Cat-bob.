@@ -31,6 +31,7 @@ from macro_engine import get_macro_context
 from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
+from telegram_bot import send_prediction, send_scanner_summary
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
 
@@ -56,10 +57,9 @@ async def startup():
     print(f"✓ ULTRAMAX Backend started")
     print(f"  Database: {DB_PATH}")
     print(f"  Worker: {WORKER_URL}")
-    # Pre-train ML ensemble from existing history
     asyncio.create_task(warm_ml_models())
-    # Initial calendar refresh
     asyncio.create_task(_safe_refresh_calendar())
+    asyncio.create_task(_continuous_scanner())
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -197,6 +197,94 @@ async def warm_ml_models():
                 print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
     except Exception as e:
         print(f"⚠ ML warm-up skipped: {e}")
+
+
+def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
+                 ind: dict, decision: dict, mtf_data: dict = None) -> dict:
+    """Prediction Quality Score 0-10 — measures signal confluence."""
+    score = 0
+    reasons = []
+    d_dir = decision.get('decision', '')
+
+    # 1. Agent agreement (0-3)
+    q_dir = quant_result.get('direction', '').upper()
+    n_sent = news_result.get('sentiment', '').upper()
+    ml_dir = None
+    if ml_result and ml_result.get('available'):
+        ms = ml_result.get('score', 50)
+        ml_dir = 'BUY' if ms > 55 else 'SELL' if ms < 45 else None
+    agree = sum([
+        q_dir == d_dir,
+        (n_sent == 'BULLISH' and d_dir == 'BUY') or (n_sent == 'BEARISH' and d_dir == 'SELL'),
+        ml_dir == d_dir if ml_dir else False,
+    ])
+    score += agree
+    if agree == 3: reasons.append('All agents agree')
+    elif agree == 2: reasons.append('2/3 agents agree')
+
+    # 2. Regime clarity (0-2)
+    hmm = ind.get('hmm_probs', {})
+    max_prob = max(hmm.values()) if hmm else 0
+    if max_prob > 0.6:
+        score += 2; reasons.append(f'Clear regime ({max_prob:.0%})')
+    elif max_prob > 0.45:
+        score += 1; reasons.append('Moderate regime')
+
+    # 3. Hurst non-random (0-1)
+    hurst = ind.get('hurst_exp', 0.5)
+    if hurst > 0.6 or hurst < 0.4:
+        score += 1; reasons.append('Hurst decisive')
+
+    # 4. Low entropy (0-1)
+    if ind.get('entropy_ratio', 0.5) < 0.4:
+        score += 1; reasons.append('Low noise')
+
+    # 5. Volume confirmation (0-1)
+    if ind.get('vol_percentile', 50) > 60:
+        score += 1; reasons.append('Volume confirms')
+
+    # 6. Daily trend alignment (0-1)
+    if mtf_data:
+        if (mtf_data.get('daily_bull') and d_dir == 'BUY') or \
+           (mtf_data.get('daily_bear') and d_dir == 'SELL'):
+            score += 1; reasons.append('Daily aligned')
+
+    # 7. RSI divergence support (0-1)
+    if (d_dir == 'BUY' and ind.get('rsi_div_bull')) or \
+       (d_dir == 'SELL' and ind.get('rsi_div_bear')):
+        score += 1; reasons.append('RSI divergence confirms')
+
+    return {'score': min(10, score), 'reasons': reasons, 'max': 10}
+
+
+# ─── Adaptive Gate Thresholds (A5) ────────────────────────────────────────
+_gate_stats = {'trades': 0, 'wins': 0}
+
+
+def get_adaptive_floor():
+    """Confidence floor adapts: if recent accuracy is high, lower the floor."""
+    if _gate_stats['trades'] < 20:
+        return 38
+    win_rate = _gate_stats['wins'] / _gate_stats['trades']
+    if win_rate > 0.6:
+        return 32
+    if win_rate > 0.5:
+        return 35
+    return 42
+
+
+async def _continuous_scanner():
+    """Background scanner — runs every 60s, sends Telegram alerts."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            alerts = await scan_for_alerts()
+            if alerts:
+                print(f"Scanner: {len(alerts)} high-confluence alert(s)")
+                asyncio.create_task(send_scanner_summary(alerts))
+        except Exception as e:
+            print(f"Scanner error: {e}")
+        await asyncio.sleep(60)
 
 
 @app.post("/retrain")
@@ -372,12 +460,13 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     else:
         slog("⚠ ML ensemble: no trained model yet")
 
-    # ── Agent 1: Quant ───────────────────────────────────────────────────
-    slog("📐 Agent 1 (Quant) analyzing...")
+    # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
+    quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
+    slog(f"📐 Agent 1 (Quant/{quant_model_label}) analyzing...")
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
                                        cluster_data=cluster_data, correlation_data=correlation_data)
-    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key)
-    slog(f"✓ Quant: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
+    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
+    slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
     # ── Bayesian + 4-way confidence blending ────────────────────────────
     rated_preds = await get_predictions(req.asset, 200)
@@ -386,12 +475,23 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     ml_conf = ml_result.get('score', 50) if ml_result['available'] else None
     cluster_conf = cluster_data.get('win_rate_4h') if cluster_data.get('available') else None
 
+    # A3: Regime-adaptive weights — adjust blending based on market regime
+    regime = ind.get('regime', 'NEUTRAL')
+    hurst = ind.get('hurst_exp', 0.5)
+    regime_ml_boost = 0.0
+    if regime == 'TRENDING' and hurst > 0.55:
+        regime_ml_boost = 0.05
+    elif regime in ('RANGING', 'LOW_VOLATILITY') and hurst < 0.45:
+        regime_ml_boost = 0.03
+    elif regime == 'HIGH_VOLATILITY':
+        regime_ml_boost = -0.05
+
     if ml_conf is not None and cluster_conf is not None:
-        # 4-way: ML leads — trained on 22K real samples at 70% accuracy
-        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * 0.45 + cluster_conf * 0.20
+        ml_w = 0.45 + regime_ml_boost
+        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * ml_w + cluster_conf * (0.20 - regime_ml_boost)
     elif ml_conf is not None:
-        # 3-way: ML dominant
-        blended_conf = raw_ai_conf * 0.20 + bayes_conf * 0.25 + ml_conf * 0.55
+        ml_w = 0.55 + regime_ml_boost
+        blended_conf = raw_ai_conf * (0.20 - regime_ml_boost) + bayes_conf * 0.25 + ml_conf * ml_w
     elif cluster_conf is not None:
         blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
     else:
@@ -400,7 +500,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
 
     # ── Agent 2: News ────────────────────────────────────────────────────
-    slog(f"📰 Agent 2 (News/{'DeepSeek V3' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
+    slog(f"📰 Agent 2 (News/{'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
     news_result = await run_news_agent(
         req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type,
         articles, macro_data, onchain_data, fg_data, {},
@@ -410,7 +510,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
 
     # ── Agent 3: Decision (R1) ───────────────────────────────────────────
     use_r1 = bool(req.ds_key) and (req.use_r1 is not False)
-    model_name = 'R1' if use_r1 else ('V3' if req.ds_key else 'GPT-4o')
+    model_name = 'R1' if use_r1 else ('V4' if req.ds_key else 'GPT-4o')
     slog(f"🧠 Agent 3 ({model_name}) making final decision...")
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
@@ -597,12 +697,13 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 slog(f"⚠ ML disagreement: ML score={ml_score:.1f} vs {decision['decision']} — capped 55%")
                 decision['confidence'] = 55
 
-    # GATE 13: CONFIDENCE FLOOR — <38% = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < 38:
+    # GATE 13: ADAPTIVE CONFIDENCE FLOOR (A5)
+    conf_floor = get_adaptive_floor()
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
         decision['_original_decision'] = decision.get('decision')
         decision['decision'] = 'NO_TRADE'
-        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < 38%"
-        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}%")
+        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < {conf_floor}%"
+        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}% (floor={conf_floor}%)")
 
     # GATE 14: UPCOMING EVENT — high-impact event within horizon = -15 confidence
     if decision.get('decision') != 'NO_TRADE' and macro_context.get('upcoming_events'):
@@ -645,10 +746,23 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         decision['price_target_bull'] = None
         decision['price_target_bear'] = None
 
+    # ── PQS (A2) + Update gate stats (A5) ─────────────────────────────────
+    pqs = compute_pqs(quant_result, news_result, ml_result, ind, decision, mtf_data)
+    slog(f"✓ PQS: {pqs['score']}/10 [{', '.join(pqs['reasons'][:3])}]")
+
+    # Update adaptive gate stats from recent outcomes
+    try:
+        recent = await get_predictions(req.asset, 50)
+        rated = [p for p in recent if p.get('feedback') in ('correct', 'wrong')]
+        _gate_stats['trades'] = len(rated)
+        _gate_stats['wins'] = sum(1 for p in rated if p['feedback'] == 'correct')
+    except Exception:
+        pass
+
     total_ms = int((time.time() - start_time) * 1000)
     slog(f"✅ Complete in {total_ms}ms")
 
-    return {
+    response = {
         "decision": decision.get('decision', 'NO_TRADE'),
         "confidence": decision.get('confidence', 50),
         "prob_up": decision.get('prob_up', mc['prob_up'] * 100),
@@ -699,18 +813,20 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             "trend_stability": ind['trend_stability'], "vol_percentile": ind['vol_percentile'],
             "vol_r": ind['vol_r'], "stoch_k": ind['stoch_k'],
             "bb_pos": ind['bb_pos'], "poc": ind['poc'], "dist_poc": ind['dist_poc'],
+            "rsi_div_bull": ind.get('rsi_div_bull', False), "rsi_div_bear": ind.get('rsi_div_bear', False),
         },
-        "ind_snapshot": json.dumps(ind),  # full snapshot for ML training
-        # ML ensemble
+        "ind_snapshot": json.dumps(ind),
         "ml": ml_result,
-        # New engines
+        "pqs": pqs,
+        "rsi_divergence": {
+            "bullish": ind.get('rsi_div_bull', False),
+            "bearish": ind.get('rsi_div_bear', False),
+        },
         "sentiment": sentiment_data,
         "macro_context": macro_context,
         "correlation": correlation_data,
         "cluster": cluster_data,
-        # MC results
         "monte_carlo": mc,
-        # Similarity
         "similarity": {
             "count": len(similar),
             "win_rate": sum(1 for s in similar if (s.get('fwd_4h') or 0) > 0) / len(similar) * 100 if similar else 0,
@@ -718,15 +834,17 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         },
         "bayesian_conf": bayes_conf,
         "raw_ai_conf": raw_ai_conf,
-        # DB sentiment memory
         "db_sentiment": db_sentiment,
-        # Candle data for chart (last 100)
         "candles": candles[-100:],
         "recent_prices": recent_prices,
-        # System log
         "logs": logs,
         "duration_ms": total_ms,
     }
+
+    # Send Telegram notification (non-blocking)
+    asyncio.create_task(send_prediction(response, req.asset, req.horizon))
+
+    return response
 
 
 @app.get("/history")
@@ -1150,8 +1268,18 @@ async def get_market_data(asset: str):
 async def get_alerts():
     """Get latest confluence alerts."""
     try:
-        alerts = get_latest_alerts()
-        return {"alerts": alerts, "count": len(alerts)}
+        data = get_latest_alerts()
+        return data
+    except Exception as e:
+        return {"alerts": [], "count": 0, "error": str(e)}
+
+
+@app.get("/scanner")
+async def run_scanner():
+    """Run a full scanner pass on demand and return results."""
+    try:
+        alerts = await scan_for_alerts()
+        return {"alerts": alerts, "count": len(alerts), "ts": int(time.time())}
     except Exception as e:
         return {"alerts": [], "error": str(e)}
 
@@ -1169,6 +1297,7 @@ async def get_settings():
         "alpaca_configured": is_configured('ALPACA_KEY'),
         "openai_configured": is_configured('OPENAI_API_KEY'),
         "deepseek_configured": is_configured('DEEPSEEK_API_KEY'),
+        "telegram_configured": is_configured('TELEGRAM_BOT_TOKEN'),
     }
 
 
@@ -1178,7 +1307,7 @@ async def save_settings(req: SettingsRequest):
     saved = []
     for key, value in req.settings.items():
         if key in ('FRED_API_KEY', 'REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET',
-                    'ALPACA_KEY', 'ALPACA_SECRET') and value:
+                    'ALPACA_KEY', 'ALPACA_SECRET', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID') and value:
             os.environ[key] = value
             set_setting(key, value)
             saved.append(key)
