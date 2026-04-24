@@ -149,5 +149,7 @@ RULES:
 - Pick a direction (BUY or SELL) based on the weight of evidence. Only output NO_TRADE if indicators are genuinely contradictory with no clear majority.
 - Candle patterns add confirmation only — never trade on pattern alone.
 
+DEVIL'S ADVOCATE: Before finalizing, consider the strongest argument AGAINST your chosen direction. State this counter-argument in your reasoning. For example, if you lean BUY, what is the single most compelling reason it could drop? Include this in "counter_argument".
+
 Respond ONLY with this JSON:
-{{"direction":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2 sentences: regime + primary signal>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""
+{{"direction":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2 sentences: regime + primary signal>","counter_argument":"<1 sentence: strongest argument against your direction>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""

@@ -130,6 +130,43 @@ def _score_prediction(decision: str, original_decision: str, entry_price: float,
     return 'skipped'
 
 
+def _postmortem_analysis(req, feedback: str, moved_pct: float, outcome_price: float) -> str:
+    """A10: Simple post-mortem — compare decision vs actual move and note what went wrong/right."""
+    decision = req.decision or 'NO_TRADE'
+    orig = req.original_decision or decision
+    parts = []
+
+    if feedback == 'correct':
+        parts.append(f"CORRECT — {orig} was right, price moved {moved_pct:+.2f}%.")
+    elif feedback == 'wrong':
+        parts.append(f"WRONG — {orig} predicted but price moved {moved_pct:+.2f}% (opposite).")
+    else:
+        parts.append(f"SKIPPED — no clear direction to evaluate.")
+
+    # Compare predicted target vs actual
+    pred_price = req.predicted_price or req.target_price
+    if pred_price and req.entry_price:
+        expected_pct = (pred_price - req.entry_price) / req.entry_price * 100
+        parts.append(f"Expected {expected_pct:+.2f}%, got {moved_pct:+.2f}%.")
+        if abs(expected_pct) > 0.01:
+            accuracy_ratio = moved_pct / expected_pct if expected_pct != 0 else 0
+            if accuracy_ratio > 0.8:
+                parts.append("Target accuracy: GOOD (>80% of predicted move).")
+            elif accuracy_ratio > 0.3:
+                parts.append("Target accuracy: PARTIAL (direction right, magnitude off).")
+            else:
+                parts.append("Target accuracy: POOR.")
+
+    # Gate override analysis
+    if decision == 'NO_TRADE' and orig and orig != 'NO_TRADE':
+        if feedback == 'correct':
+            parts.append(f"Gate overrode {orig} to NO_TRADE — original call was correct, gate was too cautious.")
+        elif feedback == 'wrong':
+            parts.append(f"Gate overrode {orig} to NO_TRADE — gate correctly prevented a bad trade.")
+
+    return ' '.join(parts) if parts else ''
+
+
 async def _safe_refresh_calendar():
     """Safely refresh economic calendar on startup."""
     await asyncio.sleep(3)
@@ -1190,6 +1227,11 @@ async def check_outcome(req: OutcomeRequest):
             feedback, target_hit, note
         )
 
+        # A10: Post-mortem Learning — log what indicators said vs what happened
+        postmortem = _postmortem_analysis(req, feedback, moved_pct, price)
+        if postmortem:
+            print(f"[POST-MORTEM] {req.asset} {req.horizon}H: {postmortem}")
+
         # Trigger ML retrain asynchronously
         asyncio.create_task(_async_retrain(req.asset))
 
@@ -1198,7 +1240,8 @@ async def check_outcome(req: OutcomeRequest):
             "moved_pct": moved_pct,
             "feedback": feedback,
             "target_hit": target_hit,
-            "note": note
+            "note": note,
+            "postmortem": postmortem,
         }
     except Exception as e:
         raise HTTPException(400, str(e))
