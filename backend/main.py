@@ -31,7 +31,7 @@ from macro_engine import get_macro_context
 from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
-from telegram_bot import send_prediction, send_scanner_summary
+from telegram_bot import send_prediction, send_scanner_summary, send_message
 from trading_engine import get_engine as get_trading_engine
 from portfolio import scan_portfolio
 from calibration import calibrate_confidence
@@ -50,6 +50,18 @@ _equity_tracker = EquityTracker()
 
 # A6: Session Intelligence — track recent predictions per asset
 _session_predictions: dict = {}  # {asset: [{'ts': int, 'direction': str, 'confidence': int}]}
+
+# ─── Autonomous Trader State ────────────────────────────────────────────────
+_autotrader = {
+    'enabled': False,
+    'assets': [],             # e.g. ['BTC', 'ETH', 'SOL']
+    'interval_minutes': 60,   # how often to wake up (default 1 hour)
+    'last_cycle': 0,
+    'total_cycles': 0,
+    'trades_opened': 0,
+    'trades_closed': 0,
+    'status': 'stopped',      # stopped | running | paused
+}
 
 app.add_middleware(
     CORSMiddleware,
@@ -340,6 +352,146 @@ async def _continuous_scanner():
         except Exception as e:
             print(f"Scanner error: {e}")
         await asyncio.sleep(60)
+
+
+async def _autotrader_loop():
+    """The autonomous trading brain. Wakes up every interval, runs predictions, opens trades."""
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+    from telegram_bot import send_message
+
+    await asyncio.sleep(10)  # let everything initialize
+    engine = get_trading_engine()
+
+    while True:
+        if not _autotrader['enabled'] or not _autotrader['assets']:
+            await asyncio.sleep(10)
+            continue
+
+        interval = max(10, _autotrader['interval_minutes']) * 60
+        _autotrader['status'] = 'running'
+        _autotrader['last_cycle'] = int(time.time())
+        _autotrader['total_cycles'] += 1
+        cycle = _autotrader['total_cycles']
+
+        print(f"\n{'='*60}")
+        print(f"AUTOTRADER CYCLE #{cycle} — {len(_autotrader['assets'])} assets")
+        print(f"{'='*60}")
+
+        cycle_summary = []
+
+        for asset_name in _autotrader['assets']:
+            try:
+                # Skip if already holding this asset
+                open_for_asset = [p for p in engine.positions.values()
+                                  if p.status == 'open' and p.asset == asset_name]
+                if open_for_asset:
+                    print(f"  {asset_name}: SKIP — already holding position")
+                    cycle_summary.append(f"{asset_name}: holding")
+                    continue
+
+                # Run the full prediction
+                api_key = OPENAI_API_KEY or ''
+                ds_key = DEEPSEEK_API_KEY or ''
+
+                if not api_key and not ds_key:
+                    print(f"  {asset_name}: SKIP — no API keys")
+                    continue
+
+                req = PredictRequest(
+                    asset=asset_name, horizon=4,
+                    api_key=api_key, ds_key=ds_key,
+                    use_r1=True,
+                )
+
+                start_time = time.time()
+                logs = []
+                def slog(msg):
+                    logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
+
+                result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
+
+                direction = result.get('decision', 'NO_TRADE')
+                confidence = result.get('confidence', 0)
+                pqs_score = result.get('pqs', {}).get('score', 0)
+                price = result.get('ind', {}).get('cur', 0)
+                stop_loss = result.get('quant', {}).get('stop_loss_pct', 2.0) or 2.0
+
+                print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
+
+                if direction == 'NO_TRADE':
+                    cycle_summary.append(f"{asset_name}: NO_TRADE ({confidence}%)")
+                    continue
+
+                # Check safety controls
+                allowed, reason = engine.can_trade(confidence, pqs_score)
+                if not allowed:
+                    print(f"  {asset_name}: BLOCKED — {reason}")
+                    cycle_summary.append(f"{asset_name}: blocked ({reason})")
+                    continue
+
+                # Calculate position size using Kelly
+                stats = _equity_tracker.get_stats()
+                n_trades = stats.get('n_trades', 0)
+                if n_trades >= 10:
+                    win_rate = 0.5
+                    rated = await get_predictions(asset_name, 100)
+                    wins = sum(1 for p in rated if p.get('feedback') == 'correct')
+                    total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
+                    if total_rated >= 5:
+                        win_rate = wins / total_rated
+                    size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
+                else:
+                    size = min(200, engine._equity * 0.05)  # 5% of equity while learning
+
+                if size < 10:
+                    size = min(100, engine._equity * 0.05)
+
+                # Open the trade
+                trade_result = await engine.open_position(
+                    asset_name, direction, price, size,
+                    stop_loss_pct=min(stop_loss, 3.0),
+                    take_profit_pct=min(stop_loss * 2, 6.0),
+                    trailing=1.5,
+                )
+
+                if trade_result.get('ok'):
+                    _autotrader['trades_opened'] += 1
+                    msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
+                    print(f"  >>> {msg}")
+                    cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
+                    asyncio.create_task(send_message(f"🤖 AUTO-TRADE: {msg}"))
+                else:
+                    cycle_summary.append(f"{asset_name}: trade failed ({trade_result.get('error', '?')})")
+
+            except Exception as e:
+                print(f"  {asset_name}: ERROR — {str(e)[:100]}")
+                cycle_summary.append(f"{asset_name}: error")
+
+        # Send cycle summary to Telegram
+        hb = engine.heartbeat()
+        summary = (
+            f"🤖 AUTOTRADER CYCLE #{cycle}\n"
+            f"Assets: {', '.join(cycle_summary)}\n"
+            f"Equity: ${hb['equity']:,.2f} | Open: {hb['positions']} | Daily P&L: ${hb['daily_pnl']:+,.2f}\n"
+            f"Next scan in {_autotrader['interval_minutes']}min"
+        )
+        asyncio.create_task(send_message(summary))
+
+        # Should I keep going? Check equity health
+        if hb['equity'] < 5000:  # lost 50% of starting capital
+            asyncio.create_task(send_message(
+                f"⚠️ AUTOTRADER WARNING: Equity ${hb['equity']:,.2f} is below $5,000. "
+                f"Consider stopping. Daily P&L: ${hb['daily_pnl']:+,.2f}"
+            ))
+        elif hb['equity'] > 15000:  # up 50%
+            asyncio.create_task(send_message(
+                f"🎯 AUTOTRADER: Equity ${hb['equity']:,.2f} — up {((hb['equity']-10000)/10000*100):.1f}% from start. "
+                f"Consider taking profits."
+            ))
+
+        _autotrader['status'] = 'sleeping'
+        print(f"Autotrader sleeping {_autotrader['interval_minutes']}min until next cycle...")
+        await asyncio.sleep(interval)
 
 
 async def _trading_position_monitor():
@@ -1731,6 +1883,173 @@ async def get_calibration(asset: str = 'BTC', horizon: int = 4):
 # ─── WebSocket ──────────────────────────────────────────────────────────
 
 from fastapi import WebSocket as WSType
+
+
+# ─── Autonomous Trader Control ──────────────────────────────────────────
+
+class AutotraderStartRequest(BaseModel):
+    assets: list  # e.g. ["BTC", "ETH", "SOL"]
+    interval_minutes: int = 60  # how often to trade (default 1hr)
+
+
+@app.post("/autotrader/start")
+async def autotrader_start(req: AutotraderStartRequest):
+    """Start the autonomous trader on specified assets."""
+    valid_assets = [a for a in req.assets if a in ALL_ASSETS]
+    if not valid_assets:
+        return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
+
+    _autotrader['enabled'] = True
+    _autotrader['assets'] = valid_assets
+    _autotrader['interval_minutes'] = max(10, req.interval_minutes)
+    _autotrader['status'] = 'starting'
+
+    # Start the loop if not already running
+    asyncio.create_task(_autotrader_loop())
+
+    from telegram_bot import send_message
+    asyncio.create_task(send_message(
+        f"🤖 AUTOTRADER STARTED\n"
+        f"Assets: {', '.join(valid_assets)}\n"
+        f"Interval: every {_autotrader['interval_minutes']} min\n"
+        f"Mode: {'PAPER' if get_trading_engine().paper_mode else 'LIVE'}\n"
+        f"Starting equity: ${get_trading_engine()._equity:,.2f}"
+    ))
+
+    return {
+        "ok": True,
+        "assets": valid_assets,
+        "interval_minutes": _autotrader['interval_minutes'],
+        "mode": "paper" if get_trading_engine().paper_mode else "live",
+    }
+
+
+@app.post("/autotrader/stop")
+async def autotrader_stop():
+    """Stop the autonomous trader. Keeps positions open."""
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+
+    engine = get_trading_engine()
+    open_positions = engine.get_positions('open')
+
+    from telegram_bot import send_message
+    asyncio.create_task(send_message(
+        f"🛑 AUTOTRADER STOPPED\n"
+        f"Open positions: {len(open_positions)}\n"
+        f"Equity: ${engine._equity:,.2f}\n"
+        f"Total cycles: {_autotrader['total_cycles']}\n"
+        f"Trades opened: {_autotrader['trades_opened']}"
+    ))
+
+    return {
+        "ok": True,
+        "open_positions": len(open_positions),
+        "equity": engine._equity,
+        "total_cycles": _autotrader['total_cycles'],
+    }
+
+
+@app.post("/autotrader/cashout")
+async def autotrader_cashout():
+    """Stop trading and close ALL open positions at current prices."""
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+
+    engine = get_trading_engine()
+    closed = []
+    total_pnl = 0.0
+
+    for pos in list(engine.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if price:
+                close_result = await engine.close_position(pos.id, price, 'cashout')
+                pnl = close_result.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({
+                    'asset': pos.asset,
+                    'direction': pos.direction,
+                    'entry': pos.entry_price,
+                    'exit': price,
+                    'pnl': pnl,
+                })
+        except Exception:
+            continue
+
+    from telegram_bot import send_message
+    lines = [f"  {c['asset']}: {c['direction']} ${c['pnl']:+.2f}" for c in closed]
+    asyncio.create_task(send_message(
+        f"💰 AUTOTRADER CASHOUT\n"
+        f"Closed {len(closed)} positions\n"
+        + '\n'.join(lines) + '\n'
+        f"Total P&L: ${total_pnl:+,.2f}\n"
+        f"Final equity: ${engine._equity:,.2f}"
+    ))
+
+    # Should you keep going?
+    stats = _equity_tracker.get_stats()
+    recommendation = "KEEP GOING" if stats.get('total_return', 0) > 0 and stats.get('sharpe_ratio', 0) > 0.3 else "STOP — system is not profitable yet"
+
+    return {
+        "ok": True,
+        "closed": closed,
+        "total_pnl": round(total_pnl, 2),
+        "final_equity": round(engine._equity, 2),
+        "total_return_pct": stats.get('total_return', 0),
+        "sharpe_ratio": stats.get('sharpe_ratio', 0),
+        "max_drawdown_pct": stats.get('max_drawdown', 0),
+        "recommendation": recommendation,
+    }
+
+
+@app.get("/autotrader/status")
+async def autotrader_status():
+    """Get current autotrader status, equity, open positions, and recommendation."""
+    engine = get_trading_engine()
+    hb = engine.heartbeat()
+    open_positions = engine.get_positions('open')
+    trade_log = engine.get_trade_log(20)
+    equity_stats = _equity_tracker.get_stats()
+
+    # Calculate win rate from trade log
+    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
+    total = len(trade_log)
+    win_rate = (wins / total * 100) if total > 0 else 0
+
+    # Recommendation
+    if not _autotrader['enabled']:
+        rec = "Bot is stopped."
+    elif hb['equity'] < 7000:
+        rec = "WARNING: Down significantly. Consider stopping."
+    elif hb['equity'] > 12000 and win_rate > 55:
+        rec = "Profitable and consistent. Keep running."
+    elif hb['equity'] > 10500:
+        rec = "Slightly profitable. Keep running but monitor."
+    elif total < 10:
+        rec = "Still learning. Need more trades for reliable assessment."
+    else:
+        rec = "Mixed results. Monitor closely."
+
+    return {
+        "enabled": _autotrader['enabled'],
+        "status": _autotrader['status'],
+        "assets": _autotrader['assets'],
+        "interval_minutes": _autotrader['interval_minutes'],
+        "total_cycles": _autotrader['total_cycles'],
+        "trades_opened": _autotrader['trades_opened'],
+        "last_cycle": _autotrader['last_cycle'],
+        "seconds_until_next": max(0, (_autotrader['last_cycle'] + _autotrader['interval_minutes'] * 60) - int(time.time())) if _autotrader['enabled'] else 0,
+        "heartbeat": hb,
+        "open_positions": open_positions,
+        "recent_trades": trade_log,
+        "equity_stats": equity_stats,
+        "win_rate": round(win_rate, 1),
+        "recommendation": rec,
+    }
 
 
 @app.websocket("/ws")
