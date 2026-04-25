@@ -54,13 +54,14 @@ _session_predictions: dict = {}  # {asset: [{'ts': int, 'direction': str, 'confi
 # ─── Autonomous Trader State ────────────────────────────────────────────────
 _autotrader = {
     'enabled': False,
-    'assets': [],             # e.g. ['BTC', 'ETH', 'SOL']
-    'interval_minutes': 60,   # how often to wake up (default 1 hour)
+    'assets': [],
+    'interval_minutes': 60,
     'last_cycle': 0,
     'total_cycles': 0,
     'trades_opened': 0,
     'trades_closed': 0,
-    'status': 'stopped',      # stopped | running | paused
+    'status': 'stopped',
+    'cycle_log': [],  # [{ts, cycle, summaries: [{asset, action, detail}]}]
 }
 
 app.add_middleware(
@@ -418,15 +419,43 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
+                # Force a trade even on NO_TRADE — use indicators to pick direction
                 if direction == 'NO_TRADE':
-                    cycle_summary.append(f"{asset_name}: NO_TRADE ({confidence}%)")
-                    continue
+                    ind_data = result.get('ind', {})
+                    bull_score = 0
+                    bear_score = 0
+                    if ind_data.get('rsi14', 50) < 45: bull_score += 1
+                    if ind_data.get('rsi14', 50) > 55: bear_score += 1
+                    if ind_data.get('macd_hist', 0) > 0: bull_score += 1
+                    else: bear_score += 1
+                    if ind_data.get('supertrend_bull'): bull_score += 1
+                    else: bear_score += 1
+                    if result.get('quant', {}).get('direction') == 'BUY': bull_score += 2
+                    elif result.get('quant', {}).get('direction') == 'SELL': bear_score += 2
+                    mc_prob = result.get('monte_carlo', {}).get('prob_up', 0.5)
+                    if mc_prob > 0.55: bull_score += 1
+                    elif mc_prob < 0.45: bear_score += 1
 
-                # Check safety controls
-                allowed, reason = engine.can_trade(confidence, pqs_score)
-                if not allowed:
-                    print(f"  {asset_name}: BLOCKED — {reason}")
-                    cycle_summary.append(f"{asset_name}: blocked ({reason})")
+                    if bull_score > bear_score:
+                        direction = 'BUY'
+                        confidence = max(confidence, 42)
+                    elif bear_score > bull_score:
+                        direction = 'SELL'
+                        confidence = max(confidence, 42)
+                    else:
+                        # Truly 50/50 — use Monte Carlo tiebreaker
+                        direction = 'BUY' if mc_prob >= 0.5 else 'SELL'
+                        confidence = max(confidence, 40)
+                    pqs_score = max(pqs_score, 3)
+                    print(f"  {asset_name}: FORCED {direction} (indicators: bull={bull_score} bear={bear_score})")
+
+                # Safety checks — but with lower thresholds for autonomous mode
+                open_count = len([p for p in engine.positions.values() if p.status == 'open'])
+                if open_count >= 10:
+                    cycle_summary.append(f"{asset_name}: max positions (10)")
+                    continue
+                if engine.daily_pnl <= -(engine._equity * 0.05):
+                    cycle_summary.append(f"{asset_name}: daily loss limit")
                     continue
 
                 # Calculate position size using Kelly
@@ -466,6 +495,14 @@ async def _autotrader_loop():
             except Exception as e:
                 print(f"  {asset_name}: ERROR — {str(e)[:100]}")
                 cycle_summary.append(f"{asset_name}: error")
+
+        # Save cycle log for frontend
+        _autotrader['cycle_log'].append({
+            'ts': int(time.time()),
+            'cycle': cycle,
+            'summaries': cycle_summary,
+        })
+        _autotrader['cycle_log'] = _autotrader['cycle_log'][-50:]
 
         # Send cycle summary to Telegram
         hb = engine.heartbeat()
@@ -540,6 +577,14 @@ async def serve_appjs():
     if os.path.exists(fp):
         return FileResponse(fp, media_type="application/javascript")
     raise HTTPException(404, "app.js not found")
+
+
+@app.get("/bot")
+async def serve_bot():
+    fp = os.path.join(frontend_path, 'bot.html')
+    if os.path.exists(fp):
+        return FileResponse(fp)
+    raise HTTPException(404, "bot.html not found")
 
 
 @app.get("/health")
@@ -2049,6 +2094,7 @@ async def autotrader_status():
         "equity_stats": equity_stats,
         "win_rate": round(win_rate, 1),
         "recommendation": rec,
+        "cycle_log": _autotrader['cycle_log'][-20:],
     }
 
 

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>ULTRAMAX BOT — Autonomous Trading</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.7/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root {
+  --bg: #04080f;
+  --surface: #080e1a;
+  --border: rgba(0,229,255,.12);
+  --cyan: #00e5ff;
+  --green: #00e676;
+  --red: #ff1744;
+  --yellow: #ffd600;
+  --muted: #2d4d6e;
+  --dim: #1a3a5c;
+  --text: #c8e0f4;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Space Mono', monospace; }
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Bebas+Neue&display=swap');
+
+.app { display: flex; flex-direction: column; height: 100vh; overflow-y: auto; }
+
+.hdr { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.logo { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 3px; color: var(--yellow); }
+.nav-btn { background: none; border: 1px solid var(--border); color: var(--cyan); font-family: 'Space Mono'; font-size: 7px; padding: 3px 8px; border-radius: 3px; cursor: pointer; text-decoration: none; }
+.status-badge { font-size: 9px; padding: 3px 10px; border-radius: 4px; font-weight: 700; margin-left: auto; }
+
+.stats-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--border); }
+.stat { background: var(--surface); padding: 10px; text-align: center; }
+.stat-lbl { font-size: 7px; color: var(--muted); letter-spacing: 1px; }
+.stat-val { font-size: 16px; font-weight: 700; margin-top: 2px; }
+
+.section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.section-title { font-size: 8px; color: var(--muted); letter-spacing: 1px; margin-bottom: 8px; }
+
+.asset-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.asset-pick { padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px; background: none; color: var(--text); font-family: 'Space Mono'; font-size: 8px; cursor: pointer; }
+.asset-pick.active { border-color: var(--cyan); color: var(--cyan); background: rgba(0,229,255,.07); }
+
+.ctrl-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.int-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: 3px; background: none; color: var(--muted); font-family: 'Space Mono'; font-size: 8px; cursor: pointer; }
+.int-btn.active { border-color: var(--yellow); color: var(--yellow); }
+.big-btn { padding: 8px 24px; font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 2px; border: none; border-radius: 4px; cursor: pointer; }
+.start-btn { background: var(--cyan); color: #000; }
+.stop-btn { background: var(--red); color: #fff; }
+.cash-btn { background: none; border: 1px solid var(--yellow); color: var(--yellow); padding: 6px 16px; font-family: 'Space Mono'; font-size: 8px; border-radius: 3px; cursor: pointer; }
+
+.pos-card { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(0,229,255,.06); font-size: 9px; }
+.trade-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid rgba(0,229,255,.06); font-size: 8px; }
+
+.log-entry { font-size: 8px; padding: 3px 0; border-bottom: 1px solid rgba(0,229,255,.04); color: var(--muted); }
+.log-entry .time { color: var(--dim); }
+.log-entry .action { color: var(--cyan); }
+
+#bot-chart { width: 100%; height: 200px; }
+
+.tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
+.tab-btn { flex: 1; padding: 8px; font-size: 9px; letter-spacing: 1px; border: none; background: none; color: var(--muted); cursor: pointer; text-align: center; }
+.tab-btn.active { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
+
+.rec-box { padding: 10px 14px; font-size: 10px; border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Header -->
+  <div class="hdr">
+    <div class="logo">ULTRAMAX BOT</div>
+    <a href="/" class="nav-btn">PREDICT MODE</a>
+    <div class="status-badge" id="b-badge" style="background:var(--dim);color:var(--muted)">STOPPED</div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-bar">
+    <div class="stat"><div class="stat-lbl">EQUITY</div><div class="stat-val" id="b-equity" style="color:var(--cyan)">$10,000</div></div>
+    <div class="stat"><div class="stat-lbl">DAY P&L</div><div class="stat-val" id="b-pnl">$0</div></div>
+    <div class="stat"><div class="stat-lbl">POSITIONS</div><div class="stat-val" id="b-pos">0</div></div>
+    <div class="stat"><div class="stat-lbl">WIN RATE</div><div class="stat-val" id="b-wr">—</div></div>
+    <div class="stat"><div class="stat-lbl">CYCLES</div><div class="stat-val" id="b-cycles" style="color:var(--text)">0</div></div>
+  </div>
+
+  <!-- Recommendation -->
+  <div class="rec-box" id="b-rec" style="color:var(--muted)">Select assets and press START to begin autonomous trading.</div>
+
+  <!-- Controls -->
+  <div class="section">
+    <div class="section-title">ASSETS TO TRADE</div>
+    <div class="asset-grid" id="b-assets"></div>
+  </div>
+
+  <div class="section">
+    <div class="ctrl-row">
+      <span style="font-size:7px;color:var(--muted)">INTERVAL:</span>
+      <button class="int-btn active" onclick="bSetInt(30,this)">30m</button>
+      <button class="int-btn" onclick="bSetInt(60,this)">1H</button>
+      <button class="int-btn" onclick="bSetInt(120,this)">2H</button>
+      <div style="flex:1"></div>
+      <button class="big-btn start-btn" id="b-toggle" onclick="bToggle()">START BOT</button>
+      <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
+    </div>
+  </div>
+
+  <!-- Chart tab for selected asset -->
+  <div class="tab-bar" id="b-chart-tabs"></div>
+  <div id="bot-chart"></div>
+
+  <!-- Tabs: Positions / Trades / System Log -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="bShowTab('positions',this)">OPEN POSITIONS</button>
+    <button class="tab-btn" onclick="bShowTab('trades',this)">TRADE LOG</button>
+    <button class="tab-btn" onclick="bShowTab('syslog',this)">SYSTEM LOG</button>
+  </div>
+
+  <div id="bt-positions" class="section" style="min-height:120px">
+    <div id="b-positions-list" style="color:var(--muted);font-size:9px">No open positions</div>
+  </div>
+  <div id="bt-trades" class="section" style="display:none;min-height:120px">
+    <div id="b-trades-list" style="color:var(--muted);font-size:8px">No trades yet</div>
+  </div>
+  <div id="bt-syslog" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
+    <div id="b-syslog-list" style="color:var(--muted);font-size:8px">Waiting for bot to start...</div>
+  </div>
+</div>
+
+<script>
+const backendUrl = localStorage.getItem('um_backend') || window.location.origin;
+let bAssets = JSON.parse(localStorage.getItem('um_at_assets') || '["BTC","ETH","SOL"]');
+let bInterval = 30;
+let bRunning = false;
+let bChartAsset = 'BTC';
+let bChartInst = null, bMainSeries = null;
+
+const ALL = ['BTC','ETH','SOL','BNB','XRP','DOGE','AAPL','TSLA','NVDA','MSFT','GOOGL','SPY','GC=F','CL=F','SI=F','XOM','LMT','RTX'];
+
+function bRenderAssets() {
+  const el = document.getElementById('b-assets');
+  el.innerHTML = ALL.map(a =>
+    `<button class="asset-pick ${bAssets.includes(a)?'active':''}" onclick="bToggleAsset('${a}')">${a}</button>`
+  ).join('');
+}
+
+function bToggleAsset(a) {
+  if (bAssets.includes(a)) bAssets = bAssets.filter(x=>x!==a);
+  else bAssets.push(a);
+  localStorage.setItem('um_at_assets', JSON.stringify(bAssets));
+  bRenderAssets();
+}
+
+function bSetInt(m, btn) {
+  bInterval = m;
+  document.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function bShowTab(tab, btn) {
+  ['positions','trades','syslog'].forEach(t => {
+    document.getElementById('bt-'+t).style.display = t===tab ? 'block' : 'none';
+  });
+  btn.parentElement.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+async function bToggle() {
+  const btn = document.getElementById('b-toggle');
+  btn.disabled = true;
+  if (bRunning) {
+    const r = await fetch(`${backendUrl}/autotrader/stop`, {method:'POST'});
+    const d = await r.json();
+    bRunning = false;
+  } else {
+    if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
+    const r = await fetch(`${backendUrl}/autotrader/start`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({assets:bAssets, interval_minutes:bInterval}),
+    });
+    const d = await r.json();
+    if (d.ok) bRunning = true;
+    else alert(d.error||'Failed');
+  }
+  btn.disabled = false;
+  bRefresh();
+}
+
+async function bCashout() {
+  if (!confirm('Close ALL positions and stop the bot?')) return;
+  const r = await fetch(`${backendUrl}/autotrader/cashout`, {method:'POST'});
+  const d = await r.json();
+  bRunning = false;
+  alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
+  bRefresh();
+}
+
+async function bRefresh() {
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/status`, {signal:AbortSignal.timeout(10000)});
+    if (!r.ok) return;
+    const d = await r.json();
+    bRunning = d.enabled;
+
+    // Badge
+    const badge = document.getElementById('b-badge');
+    if (d.enabled) {
+      const secs = d.seconds_until_next || 0;
+      badge.textContent = d.status === 'running' ? 'TRADING...' : `NEXT IN ${Math.floor(secs/60)}m ${secs%60}s`;
+      badge.style.background = 'rgba(0,230,118,.15)';
+      badge.style.color = '#00e676';
+    } else {
+      badge.textContent = 'STOPPED';
+      badge.style.background = 'var(--dim)';
+      badge.style.color = 'var(--muted)';
+    }
+
+    // Toggle button
+    const btn = document.getElementById('b-toggle');
+    btn.textContent = bRunning ? 'STOP BOT' : 'START BOT';
+    btn.className = bRunning ? 'big-btn stop-btn' : 'big-btn start-btn';
+
+    // Stats
+    const hb = d.heartbeat || {};
+    document.getElementById('b-equity').textContent = '$' + (hb.equity||10000).toLocaleString('en',{maximumFractionDigits:2});
+    const pnlEl = document.getElementById('b-pnl');
+    pnlEl.textContent = '$' + (hb.daily_pnl||0).toFixed(2);
+    pnlEl.style.color = (hb.daily_pnl||0) >= 0 ? '#00e676' : '#ff1744';
+    document.getElementById('b-pos').textContent = hb.positions || 0;
+    const wrEl = document.getElementById('b-wr');
+    wrEl.textContent = d.win_rate !== undefined ? d.win_rate+'%' : '—';
+    wrEl.style.color = (d.win_rate||0) >= 50 ? '#00e676' : '#ff1744';
+    document.getElementById('b-cycles').textContent = d.total_cycles || 0;
+
+    // Recommendation
+    document.getElementById('b-rec').textContent = d.recommendation || '';
+
+    // Positions
+    const posEl = document.getElementById('b-positions-list');
+    const positions = d.open_positions || [];
+    if (!positions.length) {
+      posEl.innerHTML = '<div style="color:var(--muted)">No open positions</div>';
+    } else {
+      posEl.innerHTML = positions.map(p => {
+        const pnl_pct = p.direction==='BUY'
+          ? ((p.highest_price||p.entry_price)-p.entry_price)/p.entry_price*100
+          : (p.entry_price-(p.lowest_price||p.entry_price))/p.entry_price*100;
+        const c = pnl_pct >= 0 ? '#00e676' : '#ff1744';
+        const age = Math.round((Date.now()/1000 - p.entry_time)/60);
+        return `<div class="pos-card">
+          <span><b style="color:${p.direction==='BUY'?'#00e676':'#ff1744'}">${p.direction}</b> ${p.asset} @ $${p.entry_price.toFixed(2)} ($${p.size.toFixed(0)})</span>
+          <span>SL: $${p.stop_loss.toFixed(2)} | TP: $${p.take_profit.toFixed(2)}</span>
+          <span style="color:${c}">${pnl_pct>=0?'+':''}${pnl_pct.toFixed(2)}% (${age}min)</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Trade log
+    const logEl = document.getElementById('b-trades-list');
+    const trades = d.recent_trades || [];
+    if (!trades.length) {
+      logEl.innerHTML = '<div style="color:var(--muted)">No trades yet</div>';
+    } else {
+      logEl.innerHTML = trades.slice().reverse().map(t => {
+        const c = t.pnl >= 0 ? '#00e676' : '#ff1744';
+        const dt = new Date(t.ts*1000);
+        const time = dt.toLocaleString();
+        return `<div class="trade-row">
+          <span>${time}</span>
+          <span><b style="color:${t.direction==='BUY'?'#00e676':'#ff1744'}">${t.direction}</b> ${t.asset}</span>
+          <span>$${t.entry.toFixed(2)} → $${t.exit.toFixed(2)}</span>
+          <span style="color:${c}">$${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</span>
+          <span style="color:var(--muted)">${t.reason}</span>
+        </div>`;
+      }).join('');
+    }
+
+    // System log (cycle log)
+    const sysEl = document.getElementById('b-syslog-list');
+    const cycles = d.cycle_log || [];
+    if (!cycles.length) {
+      sysEl.innerHTML = '<div style="color:var(--muted)">No cycles yet — start the bot</div>';
+    } else {
+      sysEl.innerHTML = cycles.slice().reverse().map(c => {
+        const dt = new Date(c.ts*1000);
+        const time = dt.toLocaleTimeString();
+        const items = (c.summaries||[]).join(' | ');
+        return `<div class="log-entry"><span class="time">[${time}]</span> <span class="action">CYCLE #${c.cycle}</span> — ${items}</div>`;
+      }).join('');
+    }
+
+    // Chart tabs
+    const chartTabs = document.getElementById('b-chart-tabs');
+    const chartAssets = d.assets?.length ? d.assets : bAssets;
+    chartTabs.innerHTML = chartAssets.map(a =>
+      `<button class="tab-btn ${a===bChartAsset?'active':''}" onclick="bLoadChart('${a}',this)">${a}</button>`
+    ).join('');
+
+  } catch(e) {}
+}
+
+async function bLoadChart(asset, btn) {
+  bChartAsset = asset;
+  if (btn) {
+    btn.parentElement.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  const el = document.getElementById('bot-chart');
+  if (bChartInst) { try{bChartInst.remove();}catch(e){} }
+  bChartInst = null; bMainSeries = null;
+
+  try {
+    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=100`);
+    const d = await r.json();
+    const candles = (d.candles||[]).filter(c=>c.open!=null).map(c=>({
+      time: Math.floor(Number(c.time)),
+      open:+c.open, high:+c.high, low:+c.low, close:+c.close
+    })).sort((a,b)=>a.time-b.time);
+    if (!candles.length) return;
+
+    const rect = el.getBoundingClientRect();
+    bChartInst = LightweightCharts.createChart(el, {
+      width: rect.width||360, height: 200,
+      layout: { background:{type:LightweightCharts.ColorType.Solid,color:'#04080f'}, textColor:'#5a7a9a' },
+      grid: { vertLines:{color:'rgba(0,229,255,.06)'}, horzLines:{color:'rgba(0,229,255,.06)'} },
+      rightPriceScale: { borderColor:'rgba(0,229,255,.2)' },
+      timeScale: { borderColor:'rgba(0,229,255,.2)', timeVisible:true },
+    });
+    bMainSeries = bChartInst.addCandlestickSeries({
+      upColor:'#00e676', downColor:'#ff1744',
+      wickUpColor:'#00e676', wickDownColor:'#ff1744',
+      borderVisible:false,
+    });
+    bMainSeries.setData(candles);
+    bChartInst.timeScale().fitContent();
+  } catch(e) {}
+}
+
+// Init
+bRenderAssets();
+bRefresh();
+bLoadChart(bChartAsset);
+setInterval(bRefresh, 10000);
+</script>
+</body>
+</html>

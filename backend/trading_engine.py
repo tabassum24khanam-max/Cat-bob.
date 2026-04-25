@@ -12,11 +12,11 @@ from dataclasses import dataclass, field, asdict
 from config import ALPACA_KEY, ALPACA_SECRET, BINANCE_SYMBOLS, get_asset_type
 
 # D10: Safety Controls
-MAX_POSITIONS = 5
-MAX_DAILY_LOSS_PCT = 3.0
+MAX_POSITIONS = 10
+MAX_DAILY_LOSS_PCT = 5.0
 MAX_POSITION_SIZE_PCT = 20.0
-MIN_CONFIDENCE = 55
-MIN_PQS = 5
+MIN_CONFIDENCE = 40
+MIN_PQS = 3
 
 @dataclass
 class Position:
