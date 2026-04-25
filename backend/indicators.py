@@ -114,6 +114,72 @@ def detect_shooting_star(candles: list) -> int:
     return 0
 
 
+# B9: Additional candle patterns
+
+def detect_morning_star(candles: list) -> int:
+    """Morning star (bullish reversal) = +1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+    b1 = c1['close'] - c1['open']
+    b2 = abs(c2['close'] - c2['open'])
+    b3 = c3['close'] - c3['open']
+    r1 = c1['high'] - c1['low']
+    if r1 == 0:
+        return 0
+    if b1 < 0 and abs(b1) > 0.5 * r1:
+        if b2 < 0.3 * r1:
+            if b3 > 0 and b3 > 0.5 * abs(b1):
+                return 1
+    return 0
+
+
+def detect_evening_star(candles: list) -> int:
+    """Evening star (bearish reversal) = -1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+    b1 = c1['close'] - c1['open']
+    b2 = abs(c2['close'] - c2['open'])
+    b3 = c3['close'] - c3['open']
+    r1 = c1['high'] - c1['low']
+    if r1 == 0:
+        return 0
+    if b1 > 0 and b1 > 0.5 * r1:
+        if b2 < 0.3 * r1:
+            if b3 < 0 and abs(b3) > 0.5 * b1:
+                return -1
+    return 0
+
+
+def detect_three_white_soldiers(candles: list) -> int:
+    """Three white soldiers (strong bullish) = +1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    for i in range(-3, 0):
+        c = candles[i]
+        if c['close'] <= c['open']:
+            return 0
+    for i in range(-2, 0):
+        if candles[i]['close'] <= candles[i-1]['close']:
+            return 0
+    return 1
+
+
+def detect_three_black_crows(candles: list) -> int:
+    """Three black crows (strong bearish) = -1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    for i in range(-3, 0):
+        c = candles[i]
+        if c['close'] >= c['open']:
+            return 0
+    for i in range(-2, 0):
+        if candles[i]['close'] >= candles[i-1]['close']:
+            return 0
+    return -1
+
+
 # ─── Support / Resistance Detection (B6) ──────────────────────────────────
 
 def detect_support_resistance(highs: list, lows: list, closes: list, n_levels: int = 3) -> dict:
@@ -549,6 +615,10 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
     doji = detect_doji(candles)
     hammer = detect_hammer(candles)
     shooting_star = detect_shooting_star(candles)
+    morning_star = detect_morning_star(candles)
+    evening_star = detect_evening_star(candles)
+    three_white = detect_three_white_soldiers(candles)
+    three_black = detect_three_black_crows(candles)
 
     # RSI divergence (B5)
     rsi_div = detect_rsi_divergence(c, 14, 20)
@@ -700,6 +770,8 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
         # New fields
         'engulfing': engulfing, 'doji': doji,
         'hammer': hammer, 'shooting_star': shooting_star,
+        'morning_star': morning_star, 'evening_star': evening_star,
+        'three_white_soldiers': three_white, 'three_black_crows': three_black,
         'adx': adx, 'cci': cci, 'mfi': mfi, 'stoch_rsi': stoch_rsi,
         'rsi_div_bull': rsi_div['bullish'], 'rsi_div_bear': rsi_div['bearish'],
         'rsi_div_bull_str': rsi_div['bull_strength'], 'rsi_div_bear_str': rsi_div['bear_strength'],

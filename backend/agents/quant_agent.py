@@ -131,7 +131,7 @@ RSI DIVERGENCE:
 {'BULLISH divergence detected (price lower low, RSI higher low) — reversal signal' if ind.get('rsi_div_bull') else ''}{'BEARISH divergence detected (price higher high, RSI lower high) — reversal signal' if ind.get('rsi_div_bear') else ''}{'None' if not ind.get('rsi_div_bull') and not ind.get('rsi_div_bear') else ''}
 
 CANDLE PATTERNS:
-{'ENGULFING(' + ('bull' if ind.get('engulfing', 0) > 0 else 'bear') + ')' if ind.get('engulfing') else ''} {'DOJI' if ind.get('doji') else ''} {'HAMMER' if ind.get('hammer') else ''} {'SHOOTING_STAR' if ind.get('shooting_star') else ''}
+{'ENGULFING(' + ('bull' if ind.get('engulfing', 0) > 0 else 'bear') + ')' if ind.get('engulfing') else ''} {'DOJI' if ind.get('doji') else ''} {'HAMMER' if ind.get('hammer') else ''} {'SHOOTING_STAR' if ind.get('shooting_star') else ''} {'MORNING_STAR' if ind.get('morning_star') else ''} {'EVENING_STAR' if ind.get('evening_star') else ''} {'THREE_WHITE_SOLDIERS' if ind.get('three_white_soldiers') else ''} {'THREE_BLACK_CROWS' if ind.get('three_black_crows') else ''}
 
 MONTE CARLO (1000 paths):
 Median target: {mc.get('median', ind['cur']):.4f}

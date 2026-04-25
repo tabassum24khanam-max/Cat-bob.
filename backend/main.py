@@ -32,8 +32,24 @@ from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
 from telegram_bot import send_prediction, send_scanner_summary
+from trading_engine import get_engine as get_trading_engine
+from portfolio import scan_portfolio
+from calibration import calibrate_confidence
+from equity_tracker import EquityTracker
+from ws_manager import ws_manager
+from smc_engine import detect_smc
+from orderbook import get_orderbook_imbalance
+from whale_monitor import get_whale_activity
+from options_flow import get_options_sentiment
+from smart_money import analyze_smart_money
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
+
+# Singletons
+_equity_tracker = EquityTracker()
+
+# A6: Session Intelligence — track recent predictions per asset
+_session_predictions: dict = {}  # {asset: [{'ts': int, 'direction': str, 'confidence': int}]}
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +76,8 @@ async def startup():
     asyncio.create_task(warm_ml_models())
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
+    asyncio.create_task(_trading_position_monitor())
+    asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -324,6 +342,21 @@ async def _continuous_scanner():
         await asyncio.sleep(60)
 
 
+async def _trading_position_monitor():
+    """Background task: check open trading positions every 30s."""
+    await asyncio.sleep(15)
+    engine = get_trading_engine()
+    while True:
+        try:
+            if any(p.status == 'open' for p in engine.positions.values()):
+                actions = await engine.check_all_positions(fetch_current_price)
+                for act in actions:
+                    print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+        except Exception as e:
+            print(f"Position monitor error: {e}")
+        await asyncio.sleep(30)
+
+
 @app.post("/retrain")
 async def retrain(asset_name: str = None):
     """Retrain ML ensemble after new feedback arrives."""
@@ -430,15 +463,21 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Found {len(similar)} similar periods — {wins/len(similar)*100:.0f}% were up")
 
     # ── Fetch parallel data ──────────────────────────────────────────────
-    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster in parallel...")
+    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales in parallel...")
     asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
-    macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data, cluster_data = await asyncio.gather(
+    (macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data,
+     cluster_data, smc_data, orderbook_data, whale_data, options_data) = await asyncio.gather(
         fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset),
         get_sentiment_snapshot(req.asset),
         get_macro_context(req.asset, req.horizon),
         get_correlation_summary(req.asset),
         _safe_assign_cluster(req.asset, ind),
+        detect_smc(candles),
+        get_orderbook_imbalance(req.asset),
+        get_whale_activity(req.asset),
+        get_options_sentiment(req.asset),
     )
+    smart_money_data = analyze_smart_money(candles)
     if sentiment_data.get('available'):
         slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
     if macro_context.get('warnings'):
@@ -447,6 +486,16 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Correlations loaded")
     if cluster_data.get('available'):
         slog(f"✓ Cluster #{cluster_data.get('cluster_id', '?')} ({cluster_data.get('members', 0)} members)")
+    if smc_data.get('available'):
+        slog(f"✓ SMC: bias={smc_data.get('bias')} OBs={len(smc_data.get('order_blocks',[]))} FVGs={len(smc_data.get('fair_value_gaps',[]))}")
+    if orderbook_data.get('available'):
+        slog(f"✓ Orderbook: imbalance={orderbook_data.get('imbalance_ratio',0):+.3f} ({orderbook_data.get('bias')})")
+    if whale_data.get('available'):
+        slog(f"✓ Whale flow: net={whale_data.get('net_flow',0):,.0f} USD ({whale_data.get('bias')})")
+    if options_data.get('available'):
+        slog(f"✓ Options: P/C={options_data.get('put_call_ratio',0):.2f} max_pain={options_data.get('max_pain',0):.2f}")
+    if smart_money_data.get('available'):
+        slog(f"✓ Smart Money: SMI={smart_money_data.get('smart_money_index',0):+.4f} ({smart_money_data.get('bias')})")
 
     # ── Fetch news ───────────────────────────────────────────────────────
     slog("📰 Fetching news from 10+ sources...")
@@ -576,6 +625,33 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 decision['_original_decision'] = 'NO_TRADE'
                 decision['decision'] = ml_dir
                 decision['confidence'] = max(decision.get('confidence', 40), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+
+    # ── A6: Session Intelligence — track recent predictions per asset ────
+    recent_session = _session_predictions.get(req.asset, [])
+    if recent_session:
+        last = recent_session[-1]
+        if last['direction'] != 'NO_TRADE' and decision.get('decision') != 'NO_TRADE':
+            if last['direction'] != decision.get('decision') and (time.time() - last['ts']) < 3600:
+                slog(f"⚠ Session flip: was {last['direction']} {int(time.time()-last['ts'])}s ago, now {decision['decision']}")
+
+    # ── A8: Cross-prediction contradiction check ─────────────────────────
+    corr_assets = {'BTC': ['ETH', 'SOL'], 'ETH': ['BTC', 'SOL'], 'SOL': ['BTC', 'ETH'],
+                   'AAPL': ['MSFT', 'GOOGL', 'SPY'], 'MSFT': ['AAPL', 'GOOGL', 'SPY'],
+                   'GOOGL': ['AAPL', 'MSFT', 'SPY'], 'NVDA': ['SPY', 'MSFT'],
+                   'SPY': ['AAPL', 'MSFT', 'NVDA', 'GOOGL']}
+    related = corr_assets.get(req.asset, [])
+    contradictions = 0
+    for rel_asset in related:
+        rel_session = _session_predictions.get(rel_asset, [])
+        if rel_session and (time.time() - rel_session[-1]['ts']) < 7200:
+            rel_dir = rel_session[-1]['direction']
+            cur_dir = decision.get('decision')
+            if (rel_dir == 'BUY' and cur_dir == 'SELL') or (rel_dir == 'SELL' and cur_dir == 'BUY'):
+                contradictions += 1
+    if contradictions >= 2 and decision.get('decision') != 'NO_TRADE':
+        old_conf = decision.get('confidence', 50)
+        decision['confidence'] = max(0, old_conf - 10)
+        slog(f"⚠ Cross-prediction contradiction: {contradictions} correlated assets disagree — confidence {old_conf}% → {decision['confidence']}%")
 
     # ── Post-processing gates ────────────────────────────────────────────
     gate_reason = None
@@ -863,6 +939,11 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "macro_context": macro_context,
         "correlation": correlation_data,
         "cluster": cluster_data,
+        "smc": smc_data,
+        "orderbook": orderbook_data,
+        "whale_activity": whale_data,
+        "options_flow": options_data,
+        "smart_money": smart_money_data,
         "monte_carlo": mc,
         "similarity": {
             "count": len(similar),
@@ -877,6 +958,24 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "logs": logs,
         "duration_ms": total_ms,
     }
+
+    # Calibration (E3)
+    try:
+        cal = await calibrate_confidence(response['confidence'], req.asset, req.horizon, rated_preds)
+        response['calibration'] = cal
+        slog(f"✓ Calibration: raw={cal['raw']} calibrated={cal['calibrated']} ({cal['reliability']})")
+    except Exception:
+        response['calibration'] = None
+
+    # A6: Record session prediction
+    if req.asset not in _session_predictions:
+        _session_predictions[req.asset] = []
+    _session_predictions[req.asset].append({
+        'ts': int(time.time()),
+        'direction': response['decision'],
+        'confidence': response['confidence'],
+    })
+    _session_predictions[req.asset] = _session_predictions[req.asset][-10:]
 
     # Send Telegram notification (non-blocking)
     asyncio.create_task(send_prediction(response, req.asset, req.horizon))
@@ -1232,6 +1331,13 @@ async def check_outcome(req: OutcomeRequest):
         if postmortem:
             print(f"[POST-MORTEM] {req.asset} {req.horizon}H: {postmortem}")
 
+        # Track equity curve
+        _equity_tracker.record_outcome({
+            'feedback': feedback, 'moved_pct': moved_pct,
+            'asset': req.asset, 'decision': decision,
+            'rated_at': int(time.time()),
+        })
+
         # Trigger ML retrain asynchronously
         asyncio.create_task(_async_retrain(req.asset))
 
@@ -1512,6 +1618,130 @@ async def backtest(req: BacktestRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(500, f"Backtest failed: {str(e)[:200]}")
+
+
+# ─── Trading Endpoints (D1-D11) ──────────────────────────────────────────
+
+class TradeOpenRequest(BaseModel):
+    asset: str
+    direction: str
+    price: float
+    size_usd: float = 100.0
+    stop_loss_pct: float = 2.0
+    take_profit_pct: float = 4.0
+    trailing_pct: float = 1.5
+    confidence: int = 55
+    pqs_score: int = 5
+
+
+@app.post("/trade/open")
+async def trade_open(req: TradeOpenRequest):
+    engine = get_trading_engine()
+    allowed, reason = engine.can_trade(req.confidence, req.pqs_score)
+    if not allowed:
+        return {"ok": False, "error": reason}
+    result = await engine.open_position(
+        req.asset, req.direction, req.price, req.size_usd,
+        req.stop_loss_pct, req.take_profit_pct, req.trailing_pct
+    )
+    return result
+
+
+class TradeCloseRequest(BaseModel):
+    position_id: str
+    price: float
+    reason: str = "manual"
+
+
+@app.post("/trade/close")
+async def trade_close(req: TradeCloseRequest):
+    engine = get_trading_engine()
+    return await engine.close_position(req.position_id, req.price, req.reason)
+
+
+@app.get("/trade/positions")
+async def trade_positions(status: str = None):
+    engine = get_trading_engine()
+    return {"positions": engine.get_positions(status), "equity": engine._equity}
+
+
+@app.get("/trade/heartbeat")
+async def trade_heartbeat():
+    engine = get_trading_engine()
+    return engine.heartbeat()
+
+
+@app.get("/trade/log")
+async def trade_log(limit: int = 50):
+    engine = get_trading_engine()
+    return {"trades": engine.get_trade_log(limit)}
+
+
+class PaperModeRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/trade/paper")
+async def trade_paper(req: PaperModeRequest):
+    engine = get_trading_engine()
+    return engine.set_paper_mode(req.enabled)
+
+
+class WebhookPayload(BaseModel):
+    ticker: str
+    action: str
+    price: float
+
+
+@app.post("/trade/webhook")
+async def trade_webhook(payload: WebhookPayload):
+    engine = get_trading_engine()
+    return await engine.handle_webhook(payload.dict())
+
+
+# ─── Portfolio Scanner ───────────────────────────────────────────────────
+
+@app.get("/portfolio/scan")
+async def portfolio_scan():
+    try:
+        return await scan_portfolio()
+    except Exception as e:
+        return {"assets": [], "error": str(e)}
+
+
+# ─── Equity Tracker ─────────────────────────────────────────────────────
+
+@app.get("/equity")
+async def get_equity():
+    return {
+        "curve": _equity_tracker.get_curve(),
+        "stats": _equity_tracker.get_stats(),
+    }
+
+
+# ─── Calibration ────────────────────────────────────────────────────────
+
+@app.get("/calibrate")
+async def get_calibration(asset: str = 'BTC', horizon: int = 4):
+    preds = await get_predictions(asset, 500)
+    cal = await calibrate_confidence(50, asset, horizon, preds)
+    return cal
+
+
+# ─── WebSocket ──────────────────────────────────────────────────────────
+
+from fastapi import WebSocket as WSType
+
+
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WSType):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({"type": "pong", "ts": int(time.time())})
+    except Exception:
+        ws_manager.disconnect(websocket)
 
 
 @app.get("/db/status")

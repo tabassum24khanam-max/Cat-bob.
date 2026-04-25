@@ -382,6 +382,41 @@ function displayResult(r) {
     set('rp-rsidiv', div.bullish ? 'BULLISH divergence' : div.bearish ? 'BEARISH divergence' : 'None');
   } else { set('rp-rsidiv', '—'); }
 
+  // SMC (C1)
+  if (r.smc?.available) {
+    const s = r.smc;
+    set('rp-smc', `${s.bias.toUpperCase()} · OBs:${s.order_blocks?.length||0} FVGs:${s.fair_value_gaps?.length||0} BOS:${s.bos?.bullish?'↑':s.bos?.bearish?'↓':'—'}`);
+  } else { set('rp-smc', '—'); }
+
+  // Orderbook (C3)
+  if (r.orderbook?.available) {
+    set('rp-orderbook', `Imbal: ${(r.orderbook.imbalance_ratio*100).toFixed(1)}% (${r.orderbook.bias}) · Walls: ${r.orderbook.large_walls?.length||0}`);
+  } else { set('rp-orderbook', '—'); }
+
+  // Whale activity (C4)
+  if (r.whale_activity?.available) {
+    const w = r.whale_activity;
+    set('rp-whale', `Net flow: $${Math.abs(w.net_flow).toLocaleString()} ${w.net_flow>0?'IN':'OUT'} (${w.bias})`);
+  } else { set('rp-whale', '—'); }
+
+  // Options flow (C6)
+  if (r.options_flow?.available) {
+    const o = r.options_flow;
+    set('rp-options', `P/C: ${o.put_call_ratio.toFixed(2)} · Pain: $${o.max_pain} (${o.bias})`);
+  } else { set('rp-options', '—'); }
+
+  // Smart Money (C7)
+  if (r.smart_money?.available) {
+    const sm = r.smart_money;
+    set('rp-smartmoney', `SMI: ${sm.smart_money_index>0?'+':''}${sm.smart_money_index.toFixed(3)} ${sm.divergence?'⚠ DIVERGENCE':''} (${sm.bias})`);
+  } else { set('rp-smartmoney', '—'); }
+
+  // Calibration (E3)
+  if (r.calibration) {
+    const c = r.calibration;
+    set('rp-calibration', `Raw:${c.raw}% → Cal:${c.calibrated}% (${c.reliability}, ${c.n_samples} samples)`);
+  } else { set('rp-calibration', '—'); }
+
   const sim = r.similarity||{};
   const parts = [];
   if (r.insight) parts.push(`<strong>R1 Reasoning:</strong> ${r.insight}`);
