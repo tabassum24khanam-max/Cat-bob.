@@ -114,6 +114,154 @@ def detect_shooting_star(candles: list) -> int:
     return 0
 
 
+# B9: Additional candle patterns
+
+def detect_morning_star(candles: list) -> int:
+    """Morning star (bullish reversal) = +1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+    b1 = c1['close'] - c1['open']
+    b2 = abs(c2['close'] - c2['open'])
+    b3 = c3['close'] - c3['open']
+    r1 = c1['high'] - c1['low']
+    if r1 == 0:
+        return 0
+    if b1 < 0 and abs(b1) > 0.5 * r1:
+        if b2 < 0.3 * r1:
+            if b3 > 0 and b3 > 0.5 * abs(b1):
+                return 1
+    return 0
+
+
+def detect_evening_star(candles: list) -> int:
+    """Evening star (bearish reversal) = -1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+    b1 = c1['close'] - c1['open']
+    b2 = abs(c2['close'] - c2['open'])
+    b3 = c3['close'] - c3['open']
+    r1 = c1['high'] - c1['low']
+    if r1 == 0:
+        return 0
+    if b1 > 0 and b1 > 0.5 * r1:
+        if b2 < 0.3 * r1:
+            if b3 < 0 and abs(b3) > 0.5 * b1:
+                return -1
+    return 0
+
+
+def detect_three_white_soldiers(candles: list) -> int:
+    """Three white soldiers (strong bullish) = +1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    for i in range(-3, 0):
+        c = candles[i]
+        if c['close'] <= c['open']:
+            return 0
+    for i in range(-2, 0):
+        if candles[i]['close'] <= candles[i-1]['close']:
+            return 0
+    return 1
+
+
+def detect_three_black_crows(candles: list) -> int:
+    """Three black crows (strong bearish) = -1 if detected, else 0."""
+    if len(candles) < 3:
+        return 0
+    for i in range(-3, 0):
+        c = candles[i]
+        if c['close'] >= c['open']:
+            return 0
+    for i in range(-2, 0):
+        if candles[i]['close'] >= candles[i-1]['close']:
+            return 0
+    return -1
+
+
+# ─── Support / Resistance Detection (B6) ──────────────────────────────────
+
+def detect_support_resistance(highs: list, lows: list, closes: list, n_levels: int = 3) -> dict:
+    """Find key support/resistance levels using pivot-point clustering.
+
+    1. Identify local highs (resistance candidates) and local lows (support
+       candidates) over sliding windows of size 5.
+    2. Cluster nearby levels (within 0.5% of each other) by averaging.
+    3. Return the top *n_levels* support and resistance levels, sorted.
+    """
+    n = len(closes)
+    if n < 10:
+        return {'support': [], 'resistance': []}
+
+    window = 5
+    half = window // 2
+
+    # Collect local extremes
+    local_highs = []
+    local_lows = []
+    for i in range(half, n - half):
+        if highs[i] == max(highs[i - half:i + half + 1]):
+            local_highs.append(highs[i])
+        if lows[i] == min(lows[i - half:i + half + 1]):
+            local_lows.append(lows[i])
+
+    def cluster_levels(levels: list, threshold_pct: float = 0.5) -> list:
+        """Merge nearby price levels and return (avg_price, count) pairs."""
+        if not levels:
+            return []
+        levels = sorted(levels)
+        clusters = [[levels[0]]]
+        for lv in levels[1:]:
+            if abs(lv - clusters[-1][-1]) / (clusters[-1][-1] + 1e-12) * 100 < threshold_pct:
+                clusters[-1].append(lv)
+            else:
+                clusters.append([lv])
+        # Sort by cluster size (most-touched first), return averages
+        clusters.sort(key=lambda cl: len(cl), reverse=True)
+        return [round(sum(cl) / len(cl), 8) for cl in clusters]
+
+    resistance = cluster_levels(local_highs)[:n_levels]
+    support = cluster_levels(local_lows)[:n_levels]
+    return {'support': sorted(support), 'resistance': sorted(resistance)}
+
+
+# ─── RSI Divergence Detection ──────────────────────────────────────────────
+
+def detect_rsi_divergence(closes: list, period: int = 14, lookback: int = 20) -> dict:
+    """Detect bullish/bearish RSI divergence by comparing price vs RSI extremes."""
+    if len(closes) < period + lookback:
+        return {'bullish': False, 'bearish': False, 'bull_strength': 0, 'bear_strength': 0}
+
+    rsi_vals = []
+    for i in range(len(closes) - lookback, len(closes) + 1):
+        rsi_vals.append(rsi(closes[:i], period))
+
+    recent_prices = closes[-lookback:]
+    recent_rsi = rsi_vals[-lookback:]
+    half = lookback // 2
+
+    first_prices = recent_prices[:half]
+    second_prices = recent_prices[half:]
+    first_rsi = recent_rsi[:half]
+    second_rsi = recent_rsi[half:]
+
+    price_low_drop = (min(second_prices) - min(first_prices)) / (abs(min(first_prices)) + 1e-9) * 100
+    rsi_low_rise = min(second_rsi) - min(first_rsi)
+    bullish = price_low_drop < -0.5 and rsi_low_rise > 3
+
+    price_high_rise = (max(second_prices) - max(first_prices)) / (abs(max(first_prices)) + 1e-9) * 100
+    rsi_high_drop = max(second_rsi) - max(first_rsi)
+    bearish = price_high_rise > 0.5 and rsi_high_drop < -3
+
+    return {
+        'bullish': bullish,
+        'bearish': bearish,
+        'bull_strength': round(abs(rsi_low_rise), 1) if bullish else 0,
+        'bear_strength': round(abs(rsi_high_drop), 1) if bearish else 0,
+    }
+
+
 # ─── Kalman Filter ──────────────────────────────────────────────────────────
 
 def kalman_filter(prices: list):
@@ -166,8 +314,8 @@ def hmm_regime(closes: list, ranges: list):
 
 # ─── Monte Carlo ────────────────────────────────────────────────────────────
 
-def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = True) -> dict:
-    """1000 Monte Carlo price path simulations."""
+def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = True, fat_tails: bool = True) -> dict:
+    """1000 Monte Carlo price path simulations with fat-tail support."""
     import random
     n_sims = 1000
     steps = max(1, round(horizon_h))
@@ -180,6 +328,8 @@ def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = 
             u1 = max(1e-10, random.random())
             u2 = random.random()
             z = (-2 * math.log(u1)) ** 0.5 * math.cos(2 * math.pi * u2)
+            if fat_tails and random.random() < 0.05:
+                z *= random.uniform(2.0, 4.0)
             price *= (1 + step_vol * z)
         finals.append(price)
 
@@ -460,11 +610,72 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
     # HMM regime
     hmm = hmm_regime(c[-50:], [x['high'] - x['low'] for x in candles[-50:]])
 
-    # Candle patterns — NEW
+    # Candle patterns
     engulfing = detect_engulfing(candles)
     doji = detect_doji(candles)
     hammer = detect_hammer(candles)
     shooting_star = detect_shooting_star(candles)
+    morning_star = detect_morning_star(candles)
+    evening_star = detect_evening_star(candles)
+    three_white = detect_three_white_soldiers(candles)
+    three_black = detect_three_black_crows(candles)
+
+    # RSI divergence (B5)
+    rsi_div = detect_rsi_divergence(c, 14, 20)
+
+    # Support / Resistance (B6)
+    sr = detect_support_resistance(h, l, c)
+
+    # VWAP Bands (B7) — 1 std-dev above/below VWAP
+    vwap_sq_num = 0.0
+    for x in candles[-50:]:
+        tp = (x['high'] + x['low'] + x['close']) / 3
+        vol_x = x.get('volume', 1) or 1
+        vwap_sq_num += (tp ** 2) * vol_x
+    vwap_var = vwap_sq_num / (vwap_den if vwap_den > 0 else 1) - vwap ** 2
+    vwap_std = max(0, vwap_var) ** 0.5
+    vwap_upper = vwap + vwap_std
+    vwap_lower = vwap - vwap_std
+
+    # Enhanced Volume Profile — VAH / VAL (B8)
+    # Value Area = price range containing 70% of total volume
+    vol_profile = {}
+    total_vol_profile = 0.0
+    for x in candles[-20:]:
+        lo_edge = (x['low'] // price_step) * price_step
+        hi_edge = (x['high'] // price_step + 1) * price_step
+        p_iter = lo_edge
+        bar_vol = x.get('volume', 1) or 1
+        n_steps_bar = max(1, int((hi_edge - lo_edge) / price_step))
+        vol_per_step = bar_vol / n_steps_bar
+        while p_iter <= hi_edge:
+            k_vp = round(p_iter, 8)
+            vol_profile[k_vp] = vol_profile.get(k_vp, 0) + vol_per_step
+            total_vol_profile += vol_per_step
+            p_iter += price_step
+    # Sort by volume descending, accumulate until 70%
+    sorted_vp = sorted(vol_profile.items(), key=lambda kv: kv[1], reverse=True)
+    va_target = total_vol_profile * 0.70
+    va_accum = 0.0
+    va_prices = []
+    for price_lv, vol_lv in sorted_vp:
+        va_accum += vol_lv
+        va_prices.append(price_lv)
+        if va_accum >= va_target:
+            break
+    vah = max(va_prices) if va_prices else cur
+    val_ = min(va_prices) if va_prices else cur
+
+    # GARCH-lite volatility forecast (C5) — EWMA variance
+    ewma_lambda = 0.94
+    log_rets = [(c[i] - c[i-1]) / c[i-1] for i in range(max(1, n - 30), n)]
+    if len(log_rets) >= 2:
+        ewma_var = log_rets[0] ** 2
+        for r in log_rets[1:]:
+            ewma_var = ewma_lambda * ewma_var + (1 - ewma_lambda) * r ** 2
+        forecast_vol = ewma_var ** 0.5 * 100  # percentage
+    else:
+        forecast_vol = 0.0
 
     dist_e9   = (cur - e9)  / e9  * 100
     dist_e20  = (cur - e20) / e20 * 100
@@ -559,5 +770,17 @@ def compute_indicators(candles: list) -> Optional[Dict[str, Any]]:
         # New fields
         'engulfing': engulfing, 'doji': doji,
         'hammer': hammer, 'shooting_star': shooting_star,
+        'morning_star': morning_star, 'evening_star': evening_star,
+        'three_white_soldiers': three_white, 'three_black_crows': three_black,
         'adx': adx, 'cci': cci, 'mfi': mfi, 'stoch_rsi': stoch_rsi,
+        'rsi_div_bull': rsi_div['bullish'], 'rsi_div_bear': rsi_div['bearish'],
+        'rsi_div_bull_str': rsi_div['bull_strength'], 'rsi_div_bear_str': rsi_div['bear_strength'],
+        # B6: Support / Resistance
+        'support_levels': sr['support'], 'resistance_levels': sr['resistance'],
+        # B7: VWAP Bands
+        'vwap_upper': vwap_upper, 'vwap_lower': vwap_lower,
+        # B8: Enhanced Volume Profile
+        'vah': vah, 'val': val_,
+        # C5: Volatility forecast (GARCH-lite)
+        'forecast_vol': forecast_vol,
     }

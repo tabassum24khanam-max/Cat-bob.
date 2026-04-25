@@ -12,11 +12,41 @@ from ml_engine import bayesian_confidence
 
 
 async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
-                           quant_prompt: str, api_key: str) -> dict:
-    """Call GPT-4o-mini with full quant context."""
+                           quant_prompt: str, api_key: str, ds_key: str = '') -> dict:
+    """Call DeepSeek V4 (primary) or GPT-4o-mini (fallback) with full quant context."""
+    _fail = {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
+             "confidence": 40, "reasoning": "No API key — add OpenAI or DeepSeek in KEYS"}
+
+    # Primary: DeepSeek V4
+    if ds_key and len(ds_key) >= 10:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    "https://api.deepseek.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": "deepseek-chat",
+                        "max_tokens": 600,
+                        "messages": [
+                            {"role": "system", "content": "You are an expert quantitative trading analyst. Respond ONLY with valid JSON."},
+                            {"role": "user", "content": quant_prompt}
+                        ]
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data['choices'][0]['message']['content']
+                    m = re.search(r'\{[\s\S]*\}', text)
+                    if m:
+                        result = json.loads(m.group())
+                        result['_quant_model'] = 'deepseek-v4'
+                        return result
+        except Exception:
+            pass
+
+    # Fallback: OpenAI GPT-4o-mini
     if not api_key or len(api_key) < 10:
-        return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
-                "confidence": 40, "reasoning": "No OpenAI API key — add it in KEYS settings"}
+        return _fail
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -33,7 +63,9 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
             text = data['choices'][0]['message']['content']
             m = re.search(r'\{[\s\S]*\}', text)
             if m:
-                return json.loads(m.group())
+                result = json.loads(m.group())
+                result['_quant_model'] = 'gpt-4o-mini'
+                return result
             return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50, "confidence": 40, "reasoning": "Parse error"}
     except Exception as e:
         return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
@@ -95,8 +127,11 @@ VWAP dist: {ind['dist_vwap']:+.2f}% {'ABOVE' if ind['dist_vwap'] > 0 else 'BELOW
 POC dist: {ind['dist_poc']:+.2f}%
 Pivots: R2={ind.get('pivot_r2', 0):.4f} R1={ind['pivot_r1']:.4f} P={ind['pivot_p']:.4f} S1={ind['pivot_s1']:.4f} S2={ind.get('pivot_s2', 0):.4f}
 
+RSI DIVERGENCE:
+{'BULLISH divergence detected (price lower low, RSI higher low) — reversal signal' if ind.get('rsi_div_bull') else ''}{'BEARISH divergence detected (price higher high, RSI lower high) — reversal signal' if ind.get('rsi_div_bear') else ''}{'None' if not ind.get('rsi_div_bull') and not ind.get('rsi_div_bear') else ''}
+
 CANDLE PATTERNS:
-{'ENGULFING(' + ('bull' if ind.get('engulfing', 0) > 0 else 'bear') + ')' if ind.get('engulfing') else ''} {'DOJI' if ind.get('doji') else ''} {'HAMMER' if ind.get('hammer') else ''} {'SHOOTING_STAR' if ind.get('shooting_star') else ''}
+{'ENGULFING(' + ('bull' if ind.get('engulfing', 0) > 0 else 'bear') + ')' if ind.get('engulfing') else ''} {'DOJI' if ind.get('doji') else ''} {'HAMMER' if ind.get('hammer') else ''} {'SHOOTING_STAR' if ind.get('shooting_star') else ''} {'MORNING_STAR' if ind.get('morning_star') else ''} {'EVENING_STAR' if ind.get('evening_star') else ''} {'THREE_WHITE_SOLDIERS' if ind.get('three_white_soldiers') else ''} {'THREE_BLACK_CROWS' if ind.get('three_black_crows') else ''}
 
 MONTE CARLO (1000 paths):
 Median target: {mc.get('median', ind['cur']):.4f}
@@ -114,5 +149,7 @@ RULES:
 - Pick a direction (BUY or SELL) based on the weight of evidence. Only output NO_TRADE if indicators are genuinely contradictory with no clear majority.
 - Candle patterns add confirmation only — never trade on pattern alone.
 
+DEVIL'S ADVOCATE: Before finalizing, consider the strongest argument AGAINST your chosen direction. State this counter-argument in your reasoning. For example, if you lean BUY, what is the single most compelling reason it could drop? Include this in "counter_argument".
+
 Respond ONLY with this JSON:
-{{"direction":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2 sentences: regime + primary signal>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""
+{{"direction":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2 sentences: regime + primary signal>","counter_argument":"<1 sentence: strongest argument against your direction>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""

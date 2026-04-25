@@ -31,8 +31,25 @@ from macro_engine import get_macro_context
 from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
+from telegram_bot import send_prediction, send_scanner_summary
+from trading_engine import get_engine as get_trading_engine
+from portfolio import scan_portfolio
+from calibration import calibrate_confidence
+from equity_tracker import EquityTracker
+from ws_manager import ws_manager
+from smc_engine import detect_smc
+from orderbook import get_orderbook_imbalance
+from whale_monitor import get_whale_activity
+from options_flow import get_options_sentiment
+from smart_money import analyze_smart_money
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
+
+# Singletons
+_equity_tracker = EquityTracker()
+
+# A6: Session Intelligence — track recent predictions per asset
+_session_predictions: dict = {}  # {asset: [{'ts': int, 'direction': str, 'confidence': int}]}
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,10 +73,11 @@ async def startup():
     print(f"✓ ULTRAMAX Backend started")
     print(f"  Database: {DB_PATH}")
     print(f"  Worker: {WORKER_URL}")
-    # Pre-train ML ensemble from existing history
     asyncio.create_task(warm_ml_models())
-    # Initial calendar refresh
     asyncio.create_task(_safe_refresh_calendar())
+    asyncio.create_task(_continuous_scanner())
+    asyncio.create_task(_trading_position_monitor())
+    asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -130,6 +148,43 @@ def _score_prediction(decision: str, original_decision: str, entry_price: float,
     return 'skipped'
 
 
+def _postmortem_analysis(req, feedback: str, moved_pct: float, outcome_price: float) -> str:
+    """A10: Simple post-mortem — compare decision vs actual move and note what went wrong/right."""
+    decision = req.decision or 'NO_TRADE'
+    orig = req.original_decision or decision
+    parts = []
+
+    if feedback == 'correct':
+        parts.append(f"CORRECT — {orig} was right, price moved {moved_pct:+.2f}%.")
+    elif feedback == 'wrong':
+        parts.append(f"WRONG — {orig} predicted but price moved {moved_pct:+.2f}% (opposite).")
+    else:
+        parts.append(f"SKIPPED — no clear direction to evaluate.")
+
+    # Compare predicted target vs actual
+    pred_price = req.predicted_price or req.target_price
+    if pred_price and req.entry_price:
+        expected_pct = (pred_price - req.entry_price) / req.entry_price * 100
+        parts.append(f"Expected {expected_pct:+.2f}%, got {moved_pct:+.2f}%.")
+        if abs(expected_pct) > 0.01:
+            accuracy_ratio = moved_pct / expected_pct if expected_pct != 0 else 0
+            if accuracy_ratio > 0.8:
+                parts.append("Target accuracy: GOOD (>80% of predicted move).")
+            elif accuracy_ratio > 0.3:
+                parts.append("Target accuracy: PARTIAL (direction right, magnitude off).")
+            else:
+                parts.append("Target accuracy: POOR.")
+
+    # Gate override analysis
+    if decision == 'NO_TRADE' and orig and orig != 'NO_TRADE':
+        if feedback == 'correct':
+            parts.append(f"Gate overrode {orig} to NO_TRADE — original call was correct, gate was too cautious.")
+        elif feedback == 'wrong':
+            parts.append(f"Gate overrode {orig} to NO_TRADE — gate correctly prevented a bad trade.")
+
+    return ' '.join(parts) if parts else ''
+
+
 async def _safe_refresh_calendar():
     """Safely refresh economic calendar on startup."""
     await asyncio.sleep(3)
@@ -197,6 +252,109 @@ async def warm_ml_models():
                 print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
     except Exception as e:
         print(f"⚠ ML warm-up skipped: {e}")
+
+
+def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
+                 ind: dict, decision: dict, mtf_data: dict = None) -> dict:
+    """Prediction Quality Score 0-10 — measures signal confluence."""
+    score = 0
+    reasons = []
+    d_dir = decision.get('decision', '')
+
+    # 1. Agent agreement (0-3)
+    q_dir = quant_result.get('direction', '').upper()
+    n_sent = news_result.get('sentiment', '').upper()
+    ml_dir = None
+    if ml_result and ml_result.get('available'):
+        ms = ml_result.get('score', 50)
+        ml_dir = 'BUY' if ms > 55 else 'SELL' if ms < 45 else None
+    agree = sum([
+        q_dir == d_dir,
+        (n_sent == 'BULLISH' and d_dir == 'BUY') or (n_sent == 'BEARISH' and d_dir == 'SELL'),
+        ml_dir == d_dir if ml_dir else False,
+    ])
+    score += agree
+    if agree == 3: reasons.append('All agents agree')
+    elif agree == 2: reasons.append('2/3 agents agree')
+
+    # 2. Regime clarity (0-2)
+    hmm = ind.get('hmm_probs', {})
+    max_prob = max(hmm.values()) if hmm else 0
+    if max_prob > 0.6:
+        score += 2; reasons.append(f'Clear regime ({max_prob:.0%})')
+    elif max_prob > 0.45:
+        score += 1; reasons.append('Moderate regime')
+
+    # 3. Hurst non-random (0-1)
+    hurst = ind.get('hurst_exp', 0.5)
+    if hurst > 0.6 or hurst < 0.4:
+        score += 1; reasons.append('Hurst decisive')
+
+    # 4. Low entropy (0-1)
+    if ind.get('entropy_ratio', 0.5) < 0.4:
+        score += 1; reasons.append('Low noise')
+
+    # 5. Volume confirmation (0-1)
+    if ind.get('vol_percentile', 50) > 60:
+        score += 1; reasons.append('Volume confirms')
+
+    # 6. Daily trend alignment (0-1)
+    if mtf_data:
+        if (mtf_data.get('daily_bull') and d_dir == 'BUY') or \
+           (mtf_data.get('daily_bear') and d_dir == 'SELL'):
+            score += 1; reasons.append('Daily aligned')
+
+    # 7. RSI divergence support (0-1)
+    if (d_dir == 'BUY' and ind.get('rsi_div_bull')) or \
+       (d_dir == 'SELL' and ind.get('rsi_div_bear')):
+        score += 1; reasons.append('RSI divergence confirms')
+
+    return {'score': min(10, score), 'reasons': reasons, 'max': 10}
+
+
+# ─── Adaptive Gate Thresholds (A5) ────────────────────────────────────────
+_gate_stats = {'trades': 0, 'wins': 0}
+
+
+def get_adaptive_floor():
+    """Confidence floor adapts: if recent accuracy is high, lower the floor."""
+    if _gate_stats['trades'] < 20:
+        return 38
+    win_rate = _gate_stats['wins'] / _gate_stats['trades']
+    if win_rate > 0.6:
+        return 32
+    if win_rate > 0.5:
+        return 35
+    return 42
+
+
+async def _continuous_scanner():
+    """Background scanner — runs every 60s, sends Telegram alerts."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            alerts = await scan_for_alerts()
+            if alerts:
+                print(f"Scanner: {len(alerts)} high-confluence alert(s)")
+                asyncio.create_task(send_scanner_summary(alerts))
+        except Exception as e:
+            print(f"Scanner error: {e}")
+        await asyncio.sleep(60)
+
+
+async def _trading_position_monitor():
+    """Background task: check open trading positions every 30s."""
+    await asyncio.sleep(15)
+    engine = get_trading_engine()
+    while True:
+        try:
+            if any(p.status == 'open' for p in engine.positions.values()):
+                actions = await engine.check_all_positions(fetch_current_price)
+                for act in actions:
+                    print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+        except Exception as e:
+            print(f"Position monitor error: {e}")
+        await asyncio.sleep(30)
 
 
 @app.post("/retrain")
@@ -305,15 +463,21 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Found {len(similar)} similar periods — {wins/len(similar)*100:.0f}% were up")
 
     # ── Fetch parallel data ──────────────────────────────────────────────
-    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster in parallel...")
+    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales in parallel...")
     asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
-    macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data, cluster_data = await asyncio.gather(
+    (macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data,
+     cluster_data, smc_data, orderbook_data, whale_data, options_data) = await asyncio.gather(
         fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset),
         get_sentiment_snapshot(req.asset),
         get_macro_context(req.asset, req.horizon),
         get_correlation_summary(req.asset),
         _safe_assign_cluster(req.asset, ind),
+        detect_smc(candles),
+        get_orderbook_imbalance(req.asset),
+        get_whale_activity(req.asset),
+        get_options_sentiment(req.asset),
     )
+    smart_money_data = analyze_smart_money(candles)
     if sentiment_data.get('available'):
         slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
     if macro_context.get('warnings'):
@@ -322,6 +486,16 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Correlations loaded")
     if cluster_data.get('available'):
         slog(f"✓ Cluster #{cluster_data.get('cluster_id', '?')} ({cluster_data.get('members', 0)} members)")
+    if smc_data.get('available'):
+        slog(f"✓ SMC: bias={smc_data.get('bias')} OBs={len(smc_data.get('order_blocks',[]))} FVGs={len(smc_data.get('fair_value_gaps',[]))}")
+    if orderbook_data.get('available'):
+        slog(f"✓ Orderbook: imbalance={orderbook_data.get('imbalance_ratio',0):+.3f} ({orderbook_data.get('bias')})")
+    if whale_data.get('available'):
+        slog(f"✓ Whale flow: net={whale_data.get('net_flow',0):,.0f} USD ({whale_data.get('bias')})")
+    if options_data.get('available'):
+        slog(f"✓ Options: P/C={options_data.get('put_call_ratio',0):.2f} max_pain={options_data.get('max_pain',0):.2f}")
+    if smart_money_data.get('available'):
+        slog(f"✓ Smart Money: SMI={smart_money_data.get('smart_money_index',0):+.4f} ({smart_money_data.get('bias')})")
 
     # ── Fetch news ───────────────────────────────────────────────────────
     slog("📰 Fetching news from 10+ sources...")
@@ -372,12 +546,13 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     else:
         slog("⚠ ML ensemble: no trained model yet")
 
-    # ── Agent 1: Quant ───────────────────────────────────────────────────
-    slog("📐 Agent 1 (Quant) analyzing...")
+    # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
+    quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
+    slog(f"📐 Agent 1 (Quant/{quant_model_label}) analyzing...")
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
                                        cluster_data=cluster_data, correlation_data=correlation_data)
-    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key)
-    slog(f"✓ Quant: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
+    quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
+    slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
     # ── Bayesian + 4-way confidence blending ────────────────────────────
     rated_preds = await get_predictions(req.asset, 200)
@@ -386,12 +561,23 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     ml_conf = ml_result.get('score', 50) if ml_result['available'] else None
     cluster_conf = cluster_data.get('win_rate_4h') if cluster_data.get('available') else None
 
+    # A3: Regime-adaptive weights — adjust blending based on market regime
+    regime = ind.get('regime', 'NEUTRAL')
+    hurst = ind.get('hurst_exp', 0.5)
+    regime_ml_boost = 0.0
+    if regime == 'TRENDING' and hurst > 0.55:
+        regime_ml_boost = 0.05
+    elif regime in ('RANGING', 'LOW_VOLATILITY') and hurst < 0.45:
+        regime_ml_boost = 0.03
+    elif regime == 'HIGH_VOLATILITY':
+        regime_ml_boost = -0.05
+
     if ml_conf is not None and cluster_conf is not None:
-        # 4-way: ML leads — trained on 22K real samples at 70% accuracy
-        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * 0.45 + cluster_conf * 0.20
+        ml_w = 0.45 + regime_ml_boost
+        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * ml_w + cluster_conf * (0.20 - regime_ml_boost)
     elif ml_conf is not None:
-        # 3-way: ML dominant
-        blended_conf = raw_ai_conf * 0.20 + bayes_conf * 0.25 + ml_conf * 0.55
+        ml_w = 0.55 + regime_ml_boost
+        blended_conf = raw_ai_conf * (0.20 - regime_ml_boost) + bayes_conf * 0.25 + ml_conf * ml_w
     elif cluster_conf is not None:
         blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
     else:
@@ -400,7 +586,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
 
     # ── Agent 2: News ────────────────────────────────────────────────────
-    slog(f"📰 Agent 2 (News/{'DeepSeek V3' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
+    slog(f"📰 Agent 2 (News/{'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
     news_result = await run_news_agent(
         req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type,
         articles, macro_data, onchain_data, fg_data, {},
@@ -410,7 +596,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
 
     # ── Agent 3: Decision (R1) ───────────────────────────────────────────
     use_r1 = bool(req.ds_key) and (req.use_r1 is not False)
-    model_name = 'R1' if use_r1 else ('V3' if req.ds_key else 'GPT-4o')
+    model_name = 'R1' if use_r1 else ('V4' if req.ds_key else 'GPT-4o')
     slog(f"🧠 Agent 3 ({model_name}) making final decision...")
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
@@ -439,6 +625,33 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 decision['_original_decision'] = 'NO_TRADE'
                 decision['decision'] = ml_dir
                 decision['confidence'] = max(decision.get('confidence', 40), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+
+    # ── A6: Session Intelligence — track recent predictions per asset ────
+    recent_session = _session_predictions.get(req.asset, [])
+    if recent_session:
+        last = recent_session[-1]
+        if last['direction'] != 'NO_TRADE' and decision.get('decision') != 'NO_TRADE':
+            if last['direction'] != decision.get('decision') and (time.time() - last['ts']) < 3600:
+                slog(f"⚠ Session flip: was {last['direction']} {int(time.time()-last['ts'])}s ago, now {decision['decision']}")
+
+    # ── A8: Cross-prediction contradiction check ─────────────────────────
+    corr_assets = {'BTC': ['ETH', 'SOL'], 'ETH': ['BTC', 'SOL'], 'SOL': ['BTC', 'ETH'],
+                   'AAPL': ['MSFT', 'GOOGL', 'SPY'], 'MSFT': ['AAPL', 'GOOGL', 'SPY'],
+                   'GOOGL': ['AAPL', 'MSFT', 'SPY'], 'NVDA': ['SPY', 'MSFT'],
+                   'SPY': ['AAPL', 'MSFT', 'NVDA', 'GOOGL']}
+    related = corr_assets.get(req.asset, [])
+    contradictions = 0
+    for rel_asset in related:
+        rel_session = _session_predictions.get(rel_asset, [])
+        if rel_session and (time.time() - rel_session[-1]['ts']) < 7200:
+            rel_dir = rel_session[-1]['direction']
+            cur_dir = decision.get('decision')
+            if (rel_dir == 'BUY' and cur_dir == 'SELL') or (rel_dir == 'SELL' and cur_dir == 'BUY'):
+                contradictions += 1
+    if contradictions >= 2 and decision.get('decision') != 'NO_TRADE':
+        old_conf = decision.get('confidence', 50)
+        decision['confidence'] = max(0, old_conf - 10)
+        slog(f"⚠ Cross-prediction contradiction: {contradictions} correlated assets disagree — confidence {old_conf}% → {decision['confidence']}%")
 
     # ── Post-processing gates ────────────────────────────────────────────
     gate_reason = None
@@ -597,12 +810,13 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 slog(f"⚠ ML disagreement: ML score={ml_score:.1f} vs {decision['decision']} — capped 55%")
                 decision['confidence'] = 55
 
-    # GATE 13: CONFIDENCE FLOOR — <38% = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < 38:
+    # GATE 13: ADAPTIVE CONFIDENCE FLOOR (A5)
+    conf_floor = get_adaptive_floor()
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
         decision['_original_decision'] = decision.get('decision')
         decision['decision'] = 'NO_TRADE'
-        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < 38%"
-        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}%")
+        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < {conf_floor}%"
+        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}% (floor={conf_floor}%)")
 
     # GATE 14: UPCOMING EVENT — high-impact event within horizon = -15 confidence
     if decision.get('decision') != 'NO_TRADE' and macro_context.get('upcoming_events'):
@@ -645,10 +859,23 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         decision['price_target_bull'] = None
         decision['price_target_bear'] = None
 
+    # ── PQS (A2) + Update gate stats (A5) ─────────────────────────────────
+    pqs = compute_pqs(quant_result, news_result, ml_result, ind, decision, mtf_data)
+    slog(f"✓ PQS: {pqs['score']}/10 [{', '.join(pqs['reasons'][:3])}]")
+
+    # Update adaptive gate stats from recent outcomes
+    try:
+        recent = await get_predictions(req.asset, 50)
+        rated = [p for p in recent if p.get('feedback') in ('correct', 'wrong')]
+        _gate_stats['trades'] = len(rated)
+        _gate_stats['wins'] = sum(1 for p in rated if p['feedback'] == 'correct')
+    except Exception:
+        pass
+
     total_ms = int((time.time() - start_time) * 1000)
     slog(f"✅ Complete in {total_ms}ms")
 
-    return {
+    response = {
         "decision": decision.get('decision', 'NO_TRADE'),
         "confidence": decision.get('confidence', 50),
         "prob_up": decision.get('prob_up', mc['prob_up'] * 100),
@@ -699,18 +926,25 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             "trend_stability": ind['trend_stability'], "vol_percentile": ind['vol_percentile'],
             "vol_r": ind['vol_r'], "stoch_k": ind['stoch_k'],
             "bb_pos": ind['bb_pos'], "poc": ind['poc'], "dist_poc": ind['dist_poc'],
+            "rsi_div_bull": ind.get('rsi_div_bull', False), "rsi_div_bear": ind.get('rsi_div_bear', False),
         },
-        "ind_snapshot": json.dumps(ind),  # full snapshot for ML training
-        # ML ensemble
+        "ind_snapshot": json.dumps(ind),
         "ml": ml_result,
-        # New engines
+        "pqs": pqs,
+        "rsi_divergence": {
+            "bullish": ind.get('rsi_div_bull', False),
+            "bearish": ind.get('rsi_div_bear', False),
+        },
         "sentiment": sentiment_data,
         "macro_context": macro_context,
         "correlation": correlation_data,
         "cluster": cluster_data,
-        # MC results
+        "smc": smc_data,
+        "orderbook": orderbook_data,
+        "whale_activity": whale_data,
+        "options_flow": options_data,
+        "smart_money": smart_money_data,
         "monte_carlo": mc,
-        # Similarity
         "similarity": {
             "count": len(similar),
             "win_rate": sum(1 for s in similar if (s.get('fwd_4h') or 0) > 0) / len(similar) * 100 if similar else 0,
@@ -718,15 +952,35 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         },
         "bayesian_conf": bayes_conf,
         "raw_ai_conf": raw_ai_conf,
-        # DB sentiment memory
         "db_sentiment": db_sentiment,
-        # Candle data for chart (last 100)
         "candles": candles[-100:],
         "recent_prices": recent_prices,
-        # System log
         "logs": logs,
         "duration_ms": total_ms,
     }
+
+    # Calibration (E3)
+    try:
+        cal = await calibrate_confidence(response['confidence'], req.asset, req.horizon, rated_preds)
+        response['calibration'] = cal
+        slog(f"✓ Calibration: raw={cal['raw']} calibrated={cal['calibrated']} ({cal['reliability']})")
+    except Exception:
+        response['calibration'] = None
+
+    # A6: Record session prediction
+    if req.asset not in _session_predictions:
+        _session_predictions[req.asset] = []
+    _session_predictions[req.asset].append({
+        'ts': int(time.time()),
+        'direction': response['decision'],
+        'confidence': response['confidence'],
+    })
+    _session_predictions[req.asset] = _session_predictions[req.asset][-10:]
+
+    # Send Telegram notification (non-blocking)
+    asyncio.create_task(send_prediction(response, req.asset, req.horizon))
+
+    return response
 
 
 @app.get("/history")
@@ -1072,6 +1326,18 @@ async def check_outcome(req: OutcomeRequest):
             feedback, target_hit, note
         )
 
+        # A10: Post-mortem Learning — log what indicators said vs what happened
+        postmortem = _postmortem_analysis(req, feedback, moved_pct, price)
+        if postmortem:
+            print(f"[POST-MORTEM] {req.asset} {req.horizon}H: {postmortem}")
+
+        # Track equity curve
+        _equity_tracker.record_outcome({
+            'feedback': feedback, 'moved_pct': moved_pct,
+            'asset': req.asset, 'decision': decision,
+            'rated_at': int(time.time()),
+        })
+
         # Trigger ML retrain asynchronously
         asyncio.create_task(_async_retrain(req.asset))
 
@@ -1080,7 +1346,8 @@ async def check_outcome(req: OutcomeRequest):
             "moved_pct": moved_pct,
             "feedback": feedback,
             "target_hit": target_hit,
-            "note": note
+            "note": note,
+            "postmortem": postmortem,
         }
     except Exception as e:
         raise HTTPException(400, str(e))
@@ -1150,8 +1417,18 @@ async def get_market_data(asset: str):
 async def get_alerts():
     """Get latest confluence alerts."""
     try:
-        alerts = get_latest_alerts()
-        return {"alerts": alerts, "count": len(alerts)}
+        data = get_latest_alerts()
+        return data
+    except Exception as e:
+        return {"alerts": [], "count": 0, "error": str(e)}
+
+
+@app.get("/scanner")
+async def run_scanner():
+    """Run a full scanner pass on demand and return results."""
+    try:
+        alerts = await scan_for_alerts()
+        return {"alerts": alerts, "count": len(alerts), "ts": int(time.time())}
     except Exception as e:
         return {"alerts": [], "error": str(e)}
 
@@ -1169,6 +1446,7 @@ async def get_settings():
         "alpaca_configured": is_configured('ALPACA_KEY'),
         "openai_configured": is_configured('OPENAI_API_KEY'),
         "deepseek_configured": is_configured('DEEPSEEK_API_KEY'),
+        "telegram_configured": is_configured('TELEGRAM_BOT_TOKEN'),
     }
 
 
@@ -1178,11 +1456,292 @@ async def save_settings(req: SettingsRequest):
     saved = []
     for key, value in req.settings.items():
         if key in ('FRED_API_KEY', 'REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET',
-                    'ALPACA_KEY', 'ALPACA_SECRET') and value:
+                    'ALPACA_KEY', 'ALPACA_SECRET', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID') and value:
             os.environ[key] = value
             set_setting(key, value)
             saved.append(key)
     return {"ok": True, "saved": saved}
+
+
+# ─── E1: Backtester Endpoint ───────────────────────────────────────────────
+
+class BacktestRequest(BaseModel):
+    asset: str
+    horizon: int = 4
+    periods: int = 50
+
+
+@app.post("/backtest")
+async def backtest(req: BacktestRequest):
+    """E1: Walk-forward backtest over the last N candle periods.
+
+    For each period, compute indicators on the history available at that point,
+    derive a simple rule-based directional signal, then compare against
+    what actually happened over the next *horizon* candles.
+    Returns win rate and per-period stats.
+    """
+    try:
+        iv = '1h' if req.horizon <= 8 else '4h' if req.horizon <= 72 else '1d'
+        # Need enough candles: warmup (60) + periods + horizon lookahead
+        need = 60 + req.periods + req.horizon
+        candles = await fetch_candles(req.asset, iv, min(need + 50, 500))
+        if not candles or len(candles) < 60 + req.periods + req.horizon:
+            raise HTTPException(400, f"Not enough candle data (got {len(candles) if candles else 0}, need {60 + req.periods + req.horizon})")
+
+        results = []
+        wins = 0
+        losses = 0
+        skipped = 0
+
+        # Walk forward: for each period i, use candles[:end_idx] to compute
+        # indicators and candles[end_idx : end_idx + horizon] as the outcome.
+        total_candles = len(candles)
+        start_offset = total_candles - req.periods - req.horizon
+
+        for i in range(req.periods):
+            end_idx = start_offset + i  # last candle available for indicators
+            if end_idx < 60:
+                skipped += 1
+                continue
+
+            hist = candles[:end_idx + 1]
+            ind = compute_indicators(hist[-300:])
+            if not ind:
+                skipped += 1
+                continue
+
+            # Simple rule-based signal from indicators
+            bull_signals = 0
+            bear_signals = 0
+
+            # RSI
+            if ind['rsi14'] < 35:
+                bull_signals += 1
+            elif ind['rsi14'] > 65:
+                bear_signals += 1
+
+            # MACD
+            if ind['macd_hist'] > 0:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # EMA alignment
+            if ind['ema_align_bull'] >= 3:
+                bull_signals += 1
+            if ind['ema_align_bear'] >= 3:
+                bear_signals += 1
+
+            # Supertrend
+            if ind['supertrend_bull']:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # VWAP
+            if ind['dist_vwap'] > 0:
+                bull_signals += 1
+            else:
+                bear_signals += 1
+
+            # CMF
+            if ind['cmf'] > 0.05:
+                bull_signals += 1
+            elif ind['cmf'] < -0.05:
+                bear_signals += 1
+
+            # Ichimoku
+            if ind['ich_bull']:
+                bull_signals += 1
+            elif ind['ich_bear']:
+                bear_signals += 1
+
+            # Determine signal
+            if bull_signals > bear_signals + 1:
+                signal = 'BUY'
+            elif bear_signals > bull_signals + 1:
+                signal = 'SELL'
+            else:
+                signal = 'NO_TRADE'
+                skipped += 1
+                continue
+
+            # Outcome: price change over next horizon candles
+            outcome_idx = min(end_idx + req.horizon, total_candles - 1)
+            entry_price = candles[end_idx]['close']
+            outcome_price = candles[outcome_idx]['close']
+            moved_pct = (outcome_price - entry_price) / entry_price * 100
+
+            correct = (signal == 'BUY' and moved_pct > 0) or (signal == 'SELL' and moved_pct < 0)
+            if correct:
+                wins += 1
+            else:
+                losses += 1
+
+            results.append({
+                'period': i + 1,
+                'signal': signal,
+                'entry': round(entry_price, 6),
+                'outcome': round(outcome_price, 6),
+                'moved_pct': round(moved_pct, 3),
+                'correct': correct,
+                'rsi': round(ind['rsi14'], 1),
+                'macd_hist': round(ind['macd_hist'], 6),
+                'regime': ind['regime'],
+            })
+
+        total_trades = wins + losses
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        avg_move = sum(r['moved_pct'] for r in results) / len(results) if results else 0
+        avg_win = sum(r['moved_pct'] for r in results if r['correct']) / wins if wins > 0 else 0
+        avg_loss = sum(r['moved_pct'] for r in results if not r['correct']) / losses if losses > 0 else 0
+
+        return {
+            'asset': req.asset,
+            'horizon': req.horizon,
+            'periods': req.periods,
+            'interval': iv,
+            'total_trades': total_trades,
+            'wins': wins,
+            'losses': losses,
+            'skipped': skipped,
+            'win_rate': round(win_rate, 1),
+            'avg_move_pct': round(avg_move, 3),
+            'avg_win_pct': round(avg_win, 3),
+            'avg_loss_pct': round(avg_loss, 3),
+            'profit_factor': round(abs(avg_win / avg_loss), 2) if avg_loss != 0 else 0,
+            'results': results,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Backtest failed: {str(e)[:200]}")
+
+
+# ─── Trading Endpoints (D1-D11) ──────────────────────────────────────────
+
+class TradeOpenRequest(BaseModel):
+    asset: str
+    direction: str
+    price: float
+    size_usd: float = 100.0
+    stop_loss_pct: float = 2.0
+    take_profit_pct: float = 4.0
+    trailing_pct: float = 1.5
+    confidence: int = 55
+    pqs_score: int = 5
+
+
+@app.post("/trade/open")
+async def trade_open(req: TradeOpenRequest):
+    engine = get_trading_engine()
+    allowed, reason = engine.can_trade(req.confidence, req.pqs_score)
+    if not allowed:
+        return {"ok": False, "error": reason}
+    result = await engine.open_position(
+        req.asset, req.direction, req.price, req.size_usd,
+        req.stop_loss_pct, req.take_profit_pct, req.trailing_pct
+    )
+    return result
+
+
+class TradeCloseRequest(BaseModel):
+    position_id: str
+    price: float
+    reason: str = "manual"
+
+
+@app.post("/trade/close")
+async def trade_close(req: TradeCloseRequest):
+    engine = get_trading_engine()
+    return await engine.close_position(req.position_id, req.price, req.reason)
+
+
+@app.get("/trade/positions")
+async def trade_positions(status: str = None):
+    engine = get_trading_engine()
+    return {"positions": engine.get_positions(status), "equity": engine._equity}
+
+
+@app.get("/trade/heartbeat")
+async def trade_heartbeat():
+    engine = get_trading_engine()
+    return engine.heartbeat()
+
+
+@app.get("/trade/log")
+async def trade_log(limit: int = 50):
+    engine = get_trading_engine()
+    return {"trades": engine.get_trade_log(limit)}
+
+
+class PaperModeRequest(BaseModel):
+    enabled: bool
+
+
+@app.post("/trade/paper")
+async def trade_paper(req: PaperModeRequest):
+    engine = get_trading_engine()
+    return engine.set_paper_mode(req.enabled)
+
+
+class WebhookPayload(BaseModel):
+    ticker: str
+    action: str
+    price: float
+
+
+@app.post("/trade/webhook")
+async def trade_webhook(payload: WebhookPayload):
+    engine = get_trading_engine()
+    return await engine.handle_webhook(payload.dict())
+
+
+# ─── Portfolio Scanner ───────────────────────────────────────────────────
+
+@app.get("/portfolio/scan")
+async def portfolio_scan():
+    try:
+        return await scan_portfolio()
+    except Exception as e:
+        return {"assets": [], "error": str(e)}
+
+
+# ─── Equity Tracker ─────────────────────────────────────────────────────
+
+@app.get("/equity")
+async def get_equity():
+    return {
+        "curve": _equity_tracker.get_curve(),
+        "stats": _equity_tracker.get_stats(),
+    }
+
+
+# ─── Calibration ────────────────────────────────────────────────────────
+
+@app.get("/calibrate")
+async def get_calibration(asset: str = 'BTC', horizon: int = 4):
+    preds = await get_predictions(asset, 500)
+    cal = await calibrate_confidence(50, asset, horizon, preds)
+    return cal
+
+
+# ─── WebSocket ──────────────────────────────────────────────────────────
+
+from fastapi import WebSocket as WSType
+
+
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WSType):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({"type": "pong", "ts": int(time.time())})
+    except Exception:
+        ws_manager.disconnect(websocket)
 
 
 @app.get("/db/status")

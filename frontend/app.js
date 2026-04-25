@@ -10,6 +10,8 @@ let redditId = localStorage.getItem('um_reddit_id') || '';
 let redditSecret = localStorage.getItem('um_reddit_secret') || '';
 let alpacaKey = localStorage.getItem('um_alpaca_key') || '';
 let alpacaSecret = localStorage.getItem('um_alpaca_secret') || '';
+let telegramToken = localStorage.getItem('um_tg_token') || '';
+let telegramChat = localStorage.getItem('um_tg_chat') || '';
 let asset   = 'BTC';
 let horizon = 4;
 let chartInst = null, mainSeries = null, predSeries = null;
@@ -50,14 +52,14 @@ function toggleR1() {
   useR1 = !useR1;
   localStorage.setItem('um_use_r1', useR1 ? 'true' : 'false');
   syncR1Toggle();
-  showToast(useR1 ? 'R1 ON — Deep reasoning (slower)' : 'R1 OFF — V3 fast mode');
+  showToast(useR1 ? 'R1 ON — Deep reasoning (slower)' : 'R1 OFF — V4 fast mode');
 }
 
 function syncR1Toggle() {
   const el = document.getElementById('r1-toggle');
   const lbl = document.getElementById('r1-label');
   if (el) el.className = `r1-toggle ${useR1 ? 'on' : ''}`;
-  if (lbl) lbl.textContent = useR1 ? 'R1' : 'V3';
+  if (lbl) lbl.textContent = useR1 ? 'R1' : 'V4';
 }
 
 async function checkBackend() {
@@ -66,7 +68,7 @@ async function checkBackend() {
     const d = await r.json();
     document.getElementById('backend-dot').className = 'backend-dot ok';
     document.getElementById('backend-txt').textContent = `Backend v${d.version} · ${backendUrl}`;
-    setDot('on', dsKey ? (useR1 ? 'READY — R1 mode' : 'READY — V3 fast') : 'READY');
+    setDot('on', dsKey ? (useR1 ? 'READY — R1 mode' : 'READY — V4 fast') : 'READY');
     return true;
   } catch {
     document.getElementById('backend-dot').className = 'backend-dot err';
@@ -256,7 +258,7 @@ async function predict() {
 
   const t1 = setTimeout(() => { setAgentStep(1,'running'); document.getElementById('lstep').textContent = '📐 Quant: 30+ indicators...'; }, 1000);
   const t2 = setTimeout(() => { setAgentStep(1,'done'); setAgentStep(2,'running'); document.getElementById('lstep').textContent = '📰 News: scanning 10+ feeds...'; }, 9000);
-  const modelLabel = useR1 ? 'DeepSeek R1' : 'DeepSeek V3';
+  const modelLabel = useR1 ? 'DeepSeek R1' : 'DeepSeek V4';
   const t3 = setTimeout(() => { setAgentStep(2,'done'); setAgentStep(3,'running'); document.getElementById('lstep').textContent = `🧠 ${modelLabel} deciding...`; }, useR1 ? 20000 : 8000);
 
   try {
@@ -337,7 +339,7 @@ function displayResult(r) {
   set('rp-hurst', ind.hurst_exp != null
     ? `${ind.hurst_exp.toFixed(3)} (${ind.hurst_exp>0.55?'trending':ind.hurst_exp<0.45?'mean-rev':'random'})` : '—');
 
-  const modelMap = {'deepseek-r1':'🧠 R1','deepseek-v3':'⚡ V3','deepseek-chat':'⚡ V3','gpt-4o':'🎯 GPT-4o','error':'❌ Error'};
+  const modelMap = {'deepseek-r1':'🧠 R1','deepseek-v4':'⚡ V4','deepseek-v3':'⚡ V3','deepseek-chat':'⚡ V4','gpt-4o':'🎯 GPT-4o','error':'❌ Error'};
   let confLine = modelMap[r.agent_model] || r.agent_model || '—';
   if (r.raw_ai_conf) confLine += ` · AI:${r.raw_ai_conf}%`;
   if (r.bayesian_conf) confLine += ` B:${r.bayesian_conf?.toFixed(0)}%`;
@@ -368,6 +370,52 @@ function displayResult(r) {
     const agree = r.ml.agreement ? '✓ agree' : '✗ disagree';
     set('rp-ml', `${r.ml.score?.toFixed(0)}% · XGB:${r.ml.xgb_score||'?'} RF:${r.ml.rf_score||'?'} · ${agree}`);
   } else { set('rp-ml', 'Not trained'); }
+
+  // PQS (A2)
+  if (r.pqs) {
+    set('rp-pqs', `${r.pqs.score}/${r.pqs.max} — ${r.pqs.reasons?.slice(0,2).join(', ')||'low confluence'}`);
+  } else { set('rp-pqs', '—'); }
+
+  // RSI Divergence (B5)
+  if (r.rsi_divergence) {
+    const div = r.rsi_divergence;
+    set('rp-rsidiv', div.bullish ? 'BULLISH divergence' : div.bearish ? 'BEARISH divergence' : 'None');
+  } else { set('rp-rsidiv', '—'); }
+
+  // SMC (C1)
+  if (r.smc?.available) {
+    const s = r.smc;
+    set('rp-smc', `${s.bias.toUpperCase()} · OBs:${s.order_blocks?.length||0} FVGs:${s.fair_value_gaps?.length||0} BOS:${s.bos?.bullish?'↑':s.bos?.bearish?'↓':'—'}`);
+  } else { set('rp-smc', '—'); }
+
+  // Orderbook (C3)
+  if (r.orderbook?.available) {
+    set('rp-orderbook', `Imbal: ${(r.orderbook.imbalance_ratio*100).toFixed(1)}% (${r.orderbook.bias}) · Walls: ${r.orderbook.large_walls?.length||0}`);
+  } else { set('rp-orderbook', '—'); }
+
+  // Whale activity (C4)
+  if (r.whale_activity?.available) {
+    const w = r.whale_activity;
+    set('rp-whale', `Net flow: $${Math.abs(w.net_flow).toLocaleString()} ${w.net_flow>0?'IN':'OUT'} (${w.bias})`);
+  } else { set('rp-whale', '—'); }
+
+  // Options flow (C6)
+  if (r.options_flow?.available) {
+    const o = r.options_flow;
+    set('rp-options', `P/C: ${o.put_call_ratio.toFixed(2)} · Pain: $${o.max_pain} (${o.bias})`);
+  } else { set('rp-options', '—'); }
+
+  // Smart Money (C7)
+  if (r.smart_money?.available) {
+    const sm = r.smart_money;
+    set('rp-smartmoney', `SMI: ${sm.smart_money_index>0?'+':''}${sm.smart_money_index.toFixed(3)} ${sm.divergence?'⚠ DIVERGENCE':''} (${sm.bias})`);
+  } else { set('rp-smartmoney', '—'); }
+
+  // Calibration (E3)
+  if (r.calibration) {
+    const c = r.calibration;
+    set('rp-calibration', `Raw:${c.raw}% → Cal:${c.calibrated}% (${c.reliability}, ${c.n_samples} samples)`);
+  } else { set('rp-calibration', '—'); }
 
   const sim = r.similarity||{};
   const parts = [];
@@ -788,6 +836,7 @@ function openModal() {
   set('k-backend',backendUrl); set('k-openai',apiKey); set('k-deepseek',dsKey);
   set('k-fred',fredKey); set('k-reddit-id',redditId); set('k-reddit-secret',redditSecret);
   set('k-alpaca-key',alpacaKey); set('k-alpaca-secret',alpacaSecret);
+  set('k-tg-token',telegramToken); set('k-tg-chat',telegramChat);
 }
 
 function saveKeys() {
@@ -800,6 +849,8 @@ function saveKeys() {
   redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
   alpacaKey=document.getElementById('k-alpaca-key')?.value.trim()||'';
   alpacaSecret=document.getElementById('k-alpaca-secret')?.value.trim()||'';
+  telegramToken=document.getElementById('k-tg-token')?.value.trim()||'';
+  telegramChat=document.getElementById('k-tg-chat')?.value.trim()||'';
   localStorage.setItem('um_backend',backendUrl);
   localStorage.setItem('um_key',apiKey);
   localStorage.setItem('um_dskey',dsKey);
@@ -808,6 +859,8 @@ function saveKeys() {
   localStorage.setItem('um_reddit_secret',redditSecret);
   localStorage.setItem('um_alpaca_key',alpacaKey);
   localStorage.setItem('um_alpaca_secret',alpacaSecret);
+  localStorage.setItem('um_tg_token',telegramToken);
+  localStorage.setItem('um_tg_chat',telegramChat);
   document.getElementById('kmodal')?.classList.remove('on');
   checkBackend();
   pushSettingsToBackend();
@@ -821,6 +874,8 @@ async function pushSettingsToBackend() {
   if (redditSecret) settings.REDDIT_CLIENT_SECRET = redditSecret;
   if (alpacaKey) settings.ALPACA_KEY = alpacaKey;
   if (alpacaSecret) settings.ALPACA_SECRET = alpacaSecret;
+  if (telegramToken) settings.TELEGRAM_BOT_TOKEN = telegramToken;
+  if (telegramChat) settings.TELEGRAM_CHAT_ID = telegramChat;
   if (Object.keys(settings).length === 0) return;
   try {
     await fetch(`${backendUrl}/settings`, {
