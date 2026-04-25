@@ -20,6 +20,9 @@ let lastResult = null;
 let _predicting = false;
 let _alertsCache = [];
 let useR1 = localStorage.getItem('um_use_r1') !== 'false'; // default ON
+let _atInterval = 30;
+let _atSelectedAssets = JSON.parse(localStorage.getItem('um_at_assets') || '["BTC","ETH","SOL"]');
+let _atRunning = false;
 
 const ASSETS = {
   crypto: ['BTC','ETH','SOL','BNB','XRP','DOGE'],
@@ -46,6 +49,8 @@ window.addEventListener('DOMContentLoaded', () => {
   retroactivelyScoreHistory();
   fetchAlerts();
   pushSettingsToBackend();
+  initAutotrader();
+  setInterval(refreshAutotraderStatus, 15000);
 });
 
 function toggleR1() {
@@ -1118,4 +1123,203 @@ function showToast(msg) {
   t.textContent=msg; t.classList.add('on');
   clearTimeout(_toastTimer);
   _toastTimer=setTimeout(()=>t.classList.remove('on'),3500);
+}
+
+
+// ─── AUTONOMOUS TRADER ─────────────────────────────────────────────────────
+
+const ALL_TRADE_ASSETS = ['BTC','ETH','SOL','BNB','XRP','DOGE','AAPL','TSLA','NVDA','MSFT','GOOGL','SPY','GC=F','CL=F','SI=F','XOM','LMT','RTX'];
+
+function initAutotrader() {
+  renderATAssets();
+  refreshAutotraderStatus();
+}
+
+function renderATAssets() {
+  const el = document.getElementById('at-asset-picks');
+  if (!el) return;
+  el.innerHTML = ALL_TRADE_ASSETS.map(a => {
+    const selected = _atSelectedAssets.includes(a);
+    return `<button class="asset-btn ${selected?'active':''}" onclick="toggleATAsset('${a}')" style="font-size:7px;padding:3px 6px">${a}</button>`;
+  }).join('');
+}
+
+function toggleATAsset(a) {
+  if (_atSelectedAssets.includes(a)) {
+    _atSelectedAssets = _atSelectedAssets.filter(x => x !== a);
+  } else {
+    _atSelectedAssets.push(a);
+  }
+  localStorage.setItem('um_at_assets', JSON.stringify(_atSelectedAssets));
+  renderATAssets();
+}
+
+function setATInterval(mins, btn) {
+  _atInterval = mins;
+  document.querySelectorAll('.at-interval').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+function openAutotrader() {
+  document.getElementById('autotrader-panel')?.classList.add('on');
+  refreshAutotraderStatus();
+}
+function closeAutotrader() {
+  document.getElementById('autotrader-panel')?.classList.remove('on');
+}
+
+async function toggleAutotrader() {
+  const btn = document.getElementById('at-start-btn');
+  if (_atRunning) {
+    // Stop
+    try {
+      btn.disabled = true;
+      btn.textContent = 'STOPPING...';
+      const r = await fetch(`${backendUrl}/autotrader/stop`, {method:'POST'});
+      const d = await r.json();
+      if (d.ok) {
+        _atRunning = false;
+        showToast('Bot stopped');
+      }
+    } catch(e) { showToast('Error: '+e.message); }
+    btn.disabled = false;
+  } else {
+    // Start
+    if (!_atSelectedAssets.length) { showToast('Select at least 1 asset'); return; }
+    try {
+      btn.disabled = true;
+      btn.textContent = 'STARTING...';
+      const r = await fetch(`${backendUrl}/autotrader/start`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        _atRunning = true;
+        showToast(`Bot started on ${d.assets.join(', ')} every ${_atInterval}min`);
+      } else {
+        showToast(d.error || 'Failed to start');
+      }
+    } catch(e) { showToast('Error: '+e.message); }
+    btn.disabled = false;
+  }
+  refreshAutotraderStatus();
+}
+
+async function cashoutAutotrader() {
+  if (!confirm('Close ALL positions and stop the bot?')) return;
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/cashout`, {method:'POST'});
+    const d = await r.json();
+    _atRunning = false;
+    let msg = `Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}. ${d.recommendation}`;
+    showToast(msg);
+    refreshAutotraderStatus();
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+async function refreshAutotraderStatus() {
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/status`, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    _atRunning = d.enabled;
+
+    // Status badge
+    const badge = document.getElementById('at-status-badge');
+    if (badge) {
+      if (d.status === 'running' || d.status === 'sleeping') {
+        badge.textContent = d.status === 'running' ? 'TRADING...' : `SLEEPING (${d.seconds_until_next}s)`;
+        badge.style.background = 'rgba(0,230,118,.15)';
+        badge.style.color = 'var(--green)';
+      } else {
+        badge.textContent = 'STOPPED';
+        badge.style.background = 'var(--dim)';
+        badge.style.color = 'var(--muted)';
+      }
+    }
+
+    // Button
+    const btn = document.getElementById('at-start-btn');
+    if (btn) {
+      btn.textContent = _atRunning ? 'STOP BOT' : 'START BOT';
+      btn.style.background = _atRunning ? 'var(--red)' : 'var(--cyan)';
+    }
+
+    // BOT header button glow
+    const botBtn = document.getElementById('bot-btn');
+    if (botBtn) {
+      if (_atRunning) {
+        botBtn.style.color = 'var(--green)';
+        botBtn.style.borderColor = 'var(--green)';
+        botBtn.textContent = 'BOT ON';
+      } else {
+        botBtn.style.color = 'var(--yellow)';
+        botBtn.style.borderColor = 'var(--yellow)';
+        botBtn.textContent = 'BOT';
+      }
+    }
+
+    // Stats
+    const hb = d.heartbeat || {};
+    const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('at-equity', '$' + (hb.equity||10000).toLocaleString('en',{maximumFractionDigits:2}));
+    const pnlEl = document.getElementById('at-pnl');
+    if (pnlEl) {
+      const pnl = hb.daily_pnl || 0;
+      pnlEl.textContent = '$' + pnl.toFixed(2);
+      pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+    set('at-positions', hb.positions || 0);
+    const wrEl = document.getElementById('at-winrate');
+    if (wrEl) {
+      wrEl.textContent = d.win_rate !== undefined ? d.win_rate + '%' : '—';
+      wrEl.style.color = (d.win_rate||0) >= 50 ? 'var(--green)' : 'var(--red)';
+    }
+
+    // Recommendation
+    set('at-recommendation', d.recommendation || '');
+
+    // Open positions
+    const posEl = document.getElementById('at-open-positions');
+    if (posEl) {
+      const positions = d.open_positions || [];
+      if (positions.length === 0) {
+        posEl.innerHTML = '<div style="color:var(--muted)">No open positions</div>';
+      } else {
+        posEl.innerHTML = positions.map(p => {
+          const pnl = p.direction==='BUY' ? ((p.highest_price||p.entry_price)-p.entry_price)/p.entry_price*100 : (p.entry_price-(p.lowest_price||p.entry_price))/p.entry_price*100;
+          const color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const age = Math.round((Date.now()/1000 - p.entry_time) / 60);
+          return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">
+            <span><b style="color:${p.direction==='BUY'?'var(--green)':'var(--red)'}">${p.direction}</b> ${p.asset} @ $${p.entry_price.toFixed(2)}</span>
+            <span style="color:${color}">${pnl>=0?'+':''}${pnl.toFixed(2)}% (${age}min)</span>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // Trade log
+    const logEl = document.getElementById('at-trade-log');
+    if (logEl) {
+      const trades = d.recent_trades || [];
+      if (trades.length === 0) {
+        logEl.innerHTML = '<div style="color:var(--muted)">No trades yet</div>';
+      } else {
+        logEl.innerHTML = trades.slice().reverse().map(t => {
+          const color = t.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const time = new Date(t.ts*1000).toLocaleTimeString();
+          return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(0,229,255,.06)">
+            <span>${time} ${t.direction} ${t.asset}</span>
+            <span>$${t.entry.toFixed(2)} → $${t.exit.toFixed(2)}</span>
+            <span style="color:${color}">$${t.pnl>=0?'+':''}${t.pnl.toFixed(2)} (${t.reason})</span>
+          </div>`;
+        }).join('');
+      }
+    }
+
+  } catch(e) {
+    // Backend not reachable — ignore
+  }
 }
