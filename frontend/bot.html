@@ -102,6 +102,23 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <button class="big-btn start-btn" id="b-toggle" onclick="bToggle()">START BOT</button>
       <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
     </div>
+    <div class="ctrl-row" style="margin-top:8px;gap:12px">
+      <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
+        STARTING EQUITY ($):
+        <input id="b-equity-input" type="number" min="100" step="100" value="10000"
+               style="width:90px;background:#0a0a0a;color:var(--cyan);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
+               onchange="localStorage.setItem('um_at_equity', this.value)">
+      </label>
+      <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
+        TRADE SIZE ($, 0=auto):
+        <input id="b-size-input" type="number" min="0" step="10" value="0"
+               style="width:90px;background:#0a0a0a;color:var(--cyan);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
+               onchange="localStorage.setItem('um_at_size', this.value)">
+      </label>
+      <span style="font-size:6px;color:var(--muted);font-style:italic">
+        0 = Kelly auto-sizing • Custom = fixed $ per trade (capped at 25% of equity)
+      </span>
+    </div>
   </div>
 
   <!-- Chart tab for selected asset -->
@@ -173,9 +190,16 @@ async function bToggle() {
     bRunning = false;
   } else {
     if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
+    const startEq = parseFloat(document.getElementById('b-equity-input').value) || 10000;
+    const tradeSize = parseFloat(document.getElementById('b-size-input').value) || 0;
     const r = await fetch(`${backendUrl}/autotrader/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({assets:bAssets, interval_minutes:bInterval}),
+      body: JSON.stringify({
+        assets: bAssets,
+        interval_minutes: bInterval,
+        trade_size: tradeSize,
+        starting_equity: startEq,
+      }),
     });
     const d = await r.json();
     if (d.ok) bRunning = true;
@@ -337,6 +361,10 @@ async function bLoadChart(asset, btn) {
 
 // Init
 bRenderAssets();
+const _savedEq = localStorage.getItem('um_at_equity');
+if (_savedEq) document.getElementById('b-equity-input').value = _savedEq;
+const _savedSize = localStorage.getItem('um_at_size');
+if (_savedSize) document.getElementById('b-size-input').value = _savedSize;
 bRefresh();
 bLoadChart(bChartAsset);
 setInterval(bRefresh, 10000);

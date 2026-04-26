@@ -62,6 +62,8 @@ _autotrader = {
     'trades_closed': 0,
     'status': 'stopped',
     'cycle_log': [],  # [{ts, cycle, summaries: [{asset, action, detail}]}]
+    'trade_size': 0,  # 0 = auto (Kelly), >0 = fixed USD per trade
+    'starting_equity': 10000,  # paper trading starting balance
 }
 
 app.add_middleware(
@@ -102,6 +104,7 @@ class PredictRequest(BaseModel):
     ds_key: Optional[str] = None
     worker_url: Optional[str] = None
     use_r1: Optional[bool] = True
+    bot_mode: Optional[bool] = False  # True = "maintain position" framing, not "predict future"
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -382,15 +385,7 @@ async def _autotrader_loop():
 
         for asset_name in _autotrader['assets']:
             try:
-                # Skip if already holding this asset
-                open_for_asset = [p for p in engine.positions.values()
-                                  if p.status == 'open' and p.asset == asset_name]
-                if open_for_asset:
-                    print(f"  {asset_name}: SKIP — already holding position")
-                    cycle_summary.append(f"{asset_name}: holding")
-                    continue
-
-                # Run the full prediction
+                # Run the full prediction — ALWAYS, even if holding
                 api_key = OPENAI_API_KEY or ''
                 ds_key = DEEPSEEK_API_KEY or ''
 
@@ -398,10 +393,12 @@ async def _autotrader_loop():
                     print(f"  {asset_name}: SKIP — no API keys")
                     continue
 
+                # Bot mode: AI's thinking shifts from "predict 4h ahead" to
+                # "what's the right side to be on RIGHT NOW to maintain profit?"
                 req = PredictRequest(
-                    asset=asset_name, horizon=4,
+                    asset=asset_name, horizon=1,
                     api_key=api_key, ds_key=ds_key,
-                    use_r1=True,
+                    use_r1=True, bot_mode=True,
                 )
 
                 start_time = time.time()
@@ -419,7 +416,7 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # Force a trade even on NO_TRADE — use indicators to pick direction
+                # Force a direction even on NO_TRADE — AI shifts to "what should we do anyway?"
                 if direction == 'NO_TRADE':
                     ind_data = result.get('ind', {})
                     bull_score = 0
@@ -443,13 +440,34 @@ async def _autotrader_loop():
                         direction = 'SELL'
                         confidence = max(confidence, 42)
                     else:
-                        # Truly 50/50 — use Monte Carlo tiebreaker
                         direction = 'BUY' if mc_prob >= 0.5 else 'SELL'
                         confidence = max(confidence, 40)
                     pqs_score = max(pqs_score, 3)
-                    print(f"  {asset_name}: FORCED {direction} (indicators: bull={bull_score} bear={bear_score})")
+                    print(f"  {asset_name}: FORCED {direction} (bull={bull_score} bear={bear_score})")
 
-                # Safety checks — but with lower thresholds for autonomous mode
+                # Check if already holding this asset
+                open_for_asset = [p for p in engine.positions.values()
+                                  if p.status == 'open' and p.asset == asset_name]
+
+                if open_for_asset:
+                    current_pos = open_for_asset[0]
+                    # Same direction — STAY, do nothing
+                    if current_pos.direction == direction:
+                        pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
+                        print(f"  {asset_name}: HOLD {current_pos.direction} (P&L: {pnl_pct:+.2f}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
+                        continue
+                    else:
+                        # FLIP — close old position, open opposite
+                        close_result = await engine.close_position(current_pos.id, price, 'flip')
+                        old_pnl = close_result.get('pnl', 0)
+                        _autotrader['trades_closed'] += 1
+                        print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
+                        asyncio.create_task(send_message(
+                            f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
+                        ))
+
+                # Safety checks
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
                 if open_count >= 10:
                     cycle_summary.append(f"{asset_name}: max positions (10)")
@@ -458,19 +476,23 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: daily loss limit")
                     continue
 
-                # Calculate position size using Kelly
-                stats = _equity_tracker.get_stats()
-                n_trades = stats.get('n_trades', 0)
-                if n_trades >= 10:
-                    win_rate = 0.5
-                    rated = await get_predictions(asset_name, 100)
-                    wins = sum(1 for p in rated if p.get('feedback') == 'correct')
-                    total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
-                    if total_rated >= 5:
-                        win_rate = wins / total_rated
-                    size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
+                # Position size — use custom size if set, otherwise Kelly/default
+                custom_size = _autotrader.get('trade_size', 0)
+                if custom_size > 0:
+                    size = min(custom_size, engine._equity * 0.25)  # never more than 25% of equity
                 else:
-                    size = min(200, engine._equity * 0.05)  # 5% of equity while learning
+                    stats = _equity_tracker.get_stats()
+                    n_trades = stats.get('n_trades', 0)
+                    if n_trades >= 10:
+                        win_rate = 0.5
+                        rated = await get_predictions(asset_name, 100)
+                        wins = sum(1 for p in rated if p.get('feedback') == 'correct')
+                        total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
+                        if total_rated >= 5:
+                            win_rate = wins / total_rated
+                        size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
+                    else:
+                        size = min(200, engine._equity * 0.05)
 
                 if size < 10:
                     size = min(100, engine._equity * 0.05)
@@ -747,7 +769,8 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
     slog(f"📐 Agent 1 (Quant/{quant_model_label}) analyzing...")
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
-                                       cluster_data=cluster_data, correlation_data=correlation_data)
+                                       cluster_data=cluster_data, correlation_data=correlation_data,
+                                       bot_mode=getattr(req, 'bot_mode', False))
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
@@ -1935,6 +1958,8 @@ from fastapi import WebSocket as WSType
 class AutotraderStartRequest(BaseModel):
     assets: list  # e.g. ["BTC", "ETH", "SOL"]
     interval_minutes: int = 60  # how often to trade (default 1hr)
+    trade_size: float = 0  # 0 = auto (Kelly sizing), >0 = fixed USD per trade
+    starting_equity: float = 10000  # paper trading starting balance
 
 
 @app.post("/autotrader/start")
@@ -1947,25 +1972,34 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['enabled'] = True
     _autotrader['assets'] = valid_assets
     _autotrader['interval_minutes'] = max(10, req.interval_minutes)
+    _autotrader['trade_size'] = max(0, req.trade_size)
+    _autotrader['starting_equity'] = max(100, req.starting_equity)
     _autotrader['status'] = 'starting'
+
+    engine = get_trading_engine()
+    engine._equity = _autotrader['starting_equity']
 
     # Start the loop if not already running
     asyncio.create_task(_autotrader_loop())
 
     from telegram_bot import send_message
+    size_label = f"${_autotrader['trade_size']:.0f}/trade" if _autotrader['trade_size'] > 0 else "Auto (Kelly)"
     asyncio.create_task(send_message(
         f"🤖 AUTOTRADER STARTED\n"
         f"Assets: {', '.join(valid_assets)}\n"
         f"Interval: every {_autotrader['interval_minutes']} min\n"
-        f"Mode: {'PAPER' if get_trading_engine().paper_mode else 'LIVE'}\n"
-        f"Starting equity: ${get_trading_engine()._equity:,.2f}"
+        f"Mode: {'PAPER' if engine.paper_mode else 'LIVE'}\n"
+        f"Starting equity: ${engine._equity:,.2f}\n"
+        f"Trade size: {size_label}"
     ))
 
     return {
         "ok": True,
         "assets": valid_assets,
         "interval_minutes": _autotrader['interval_minutes'],
-        "mode": "paper" if get_trading_engine().paper_mode else "live",
+        "trade_size": _autotrader['trade_size'],
+        "starting_equity": _autotrader['starting_equity'],
+        "mode": "paper" if engine.paper_mode else "live",
     }
 
 
@@ -2084,6 +2118,8 @@ async def autotrader_status():
         "status": _autotrader['status'],
         "assets": _autotrader['assets'],
         "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader.get('trade_size', 0),
+        "starting_equity": _autotrader.get('starting_equity', 10000),
         "total_cycles": _autotrader['total_cycles'],
         "trades_opened": _autotrader['trades_opened'],
         "last_cycle": _autotrader['last_cycle'],
