@@ -66,6 +66,52 @@ _autotrader = {
     'starting_equity': 10000,  # paper trading starting balance
 }
 
+# ─── Learning Memory ────────────────────────────────────────────────────────
+# Every closed trade gets logged as a "lesson". Before each cycle, the bot
+# reviews its last few trades per asset to avoid repeating mistakes.
+_trade_lessons: Dict[str, list] = {}  # {asset: [{ts, direction, entry, exit, pnl, reason, was_correct, lesson}]}
+
+def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
+                   pnl: float, reason: str):
+    if asset not in _trade_lessons:
+        _trade_lessons[asset] = []
+    was_correct = pnl > 0
+    pnl_pct = (exit_price - entry) / entry * 100 if direction == 'BUY' else (entry - exit_price) / entry * 100
+    if was_correct:
+        lesson = f"{direction} was correct ({pnl_pct:+.2f}%). Closed via {reason}."
+    else:
+        lesson = f"{direction} was WRONG ({pnl_pct:+.2f}%). Should have gone {'SELL' if direction == 'BUY' else 'BUY'}. Lost ${abs(pnl):.2f}."
+    _trade_lessons[asset].append({
+        'ts': int(time.time()),
+        'direction': direction,
+        'entry': entry,
+        'exit': exit_price,
+        'pnl': round(pnl, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'reason': reason,
+        'was_correct': was_correct,
+        'lesson': lesson,
+    })
+    _trade_lessons[asset] = _trade_lessons[asset][-20:]
+
+def get_lessons_context(asset: str) -> str:
+    lessons = _trade_lessons.get(asset, [])
+    if not lessons:
+        return ""
+    recent = lessons[-5:]
+    wins = sum(1 for l in lessons if l['was_correct'])
+    total = len(lessons)
+    lines = [f"BOT LEARNING MEMORY ({wins}/{total} correct):"]
+    for l in recent:
+        lines.append(f"  [{l['direction']}] entry ${l['entry']:.2f} → exit ${l['exit']:.2f} | {l['pnl_pct']:+.2f}% | {l['lesson']}")
+    if total >= 3:
+        wrong = [l for l in lessons if not l['was_correct']]
+        if len(wrong) >= 2:
+            last_wrong_dirs = [l['direction'] for l in wrong[-3:]]
+            if all(d == last_wrong_dirs[0] for d in last_wrong_dirs):
+                lines.append(f"  ⚠ PATTERN: Last {len(last_wrong_dirs)} losing trades were all {last_wrong_dirs[0]} — consider bias toward {('SELL' if last_wrong_dirs[0] == 'BUY' else 'BUY')}")
+    return "\n".join(lines)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -462,6 +508,7 @@ async def _autotrader_loop():
                         close_result = await engine.close_position(current_pos.id, price, 'flip')
                         old_pnl = close_result.get('pnl', 0)
                         _autotrader['trades_closed'] += 1
+                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
                         print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
                         asyncio.create_task(send_message(
                             f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
@@ -562,7 +609,15 @@ async def _trading_position_monitor():
             if any(p.status == 'open' for p in engine.positions.values()):
                 actions = await engine.check_all_positions(fetch_current_price)
                 for act in actions:
-                    print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+                    a = act.get('asset', '?')
+                    pnl = act.get('pnl', 0)
+                    reason = act.get('reason', 'unknown')
+                    print(f"Trading: auto-closed {a} ({reason}) P&L: {pnl}")
+                    pos_data = act.get('position', {})
+                    if pos_data:
+                        record_lesson(a, pos_data.get('direction', '?'),
+                                      pos_data.get('entry_price', 0),
+                                      pos_data.get('exit_price', 0), pnl, reason)
         except Exception as e:
             print(f"Position monitor error: {e}")
         await asyncio.sleep(30)
@@ -771,6 +826,9 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
                                        cluster_data=cluster_data, correlation_data=correlation_data,
                                        bot_mode=getattr(req, 'bot_mode', False))
+    lessons_ctx = get_lessons_context(req.asset)
+    if lessons_ctx:
+        quant_prompt += f"\n\n{lessons_ctx}\nUse these past trades to avoid repeating mistakes. If a direction kept losing, weigh the opposite more heavily."
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
@@ -2131,6 +2189,8 @@ async def autotrader_status():
         "win_rate": round(win_rate, 1),
         "recommendation": rec,
         "cycle_log": _autotrader['cycle_log'][-20:],
+        "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
+        "all_positions": engine.get_positions(),
     }
 
 

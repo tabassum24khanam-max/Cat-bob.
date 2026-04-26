@@ -56,7 +56,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .log-entry .time { color: var(--dim); }
 .log-entry .action { color: var(--cyan); }
 
-#bot-chart { width: 100%; height: 200px; }
+#bot-chart { width: 100%; height: 260px; }
 
 .tab-bar { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); }
 .tab-btn { flex: 1; padding: 8px; font-size: 9px; letter-spacing: 1px; border: none; background: none; color: var(--muted); cursor: pointer; text-align: center; }
@@ -125,10 +125,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="tab-bar" id="b-chart-tabs"></div>
   <div id="bot-chart"></div>
 
-  <!-- Tabs: Positions / Trades / System Log -->
+  <!-- Tabs: Positions / Trades / Learning / System Log -->
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="bShowTab('positions',this)">OPEN POSITIONS</button>
-    <button class="tab-btn" onclick="bShowTab('trades',this)">TRADE LOG</button>
+    <button class="tab-btn active" onclick="bShowTab('positions',this)">POSITIONS</button>
+    <button class="tab-btn" onclick="bShowTab('trades',this)">TRADES</button>
+    <button class="tab-btn" onclick="bShowTab('learning',this)">LEARNING</button>
     <button class="tab-btn" onclick="bShowTab('syslog',this)">SYSTEM LOG</button>
   </div>
 
@@ -137,6 +138,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   </div>
   <div id="bt-trades" class="section" style="display:none;min-height:120px">
     <div id="b-trades-list" style="color:var(--muted);font-size:8px">No trades yet</div>
+  </div>
+  <div id="bt-learning" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
+    <div id="b-learning-list" style="color:var(--muted);font-size:8px">No lessons yet — the bot learns from each closed trade</div>
   </div>
   <div id="bt-syslog" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
     <div id="b-syslog-list" style="color:var(--muted);font-size:8px">Waiting for bot to start...</div>
@@ -174,7 +178,7 @@ function bSetInt(m, btn) {
 }
 
 function bShowTab(tab, btn) {
-  ['positions','trades','syslog'].forEach(t => {
+  ['positions','trades','learning','syslog'].forEach(t => {
     document.getElementById('bt-'+t).style.display = t===tab ? 'block' : 'none';
   });
   btn.parentElement.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -319,8 +323,39 @@ async function bRefresh() {
       `<button class="tab-btn ${a===bChartAsset?'active':''}" onclick="bLoadChart('${a}',this)">${a}</button>`
     ).join('');
 
+    // Store positions for chart markers + update
+    bLastPositions = d.all_positions || [];
+    bUpdateMarkers(bChartAsset);
+
+    // Learning lessons display
+    const lessons = d.lessons || {};
+    const allLessons = Object.entries(lessons).flatMap(([asset, list]) =>
+      list.map(l => ({...l, asset}))
+    ).sort((a,b) => b.ts - a.ts).slice(0, 20);
+    const learnEl = document.getElementById('b-learning-list');
+    if (allLessons.length) {
+      const totalLessons = allLessons.length;
+      const winsCount = allLessons.filter(l => l.was_correct).length;
+      const learnRate = ((winsCount / totalLessons) * 100).toFixed(0);
+      let html = `<div style="color:var(--cyan);font-size:9px;margin-bottom:6px;font-weight:700">BRAIN ACCURACY: ${winsCount}/${totalLessons} correct (${learnRate}%)</div>`;
+      html += allLessons.map(l => {
+        const ico = l.was_correct ? '✅' : '❌';
+        const c = l.was_correct ? '#00e676' : '#ff1744';
+        const dt = new Date(l.ts * 1000).toLocaleTimeString();
+        return `<div class="log-entry">
+          <span class="time">[${dt}]</span>
+          <span style="color:${c}">${ico} ${l.asset} ${l.direction} ${l.pnl_pct >= 0 ? '+' : ''}${l.pnl_pct}%</span>
+          <span style="color:var(--yellow)">$${l.pnl >= 0 ? '+' : ''}${l.pnl}</span>
+          <span style="color:var(--muted);font-size:7px"> — ${l.lesson}</span>
+        </div>`;
+      }).join('');
+      learnEl.innerHTML = html;
+    }
+
   } catch(e) {}
 }
+
+let bLastPositions = [];
 
 async function bLoadChart(asset, btn) {
   bChartAsset = asset;
@@ -333,7 +368,7 @@ async function bLoadChart(asset, btn) {
   bChartInst = null; bMainSeries = null;
 
   try {
-    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=100`);
+    const r = await fetch(`${backendUrl}/candles?asset=${asset}&interval=1h&limit=300`);
     const d = await r.json();
     const candles = (d.candles||[]).filter(c=>c.open!=null).map(c=>({
       time: Math.floor(Number(c.time)),
@@ -343,7 +378,7 @@ async function bLoadChart(asset, btn) {
 
     const rect = el.getBoundingClientRect();
     bChartInst = LightweightCharts.createChart(el, {
-      width: rect.width||360, height: 200,
+      width: rect.width||360, height: 260,
       layout: { background:{type:LightweightCharts.ColorType.Solid,color:'#04080f'}, textColor:'#5a7a9a' },
       grid: { vertLines:{color:'rgba(0,229,255,.06)'}, horzLines:{color:'rgba(0,229,255,.06)'} },
       rightPriceScale: { borderColor:'rgba(0,229,255,.2)' },
@@ -355,8 +390,42 @@ async function bLoadChart(asset, btn) {
       borderVisible:false,
     });
     bMainSeries.setData(candles);
+    bUpdateMarkers(asset);
     bChartInst.timeScale().fitContent();
   } catch(e) {}
+}
+
+function bUpdateMarkers(asset) {
+  if (!bMainSeries || !bLastPositions.length) return;
+  const relevant = bLastPositions.filter(p => p.asset === asset);
+  if (!relevant.length) return;
+  const markers = [];
+  for (const p of relevant) {
+    const entryTime = Math.floor(p.entry_time);
+    const isBuy = p.direction === 'BUY';
+    const pnl = p.pnl || 0;
+    const pnlLabel = p.status === 'closed' ? ` $${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}` : '';
+    markers.push({
+      time: entryTime,
+      position: isBuy ? 'belowBar' : 'aboveBar',
+      color: isBuy ? '#2196F3' : '#ff1744',
+      shape: isBuy ? 'arrowUp' : 'arrowDown',
+      text: `AI ${p.direction}${pnlLabel}`,
+    });
+    if (p.status === 'closed' && p.exit_time) {
+      const exitTime = Math.floor(p.exit_time);
+      const won = pnl > 0;
+      markers.push({
+        time: exitTime,
+        position: isBuy ? 'aboveBar' : 'belowBar',
+        color: won ? '#00e676' : '#ff1744',
+        shape: 'circle',
+        text: `EXIT $${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}`,
+      });
+    }
+  }
+  markers.sort((a, b) => a.time - b.time);
+  try { bMainSeries.setMarkers(markers); } catch(e) {}
 }
 
 // Init

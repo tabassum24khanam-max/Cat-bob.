@@ -254,7 +254,8 @@ class TradingEngine:
                 check = self.check_exit(pos, current_price)
                 if check['action'] == 'exit':
                     close_result = await self.close_position(pos.id, current_price, check['reason'])
-                    actions.append({**close_result, 'asset': pos.asset, 'reason': check['reason']})
+                    actions.append({**close_result, 'asset': pos.asset, 'reason': check['reason'],
+                                    'position': {'direction': pos.direction, 'entry_price': pos.entry_price, 'exit_price': current_price}})
             except Exception:
                 continue
         return actions
