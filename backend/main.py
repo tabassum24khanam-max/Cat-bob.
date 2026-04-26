@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
