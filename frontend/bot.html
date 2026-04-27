@@ -101,6 +101,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div style="flex:1"></div>
       <button class="big-btn start-btn" id="b-toggle" onclick="bToggle()">START BOT</button>
       <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
+      <button class="cash-btn" style="border-color:#00e5ff;color:#00e5ff" onclick="bExport()">📥 EXPORT LOG</button>
     </div>
     <div class="ctrl-row" style="margin-top:8px;gap:12px">
       <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
@@ -220,6 +221,45 @@ async function bCashout() {
   bRunning = false;
   alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
   bRefresh();
+}
+
+async function bExport() {
+  try {
+    const statsR = await fetch(`${backendUrl}/forensic/stats`);
+    const stats = await statsR.json();
+    const ok = confirm(
+      `Export forensic log?\n\n` +
+      `Events captured: ${stats.total_events}\n` +
+      `By type: ${JSON.stringify(stats.by_type)}\n\n` +
+      `This downloads a big text file with EVERY indicator value, ` +
+      `news headline, AI prompt/response, gate trigger, trade, and ` +
+      `outcome. Paste into Claude or GPT for post-mortem analysis.`
+    );
+    if (!ok) return;
+
+    // Trigger browser download
+    const url = `${backendUrl}/forensic/export`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ultramax_forensic_${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    // Also offer JSON
+    setTimeout(() => {
+      if (confirm('Also download JSON version (for programmatic analysis)?')) {
+        const a2 = document.createElement('a');
+        a2.href = `${backendUrl}/forensic/export.json`;
+        a2.download = `ultramax_forensic_${Date.now()}.json`;
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+      }
+    }, 500);
+  } catch(e) {
+    alert('Export failed: ' + e.message);
+  }
 }
 
 async function bRefresh() {

@@ -42,6 +42,7 @@ from orderbook import get_orderbook_imbalance
 from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
+import forensic_log
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
 
@@ -427,6 +428,11 @@ async def _autotrader_loop():
         print(f"AUTOTRADER CYCLE #{cycle} — {len(_autotrader['assets'])} assets")
         print(f"{'='*60}")
 
+        cycle_id = forensic_log.log_cycle_start(
+            cycle, _autotrader['assets'], _autotrader['interval_minutes'],
+            engine._equity, _autotrader.get('trade_size', 0), engine.paper_mode,
+        )
+
         cycle_summary = []
 
         for asset_name in _autotrader['assets']:
@@ -509,6 +515,11 @@ async def _autotrader_loop():
                         old_pnl = close_result.get('pnl', 0)
                         _autotrader['trades_closed'] += 1
                         record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
+                        forensic_log.log_trade_flip(
+                            asset_name, current_pos.direction, direction,
+                            current_pos.entry_price, price, old_pnl, 0,
+                            parent_id=cycle_id,
+                        )
                         print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
                         asyncio.create_task(send_message(
                             f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
@@ -554,6 +565,14 @@ async def _autotrader_loop():
 
                 if trade_result.get('ok'):
                     _autotrader['trades_opened'] += 1
+                    pos_data = trade_result.get('position', {})
+                    forensic_log.log_trade_open(
+                        asset_name, direction, price, size,
+                        pos_data.get('stop_loss', 0), pos_data.get('take_profit', 0),
+                        pos_data.get('trailing_stop_pct', 1.5),
+                        f"autotrader_cycle_{cycle}", confidence, pqs_score,
+                        parent_id=cycle_id,
+                    )
                     msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
                     print(f"  >>> {msg}")
                     cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
@@ -563,6 +582,7 @@ async def _autotrader_loop():
 
             except Exception as e:
                 print(f"  {asset_name}: ERROR — {str(e)[:100]}")
+                forensic_log.log_error(asset_name, "autotrader_loop", str(e))
                 cycle_summary.append(f"{asset_name}: error")
 
         # Save cycle log for frontend
@@ -572,6 +592,12 @@ async def _autotrader_loop():
             'summaries': cycle_summary,
         })
         _autotrader['cycle_log'] = _autotrader['cycle_log'][-50:]
+
+        forensic_log.log_cycle_end(
+            cycle, engine._equity, cycle_summary,
+            _autotrader['trades_opened'], _autotrader['trades_closed'],
+            parent_id=cycle_id,
+        )
 
         # Send cycle summary to Telegram
         hb = engine.heartbeat()
@@ -618,6 +644,12 @@ async def _trading_position_monitor():
                         record_lesson(a, pos_data.get('direction', '?'),
                                       pos_data.get('entry_price', 0),
                                       pos_data.get('exit_price', 0), pnl, reason)
+                        forensic_log.log_trade_close(
+                            a, pos_data.get('direction', '?'),
+                            pos_data.get('entry_price', 0),
+                            pos_data.get('exit_price', 0),
+                            pnl, reason, was_correct=(pnl > 0),
+                        )
         except Exception as e:
             print(f"Position monitor error: {e}")
         await asyncio.sleep(30)
@@ -1152,6 +1184,91 @@ async def _run_prediction(req, worker, start_time, logs, slog):
 
     total_ms = int((time.time() - start_time) * 1000)
     slog(f"✅ Complete in {total_ms}ms")
+
+    # ── FORENSIC LOG: capture EVERYTHING ─────────────────────────────────
+    try:
+        gates_extracted = []
+        for entry in (logs or []):
+            msg = entry.get("msg", "") if isinstance(entry, dict) else str(entry)
+            if "Gate" in msg or "gate" in msg or "GATE" in msg or "capped" in msg or "→" in msg and "%" in msg:
+                gates_extracted.append({
+                    "ts_ms": entry.get("ts", 0) if isinstance(entry, dict) else 0,
+                    "gate": msg[:200],
+                    "action": "see_message",
+                    "conf_before": None, "conf_after": None,
+                    "reason": msg[:300],
+                })
+        forensic_log.log_prediction(
+            asset=req.asset,
+            request_data={
+                "horizon": req.horizon,
+                "bot_mode": getattr(req, 'bot_mode', False),
+                "use_r1": req.use_r1,
+                "quant_model": quant_result.get('_quant_model', '?'),
+                "decision_model": decision.get('_model', '?'),
+            },
+            indicators=ind,
+            monte_carlo=mc,
+            news={
+                "count": len(articles) if articles else 0,
+                "headlines": [{"title": a.get('title', '')[:200],
+                               "source": a.get('source', '?'),
+                               "sentiment": a.get('sentiment', None),
+                               "url": a.get('url', '')[:200]} for a in (articles or [])[:30]],
+                "sentiment_score": news_result.get('sentiment_score'),
+                "sources": list(set(a.get('source', '?') for a in (articles or []))),
+            },
+            macro=macro_context if isinstance(macro_context, dict) else {"raw": str(macro_context)[:500]},
+            sentiment=sentiment_data if isinstance(sentiment_data, dict) else {},
+            correlation=correlation_data if isinstance(correlation_data, dict) else {},
+            cluster=cluster_data if isinstance(cluster_data, dict) else {},
+            smc=smc_data if isinstance(smc_data, dict) else {},
+            orderbook=orderbook_data if isinstance(orderbook_data, dict) else {},
+            whales=whale_data if isinstance(whale_data, dict) else {},
+            options=options_data if isinstance(options_data, dict) else {},
+            smart_money=smart_money_data if isinstance(smart_money_data, dict) else {},
+            ml_result=ml_result if isinstance(ml_result, dict) else {},
+            quant_agent={
+                "model": quant_result.get('_quant_model', '?'),
+                "prompt": quant_prompt[:8000] if isinstance(quant_prompt, str) else "",
+                "response": {k: v for k, v in quant_result.items() if not k.startswith('_')},
+                "latency_ms": quant_result.get('_latency_ms', 0),
+            },
+            news_agent={
+                "model": news_result.get('_model', '?'),
+                "prompt": f"Asset: {req.asset} | {len(articles or [])} articles fed",
+                "response": {k: v for k, v in news_result.items() if not k.startswith('_')},
+                "latency_ms": news_result.get('_latency_ms', 0),
+            },
+            decision_agent={
+                "model": decision.get('_model', '?'),
+                "prompt": f"Quant: {quant_result.get('direction')}/{quant_result.get('confidence')}% | News: {news_result.get('sentiment')}/{news_result.get('sentiment_score')} | ML: {ml_result.get('score') if ml_result else 'N/A'}",
+                "response": {k: v for k, v in decision.items() if not k.startswith('_')},
+                "latency_ms": decision.get('_latency_ms', 0),
+                "r1_error": decision.get('_r1_error'),
+            },
+            gates=gates_extracted,
+            confidence_blend={
+                "ai_raw": raw_ai_conf,
+                "bayes": round(bayes_conf, 1),
+                "ml": ml_result.get('score') if ml_result else None,
+                "cluster": cluster_data.get('confidence') if isinstance(cluster_data, dict) else None,
+                "weights": "AI 25% + Bayes 30% + ML 25% + Cluster 20%",
+                "final": quant_result.get('confidence'),
+            },
+            pqs=pqs,
+            final_decision={
+                "direction": decision.get('decision'),
+                "confidence": decision.get('confidence'),
+                "reasoning": decision.get('insight', '') or decision.get('primary_reason', ''),
+                "counter_argument": quant_result.get('counter_argument', ''),
+                "gate_reason": gate_reason,
+                "original_decision": decision.get('_original_decision'),
+            },
+            timing_ms=total_ms,
+        )
+    except Exception as fe:
+        forensic_log.log_error(req.asset, "_run_prediction.forensic_log", str(fe))
 
     response = {
         "decision": decision.get('decision', 'NO_TRADE'),
@@ -2192,6 +2309,54 @@ async def autotrader_status():
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "all_positions": engine.get_positions(),
     }
+
+
+# ─── Forensic Log Endpoints ─────────────────────────────────────────────
+
+@app.get("/forensic/stats")
+async def forensic_stats():
+    """Quick stats about the forensic log buffer."""
+    return forensic_log.stats()
+
+
+@app.get("/forensic/log")
+async def forensic_log_get(limit: int = 200, asset: str = None, type: str = None):
+    """Recent forensic events as JSON (for dashboard display)."""
+    events = forensic_log.get_events(limit=limit, asset_filter=asset, type_filter=type)
+    return {"count": len(events), "events": events}
+
+
+@app.get("/forensic/export")
+async def forensic_export(asset: str = None):
+    """
+    Big fat human-readable log file. Click EXPORT in the dashboard to download.
+    Paste into Claude/ChatGPT for post-mortem analysis.
+    """
+    text = forensic_log.export_text(asset_filter=asset)
+    fname = f"ultramax_forensic_{int(time.time())}.txt"
+    return PlainTextResponse(
+        text,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/forensic/export.json")
+async def forensic_export_json(asset: str = None):
+    """Same data as JSON for programmatic analysis."""
+    text = forensic_log.export_json(asset_filter=asset)
+    fname = f"ultramax_forensic_{int(time.time())}.json"
+    return PlainTextResponse(
+        text,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/forensic/clear")
+async def forensic_clear():
+    """Clear the forensic log buffer."""
+    forensic_log.clear()
+    return {"ok": True, "cleared": True}
 
 
 @app.websocket("/ws")

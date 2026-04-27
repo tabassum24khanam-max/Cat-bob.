@@ -557,6 +557,34 @@ function scorePrediction(e) {
 function openHistory() { renderHistory(); document.getElementById('history-panel')?.classList.add('on'); }
 function closeHistory() { document.getElementById('history-panel')?.classList.remove('on'); }
 
+async function exportForensic() {
+  try {
+    const r = await fetch(`${backendUrl}/forensic/stats`);
+    const stats = await r.json();
+    const ok = confirm(
+      `Export forensic log?\n\n` +
+      `Events captured: ${stats.total_events}\n` +
+      `By type: ${JSON.stringify(stats.by_type)}\n\n` +
+      `Downloads a complete decision-by-decision log: every indicator value, ` +
+      `news headline, AI prompt, gate trigger, trade, and outcome.\n\n` +
+      `Paste into Claude or GPT and ask: "why did the bot lose money?"`
+    );
+    if (!ok) return;
+    const a = document.createElement('a');
+    a.href = `${backendUrl}/forensic/export`;
+    a.download = `ultramax_forensic_${Date.now()}.txt`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => {
+      if (confirm('Also download JSON version (for programmatic analysis)?')) {
+        const a2 = document.createElement('a');
+        a2.href = `${backendUrl}/forensic/export.json`;
+        a2.download = `ultramax_forensic_${Date.now()}.json`;
+        document.body.appendChild(a2); a2.click(); document.body.removeChild(a2);
+      }
+    }, 500);
+  } catch(e) { alert('Export failed: ' + e.message); }
+}
+
 function renderHistory() {
   const history = getHistory();
   const list = document.getElementById('hp-list');
