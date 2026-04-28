@@ -6,7 +6,6 @@ let backendUrl = (_stored && !_stored.includes('localhost')) ? _stored : window.
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
 let fredKey = localStorage.getItem('um_fred')  || '';
-let quiverKey = localStorage.getItem('um_quiver') || '';
 let finnhubKey = localStorage.getItem('um_finnhub') || '';
 let alpacaKey = localStorage.getItem('um_alpaca_key') || '';
 let alpacaSecret = localStorage.getItem('um_alpaca_secret') || '';
@@ -895,7 +894,7 @@ function openModal() {
   document.getElementById('kmodal')?.classList.add('on');
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
   set('k-backend',backendUrl); set('k-openai',apiKey); set('k-deepseek',dsKey);
-  set('k-fred',fredKey); set('k-quiver',quiverKey); set('k-finnhub',finnhubKey);
+  set('k-fred',fredKey); set('k-finnhub',finnhubKey);
   set('k-alpaca-key',alpacaKey); set('k-alpaca-secret',alpacaSecret);
   set('k-tg-token',telegramToken); set('k-tg-chat',telegramChat);
 }
@@ -906,7 +905,6 @@ function saveKeys() {
   const ds=document.getElementById('k-deepseek')?.value.trim();
   backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai||''; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
-  quiverKey=document.getElementById('k-quiver')?.value.trim()||'';
   finnhubKey=document.getElementById('k-finnhub')?.value.trim()||'';
   alpacaKey=document.getElementById('k-alpaca-key')?.value.trim()||'';
   alpacaSecret=document.getElementById('k-alpaca-secret')?.value.trim()||'';
@@ -916,7 +914,6 @@ function saveKeys() {
   localStorage.setItem('um_key',apiKey);
   localStorage.setItem('um_dskey',dsKey);
   localStorage.setItem('um_fred',fredKey);
-  localStorage.setItem('um_quiver',quiverKey);
   localStorage.setItem('um_finnhub',finnhubKey);
   localStorage.setItem('um_alpaca_key',alpacaKey);
   localStorage.setItem('um_alpaca_secret',alpacaSecret);

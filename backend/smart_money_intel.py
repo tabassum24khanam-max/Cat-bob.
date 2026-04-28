@@ -23,10 +23,10 @@ from collections import defaultdict
 import httpx
 
 try:
-    from config import (QUIVER_API_KEY, FINNHUB_API_KEY, FRED_API_KEY,
+    from config import (FINNHUB_API_KEY, FRED_API_KEY,
                         ALPACA_KEY, ALPACA_SECRET, get_asset_type)
 except ImportError:
-    QUIVER_API_KEY = FINNHUB_API_KEY = FRED_API_KEY = ""
+    FINNHUB_API_KEY = FRED_API_KEY = ""
     ALPACA_KEY = ALPACA_SECRET = ""
     def get_asset_type(a): return 'stock'
 
@@ -86,26 +86,6 @@ async def _fetch_text(url: str, headers: dict = None, timeout: float = 12) -> st
 
 async def _fetch_politician_trades(ticker: str) -> dict:
     result = {"score": 0, "direction": "neutral", "signals": [], "detail": "No data"}
-
-    if QUIVER_API_KEY:
-        data = await _fetch_json(
-            f"https://api.quiverquant.com/beta/historical/congresstrading/{ticker}",
-            headers={"Authorization": f"Bearer {QUIVER_API_KEY}"},
-        )
-        if data and isinstance(data, list):
-            recent = [t for t in data if _within_days(t.get("TransactionDate", ""), 90)]
-            buys = sum(1 for t in recent if t.get("Transaction", "").lower() in ("purchase", "buy"))
-            sells = sum(1 for t in recent if t.get("Transaction", "").lower() in ("sale", "sell", "sale (partial)", "sale (full)"))
-            for t in recent[:5]:
-                result["signals"].append(
-                    f"{t.get('Representative', '?')}: {t.get('Transaction', '?')} ~${t.get('Amount', '?')}"
-                )
-            if buys + sells > 0:
-                ratio = buys / (buys + sells)
-                result["score"] = min(20, int(ratio * 20 * min(buys + sells, 5) / 3))
-                result["direction"] = "bullish" if ratio > 0.6 else "bearish" if ratio < 0.4 else "neutral"
-                result["detail"] = f"{buys} buys, {sells} sells in 90d"
-            return result
 
     try:
         data = await _fetch_json(
