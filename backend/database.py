@@ -136,6 +136,59 @@ CREATE TABLE IF NOT EXISTS clusters (
     UNIQUE(asset, cluster_id)
 );
 
+-- Smart Money Intelligence tables
+CREATE TABLE IF NOT EXISTS politician_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL, ts INTEGER NOT NULL,
+    politician TEXT, party TEXT, chamber TEXT,
+    direction TEXT, amount_min REAL, amount_max REAL,
+    disclosure_date TEXT, transaction_date TEXT,
+    committee TEXT,
+    UNIQUE(asset, ts, politician)
+);
+CREATE TABLE IF NOT EXISTS insider_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL, ts INTEGER NOT NULL,
+    insider_name TEXT, role TEXT,
+    direction TEXT, shares INTEGER, total_value REAL,
+    filing_date TEXT,
+    UNIQUE(asset, ts, insider_name)
+);
+CREATE TABLE IF NOT EXISTS institution_13f (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL, ts INTEGER NOT NULL,
+    fund_name TEXT, action TEXT,
+    shares INTEGER, value REAL, portfolio_pct REAL,
+    is_elite INTEGER DEFAULT 0,
+    UNIQUE(asset, ts, fund_name)
+);
+CREATE TABLE IF NOT EXISTS options_flow_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL, ts INTEGER NOT NULL,
+    call_or_put TEXT, premium REAL,
+    strike REAL, expiry TEXT,
+    sweep INTEGER DEFAULT 0, above_ask INTEGER DEFAULT 0,
+    UNIQUE(asset, ts, strike, call_or_put)
+);
+CREATE TABLE IF NOT EXISTS darkpool_prints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL, ts INTEGER NOT NULL,
+    volume INTEGER, price REAL,
+    repeat_level INTEGER DEFAULT 0,
+    UNIQUE(asset, ts, price)
+);
+CREATE TABLE IF NOT EXISTS source_performance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL,
+    source_type TEXT,
+    total_signals INTEGER DEFAULT 0,
+    correct_signals INTEGER DEFAULT 0,
+    win_rate REAL DEFAULT 0,
+    avg_return REAL DEFAULT 0,
+    last_updated INTEGER,
+    UNIQUE(source_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_price_asset_ts ON price_data(asset, ts);
 CREATE INDEX IF NOT EXISTS idx_news_asset_ts ON news_sentiment(asset, ts);
 CREATE INDEX IF NOT EXISTS idx_articles_asset_ts ON articles(asset, ts);
@@ -143,6 +196,11 @@ CREATE INDEX IF NOT EXISTS idx_predictions_asset ON predictions(asset, saved_at)
 CREATE INDEX IF NOT EXISTS idx_sentiment_asset_ts ON sentiment_snapshots(asset, ts);
 CREATE INDEX IF NOT EXISTS idx_macro_events_ts ON macro_events(event_ts);
 CREATE INDEX IF NOT EXISTS idx_clusters_asset ON clusters(asset, cluster_id);
+CREATE INDEX IF NOT EXISTS idx_politician_asset ON politician_trades(asset, ts);
+CREATE INDEX IF NOT EXISTS idx_insider_asset ON insider_trades(asset, ts);
+CREATE INDEX IF NOT EXISTS idx_institution_asset ON institution_13f(asset, ts);
+CREATE INDEX IF NOT EXISTS idx_darkpool_asset ON darkpool_prints(asset, ts);
+CREATE INDEX IF NOT EXISTS idx_source_perf ON source_performance(source_id);
 """
 
 # Columns to add to existing tables via migration

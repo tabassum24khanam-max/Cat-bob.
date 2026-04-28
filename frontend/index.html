@@ -287,6 +287,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="rp-cell"><div class="rp-lbl">📋 OPTIONS</div><div class="rp-val" id="rp-options">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">💰 SMART MONEY</div><div class="rp-val" id="rp-smartmoney">—</div></div>
     <div class="rp-cell"><div class="rp-lbl">🎯 CALIBRATION</div><div class="rp-val" id="rp-calibration">—</div></div>
+    <div class="rp-cell" style="grid-column: 1 / -1; background: rgba(0,229,255,.03)">
+      <div class="rp-lbl">🕵️ SMART MONEY INTEL (Politicians · Insiders · Funds · Options · Dark Pool · Top Traders)</div>
+      <div class="rp-val" id="rp-smi" style="font-size:11px">—</div>
+      <div id="rp-smi-detail" style="font-size:7px;color:var(--muted);margin-top:4px"></div>
+    </div>
   </div>
   <div class="insight" id="rp-insight">—</div>
   <div id="gate-box" style="padding:6px 14px;border-top:1px solid var(--border);font-size:8px;color:var(--red);display:none"></div>
@@ -331,10 +336,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div style="font-size:8px;color:var(--muted);margin-bottom:8px">OPTIONAL — unlock extra data sources</div>
       <div class="modal-lbl">FRED API KEY (macro data)</div>
       <input class="modal-input" id="k-fred" type="password" placeholder="Get free at fred.stlouisfed.org" autocomplete="off">
-      <div class="modal-lbl">REDDIT CLIENT ID (sentiment)</div>
-      <input class="modal-input" id="k-reddit-id" type="password" placeholder="Reddit app client ID" autocomplete="off">
-      <div class="modal-lbl">REDDIT CLIENT SECRET</div>
-      <input class="modal-input" id="k-reddit-secret" type="password" placeholder="Reddit app client secret" autocomplete="off">
+      <div class="modal-lbl">QUIVER API KEY (politician trades)</div>
+      <input class="modal-input" id="k-quiver" type="password" placeholder="Get free at quiverquant.com" autocomplete="off">
+      <div class="modal-lbl">FINNHUB API KEY (insider data)</div>
+      <input class="modal-input" id="k-finnhub" type="password" placeholder="Get free at finnhub.io" autocomplete="off">
       <div class="modal-lbl">ALPACA KEY (market data)</div>
       <input class="modal-input" id="k-alpaca-key" type="password" placeholder="Alpaca API key" autocomplete="off">
       <div class="modal-lbl">ALPACA SECRET</div>

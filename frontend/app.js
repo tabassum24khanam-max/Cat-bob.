@@ -6,8 +6,8 @@ let backendUrl = (_stored && !_stored.includes('localhost')) ? _stored : window.
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
 let fredKey = localStorage.getItem('um_fred')  || '';
-let redditId = localStorage.getItem('um_reddit_id') || '';
-let redditSecret = localStorage.getItem('um_reddit_secret') || '';
+let quiverKey = localStorage.getItem('um_quiver') || '';
+let finnhubKey = localStorage.getItem('um_finnhub') || '';
 let alpacaKey = localStorage.getItem('um_alpaca_key') || '';
 let alpacaSecret = localStorage.getItem('um_alpaca_secret') || '';
 let telegramToken = localStorage.getItem('um_tg_token') || '';
@@ -421,6 +421,34 @@ function displayResult(r) {
     const c = r.calibration;
     set('rp-calibration', `Raw:${c.raw}% → Cal:${c.calibrated}% (${c.reliability}, ${c.n_samples} samples)`);
   } else { set('rp-calibration', '—'); }
+
+  // Smart Money Intel
+  const smi = r.smart_money_intel || {};
+  if (smi.score > 0) {
+    const dirColor = smi.direction === 'bullish' ? '#00e676' : smi.direction === 'bearish' ? '#ff1744' : smi.direction === 'split' ? '#ffd600' : '#5a7a9a';
+    const confirmed = smi.confirmed ? ' ✓CONFIRMED' : '';
+    set('rp-smi', `Score: ${smi.score}/100 `);
+    const smiEl = document.getElementById('rp-smi');
+    if (smiEl) smiEl.innerHTML = `Score: <b style="color:${dirColor}">${smi.score}/100 ${smi.direction.toUpperCase()}${confirmed}</b> | Data: ${smi.data_completeness}%${smi.top_signal ? ' | ' + smi.top_signal : ''}`;
+    const detailEl = document.getElementById('rp-smi-detail');
+    if (detailEl) {
+      const comps = smi.components || {};
+      const parts = Object.entries(comps).map(([k,v]) => {
+        const dc = v.direction === 'bullish' ? '#00e676' : v.direction === 'bearish' ? '#ff1744' : '#5a7a9a';
+        return `<span style="color:${dc}">${k}: ${v.score}pts</span>`;
+      });
+      let html = parts.join(' · ');
+      if (smi.high_quality_flags && smi.high_quality_flags.length) {
+        html += '<br>★ ' + smi.high_quality_flags.join(' | ★ ');
+      }
+      if (smi.macro_context) html += `<br>Macro: ${smi.macro_context.substring(0, 200)}`;
+      detailEl.innerHTML = html;
+    }
+  } else {
+    set('rp-smi', '—');
+    const detailEl = document.getElementById('rp-smi-detail');
+    if (detailEl) detailEl.innerHTML = '';
+  }
 
   const sim = r.similarity||{};
   const parts = [];
@@ -867,7 +895,7 @@ function openModal() {
   document.getElementById('kmodal')?.classList.add('on');
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
   set('k-backend',backendUrl); set('k-openai',apiKey); set('k-deepseek',dsKey);
-  set('k-fred',fredKey); set('k-reddit-id',redditId); set('k-reddit-secret',redditSecret);
+  set('k-fred',fredKey); set('k-quiver',quiverKey); set('k-finnhub',finnhubKey);
   set('k-alpaca-key',alpacaKey); set('k-alpaca-secret',alpacaSecret);
   set('k-tg-token',telegramToken); set('k-tg-chat',telegramChat);
 }
@@ -878,8 +906,8 @@ function saveKeys() {
   const ds=document.getElementById('k-deepseek')?.value.trim();
   backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai||''; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
-  redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
-  redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
+  quiverKey=document.getElementById('k-quiver')?.value.trim()||'';
+  finnhubKey=document.getElementById('k-finnhub')?.value.trim()||'';
   alpacaKey=document.getElementById('k-alpaca-key')?.value.trim()||'';
   alpacaSecret=document.getElementById('k-alpaca-secret')?.value.trim()||'';
   telegramToken=document.getElementById('k-tg-token')?.value.trim()||'';
@@ -888,8 +916,8 @@ function saveKeys() {
   localStorage.setItem('um_key',apiKey);
   localStorage.setItem('um_dskey',dsKey);
   localStorage.setItem('um_fred',fredKey);
-  localStorage.setItem('um_reddit_id',redditId);
-  localStorage.setItem('um_reddit_secret',redditSecret);
+  localStorage.setItem('um_quiver',quiverKey);
+  localStorage.setItem('um_finnhub',finnhubKey);
   localStorage.setItem('um_alpaca_key',alpacaKey);
   localStorage.setItem('um_alpaca_secret',alpacaSecret);
   localStorage.setItem('um_tg_token',telegramToken);

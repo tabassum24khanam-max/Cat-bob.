@@ -42,6 +42,7 @@ from orderbook import get_orderbook_imbalance
 from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
+from smart_money_intel import get_smart_money_score, refresh_all_smart_money, get_source_leaderboard
 import forensic_log
 
 app = FastAPI(title="ULTRAMAX Backend", version="3.0")
@@ -140,6 +141,20 @@ async def startup():
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
     asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
+    asyncio.create_task(_smart_money_background_refresh())
+
+
+async def _smart_money_background_refresh():
+    """Refresh Smart Money Intelligence data every 6 hours for all assets."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            print("Smart Money Intel: background refresh starting...")
+            await refresh_all_smart_money(ALL_ASSETS)
+            print("Smart Money Intel: refresh complete")
+        except Exception as e:
+            print(f"Smart Money Intel refresh error: {e}")
+        await asyncio.sleep(6 * 3600)
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -784,6 +799,22 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         get_options_sentiment(req.asset),
     )
     smart_money_data = analyze_smart_money(candles)
+
+    # ── Smart Money Intelligence (politicians, insiders, funds, options, dark pool, top traders) ──
+    slog("🕵️ Fetching Smart Money Intelligence...")
+    try:
+        smi_data = await get_smart_money_score(req.asset)
+        smi_score = smi_data.get('score', 0)
+        smi_dir = smi_data.get('direction', 'neutral')
+        smi_top = smi_data.get('top_signal', '')
+        slog(f"✓ Smart Money Intel: score={smi_score}/100 direction={smi_dir} | {smi_top[:80]}")
+        if smi_data.get('high_quality_flags'):
+            for flag in smi_data['high_quality_flags'][:2]:
+                slog(f"  ★ {flag}")
+    except Exception as smi_err:
+        smi_data = {'score': 0, 'direction': 'neutral', 'data_completeness': 0, 'components': {}}
+        slog(f"⚠ Smart Money Intel: {str(smi_err)[:60]}")
+
     if sentiment_data.get('available'):
         slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
     if macro_context.get('warnings'):
@@ -1143,6 +1174,27 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
             decision['confidence'] = 55
 
+    # SMART MONEY INTEL GATE — boost or reduce based on institutional consensus
+    if decision.get('decision') != 'NO_TRADE' and smi_data.get('score', 0) > 0:
+        smi_score = smi_data.get('score', 0)
+        smi_dir = smi_data.get('direction', 'neutral')
+        smi_completeness = smi_data.get('data_completeness', 0)
+        if smi_completeness >= 30 and smi_score >= 60:
+            decision_dir = decision['decision']
+            smi_matches = (decision_dir == 'BUY' and smi_dir == 'bullish') or \
+                          (decision_dir == 'SELL' and smi_dir == 'bearish')
+            smi_contradicts = (decision_dir == 'BUY' and smi_dir == 'bearish') or \
+                              (decision_dir == 'SELL' and smi_dir == 'bullish')
+            old_conf = decision.get('confidence', 50)
+            if smi_matches:
+                boost = min(10, smi_score // 10)
+                decision['confidence'] = min(90, old_conf + boost)
+                slog(f"✓ Smart Money boost: score={smi_score} {smi_dir} confirms {decision_dir} → +{boost}% (conf {old_conf}→{decision['confidence']}%)")
+            elif smi_contradicts:
+                penalty = min(12, smi_score // 8)
+                decision['confidence'] = max(40, old_conf - penalty)
+                slog(f"⚠ Smart Money conflict: score={smi_score} {smi_dir} contradicts {decision_dir} → -{penalty}% (conf {old_conf}→{decision['confidence']}%)")
+
     # ML CONFIDENCE BOOST — when ML strongly agrees, boost confidence
     if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
@@ -1339,6 +1391,18 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "whale_activity": whale_data,
         "options_flow": options_data,
         "smart_money": smart_money_data,
+        "smart_money_intel": {
+            "score": smi_data.get('score', 0),
+            "direction": smi_data.get('direction', 'neutral'),
+            "confirmed": smi_data.get('confirmed', False),
+            "data_completeness": smi_data.get('data_completeness', 0),
+            "top_signal": smi_data.get('top_signal', ''),
+            "high_quality_flags": smi_data.get('high_quality_flags', []),
+            "components": {k: {"score": v.get("score", 0), "direction": v.get("direction", "neutral"),
+                               "detail": v.get("detail", "")}
+                           for k, v in smi_data.get('components', {}).items()},
+            "macro_context": smi_data.get('macro_context', ''),
+        },
         "monte_carlo": mc,
         "similarity": {
             "count": len(similar),
@@ -2309,6 +2373,22 @@ async def autotrader_status():
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "all_positions": engine.get_positions(),
     }
+
+
+# ─── Smart Money Intel Endpoints ─────────────────────────────────────────
+
+@app.get("/smart_money/{asset}")
+async def smart_money_endpoint(asset: str):
+    try:
+        data = await get_smart_money_score(asset)
+        return data
+    except Exception as e:
+        return {"score": 0, "error": str(e)[:200]}
+
+
+@app.get("/smart_money_leaderboard")
+async def smart_money_leaderboard():
+    return {"leaderboard": get_source_leaderboard()}
 
 
 # ─── Forensic Log Endpoints ─────────────────────────────────────────────
