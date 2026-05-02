@@ -36,6 +36,7 @@ class Position:
     exit_price: float = 0.0
     exit_time: int = 0
     paper: bool = True
+    entry_confidence: int = 0
 
 class TradingEngine:
     def __init__(self):

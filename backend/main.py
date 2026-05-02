@@ -342,6 +342,262 @@ async def _continuous_scanner():
         await asyncio.sleep(60)
 
 
+async def _autotrader_loop():
+    """The autonomous trading brain. Wakes up every interval, runs predictions, opens trades."""
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+    from telegram_bot import send_message
+
+    await asyncio.sleep(10)  # let everything initialize
+    engine = get_trading_engine()
+
+    while True:
+        if not _autotrader['enabled'] or not _autotrader['assets']:
+            await asyncio.sleep(10)
+            continue
+
+        interval = max(10, _autotrader['interval_minutes']) * 60
+        _autotrader['status'] = 'running'
+        _autotrader['last_cycle'] = int(time.time())
+        _autotrader['total_cycles'] += 1
+        cycle = _autotrader['total_cycles']
+
+        print(f"\n{'='*60}")
+        print(f"AUTOTRADER CYCLE #{cycle} — {len(_autotrader['assets'])} assets")
+        print(f"{'='*60}")
+
+        cycle_id = forensic_log.log_cycle_start(
+            cycle, _autotrader['assets'], _autotrader['interval_minutes'],
+            engine._equity, _autotrader.get('trade_size', 0), engine.paper_mode,
+        )
+
+        cycle_summary = []
+
+        for asset_name in _autotrader['assets']:
+            try:
+                # Run the full prediction — ALWAYS, even if holding
+                api_key = OPENAI_API_KEY or ''
+                ds_key = DEEPSEEK_API_KEY or ''
+
+                if not api_key and not ds_key:
+                    print(f"  {asset_name}: SKIP — no API keys")
+                    continue
+
+                # Bot mode: AI's thinking shifts from "predict 4h ahead" to
+                # "what's the right side to be on RIGHT NOW to maintain profit?"
+                # V4: 2h horizon — validated better than 1h (more candles, less noise)
+                req = PredictRequest(
+                    asset=asset_name, horizon=2,
+                    api_key=api_key, ds_key=ds_key,
+                    use_r1=True, bot_mode=True,
+                )
+
+                start_time = time.time()
+                logs = []
+                def slog(msg):
+                    logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
+
+                result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
+
+                direction = result.get('decision', 'NO_TRADE')
+                confidence = result.get('confidence', 0)
+                pqs_score = result.get('pqs', {}).get('score', 0)
+                price = result.get('ind', {}).get('cur', 0)
+                stop_loss = result.get('quant', {}).get('stop_loss_pct', 2.0) or 2.0
+
+                print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
+
+                # V4: RESPECT NO_TRADE — never force a direction.
+                # A coin-flip trade minus fees is a guaranteed loss.
+                # The AI correctly identified insufficient edge — honour it.
+                if direction == 'NO_TRADE':
+                    gate_r = result.get('gate_reason', 'no edge')
+                    print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
+                    cycle_summary.append(f"{asset_name}: SKIP (no edge)")
+                    continue
+
+                # Check if already holding this asset
+                open_for_asset = [p for p in engine.positions.values()
+                                  if p.status == 'open' and p.asset == asset_name]
+
+                if open_for_asset:
+                    current_pos = open_for_asset[0]
+                    pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
+
+                    # Same direction — STAY, do nothing
+                    if current_pos.direction == direction:
+                        print(f"  {asset_name}: HOLD {current_pos.direction} (P&L: {pnl_pct:+.2f}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
+                        continue
+
+                    # ── V4 ANTI-WHIPSAW PROTECTION ──────────────────────────
+                    # This is the #1 source of money loss. The bot flips every
+                    # cycle, eating small losses each time. Let trades breathe.
+
+                    hold_seconds = int(time.time()) - current_pos.entry_time
+                    hold_minutes = hold_seconds / 60
+
+                    # Rule 1: MINIMUM HOLD TIME — never flip before 3 hours
+                    # Let the SL/TP do their job instead of panic-flipping
+                    min_hold_minutes = 180  # 3 hours
+                    if hold_minutes < min_hold_minutes:
+                        print(f"  {asset_name}: HOLD (anti-whipsaw: only {hold_minutes:.0f}min, need {min_hold_minutes}min)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon to flip)")
+                        continue
+
+                    # Rule 2: PROFITABLE POSITION PROTECTION
+                    # If we're in profit, require VERY strong signal to flip
+                    if pnl_pct > 0.3:
+                        if confidence < 72:
+                            print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.2f}%, won't flip for {confidence}% conf)")
+                            cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
+                            continue
+
+                    # Rule 3: CONFIDENCE DELTA — new signal must be significantly
+                    # stronger than the original entry confidence to justify flip
+                    original_conf = current_pos.entry_confidence or 55
+                    if confidence < original_conf + 15:
+                        print(f"  {asset_name}: HOLD (flip requires {original_conf+15}% conf, got {confidence}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip signal too weak)")
+                        continue
+
+                    # Rule 4: LOSING BADLY — only allow flip if losing more than 0.8%
+                    # Small losses should be held — they may recover
+                    if -0.8 < pnl_pct < 0:
+                        print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.2f}%, may recover)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
+                        continue
+
+                    # All anti-whipsaw checks passed — this is a justified flip
+                    print(f"  {asset_name}: FLIP APPROVED after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, new conf={confidence}%")
+                    close_result = await engine.close_position(current_pos.id, price, 'flip')
+                    old_pnl = close_result.get('pnl', 0)
+                    _autotrader['trades_closed'] += 1
+                    record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
+                    forensic_log.log_trade_flip(
+                        asset_name, current_pos.direction, direction,
+                        current_pos.entry_price, price, old_pnl, 0,
+                        parent_id=cycle_id,
+                    )
+                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
+                    asyncio.create_task(send_message(
+                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
+                    ))
+
+                # V4: Hard quality gate before trading
+                if confidence < 55:
+                    print(f"  {asset_name}: SKIP (confidence {confidence}% < 55% V4 floor)")
+                    cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
+                    continue
+                if pqs_score < 5:
+                    print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5 V4 floor)")
+                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
+                    continue
+
+                # Safety checks
+                open_count = len([p for p in engine.positions.values() if p.status == 'open'])
+                if open_count >= 10:
+                    cycle_summary.append(f"{asset_name}: max positions (10)")
+                    continue
+                if engine.daily_pnl <= -(engine._equity * 0.05):
+                    cycle_summary.append(f"{asset_name}: daily loss limit")
+                    continue
+
+                # Position size — use custom size if set, otherwise Kelly/default
+                custom_size = _autotrader.get('trade_size', 0)
+                if custom_size > 0:
+                    size = min(custom_size, engine._equity * 0.25)  # never more than 25% of equity
+                else:
+                    stats = _equity_tracker.get_stats()
+                    n_trades = stats.get('n_trades', 0)
+                    if n_trades >= 10:
+                        win_rate = 0.5
+                        rated = await get_predictions(asset_name, 100)
+                        wins = sum(1 for p in rated if p.get('feedback') == 'correct')
+                        total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
+                        if total_rated >= 5:
+                            win_rate = wins / total_rated
+                        size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
+                    else:
+                        size = min(200, engine._equity * 0.05)
+
+                if size < 10:
+                    size = min(100, engine._equity * 0.05)
+
+                # Open the trade
+                trade_result = await engine.open_position(
+                    asset_name, direction, price, size,
+                    stop_loss_pct=min(stop_loss, 3.0),
+                    take_profit_pct=min(stop_loss * 2, 6.0),
+                    trailing=1.5,
+                )
+
+                if trade_result.get('ok'):
+                    _autotrader['trades_opened'] += 1
+                    pos_data = trade_result.get('position', {})
+                    # Store entry confidence for anti-whipsaw Rule 3
+                    pos_id = pos_data.get('id', '')
+                    if pos_id and pos_id in engine.positions:
+                        engine.positions[pos_id].entry_confidence = confidence
+                    forensic_log.log_trade_open(
+                        asset_name, direction, price, size,
+                        pos_data.get('stop_loss', 0), pos_data.get('take_profit', 0),
+                        pos_data.get('trailing_stop_pct', 1.5),
+                        f"autotrader_cycle_{cycle}", confidence, pqs_score,
+                        parent_id=cycle_id,
+                    )
+                    msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
+                    print(f"  >>> {msg}")
+                    cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
+                    asyncio.create_task(send_message(f"🤖 AUTO-TRADE: {msg}"))
+                else:
+                    cycle_summary.append(f"{asset_name}: trade failed ({trade_result.get('error', '?')})")
+
+            except Exception as e:
+                print(f"  {asset_name}: ERROR — {str(e)[:100]}")
+                forensic_log.log_error(asset_name, "autotrader_loop", str(e))
+                cycle_summary.append(f"{asset_name}: error")
+
+        # Save cycle log for frontend
+        _autotrader['cycle_log'].append({
+            'ts': int(time.time()),
+            'cycle': cycle,
+            'summaries': cycle_summary,
+        })
+        _autotrader['cycle_log'] = _autotrader['cycle_log'][-50:]
+
+        forensic_log.log_cycle_end(
+            cycle, engine._equity, cycle_summary,
+            _autotrader['trades_opened'], _autotrader['trades_closed'],
+            parent_id=cycle_id,
+        )
+
+        # Send cycle summary to Telegram
+        hb = engine.heartbeat()
+        summary = (
+            f"🤖 AUTOTRADER CYCLE #{cycle}\n"
+            f"Assets: {', '.join(cycle_summary)}\n"
+            f"Equity: ${hb['equity']:,.2f} | Open: {hb['positions']} | Daily P&L: ${hb['daily_pnl']:+,.2f}\n"
+            f"Next scan in {_autotrader['interval_minutes']}min"
+        )
+        asyncio.create_task(send_message(summary))
+
+        # Should I keep going? Check equity health
+        if hb['equity'] < 5000:  # lost 50% of starting capital
+            asyncio.create_task(send_message(
+                f"⚠️ AUTOTRADER WARNING: Equity ${hb['equity']:,.2f} is below $5,000. "
+                f"Consider stopping. Daily P&L: ${hb['daily_pnl']:+,.2f}"
+            ))
+        elif hb['equity'] > 15000:  # up 50%
+            asyncio.create_task(send_message(
+                f"🎯 AUTOTRADER: Equity ${hb['equity']:,.2f} — up {((hb['equity']-10000)/10000*100):.1f}% from start. "
+                f"Consider taking profits."
+            ))
+
+        _autotrader['status'] = 'sleeping'
+        print(f"Autotrader sleeping {_autotrader['interval_minutes']}min until next cycle...")
+        await asyncio.sleep(interval)
+
+
 async def _trading_position_monitor():
     """Background task: check open trading positions every 30s."""
     await asyncio.sleep(15)
