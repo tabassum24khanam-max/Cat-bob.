@@ -43,7 +43,7 @@ from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
 
-app = FastAPI(title="ULTRAMAX Backend", version="3.0")
+app = FastAPI(title="ULTRAMAX Backend", version="4.0")
 
 # Singletons
 _equity_tracker = EquityTracker()
@@ -89,6 +89,7 @@ class PredictRequest(BaseModel):
     ds_key: Optional[str] = None
     worker_url: Optional[str] = None
     use_r1: Optional[bool] = True
+    bot_mode: Optional[bool] = False
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -317,15 +318,15 @@ _gate_stats = {'trades': 0, 'wins': 0}
 
 
 def get_adaptive_floor():
-    """Confidence floor adapts: if recent accuracy is high, lower the floor."""
+    """V4: Confidence floor adapts but never below 50% — no coin-flip trades."""
     if _gate_stats['trades'] < 20:
-        return 38
+        return 55
     win_rate = _gate_stats['wins'] / _gate_stats['trades']
-    if win_rate > 0.6:
-        return 32
-    if win_rate > 0.5:
-        return 35
-    return 42
+    if win_rate > 0.65:
+        return 50
+    if win_rate > 0.55:
+        return 52
+    return 58
 
 
 async def _continuous_scanner():
@@ -495,40 +496,55 @@ async def _autotrader_loop():
 
                 # Safety checks
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
-                if open_count >= 10:
-                    cycle_summary.append(f"{asset_name}: max positions (10)")
+                if open_count >= 5:
+                    cycle_summary.append(f"{asset_name}: max positions (5)")
                     continue
-                if engine.daily_pnl <= -(engine._equity * 0.05):
-                    cycle_summary.append(f"{asset_name}: daily loss limit")
+                if engine.daily_pnl <= -(engine._equity * 0.03):
+                    cycle_summary.append(f"{asset_name}: daily loss limit (3%)")
                     continue
 
-                # Position size — use custom size if set, otherwise Kelly/default
+                # V4: ATR-based dynamic stop losses
+                atr = result.get('ind', {}).get('atr', 0)
+                if atr and price:
+                    atr_pct = (atr / price) * 100
+                    sl_pct = max(0.8, min(3.0, atr_pct * 2.0))
+                    tp_pct = max(1.5, min(6.0, atr_pct * 3.5))
+                    trail_pct = max(0.5, min(2.5, atr_pct * 1.5))
+                else:
+                    sl_pct = min(stop_loss, 2.0)
+                    tp_pct = min(stop_loss * 2, 4.0)
+                    trail_pct = 1.5
+
+                # V4: Confidence-scaled position sizing
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
-                    size = min(custom_size, engine._equity * 0.25)  # never more than 25% of equity
+                    base_size = min(custom_size, engine._equity * 0.20)
                 else:
+                    base_size = min(200, engine._equity * 0.05)
                     stats = _equity_tracker.get_stats()
-                    n_trades = stats.get('n_trades', 0)
-                    if n_trades >= 10:
+                    if stats.get('n_trades', 0) >= 10:
                         win_rate = 0.5
                         rated = await get_predictions(asset_name, 100)
                         wins = sum(1 for p in rated if p.get('feedback') == 'correct')
                         total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
                         if total_rated >= 5:
                             win_rate = wins / total_rated
-                        size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
-                    else:
-                        size = min(200, engine._equity * 0.05)
+                        base_size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
 
-                if size < 10:
-                    size = min(100, engine._equity * 0.05)
+                if base_size < 10:
+                    base_size = min(100, engine._equity * 0.05)
+
+                conf_scale = 0.5 + (confidence - 55) / 90.0
+                conf_scale = max(0.3, min(1.0, conf_scale))
+                size = round(base_size * conf_scale, 2)
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {conf_scale:.2f} conf_scale) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
                     asset_name, direction, price, size,
-                    stop_loss_pct=min(stop_loss, 3.0),
-                    take_profit_pct=min(stop_loss * 2, 6.0),
-                    trailing=1.5,
+                    stop_loss_pct=sl_pct,
+                    take_profit_pct=tp_pct,
+                    trailing=trail_pct,
                 )
 
                 if trade_result.get('ok'):
@@ -599,15 +615,36 @@ async def _autotrader_loop():
 
 
 async def _trading_position_monitor():
-    """Background task: check open trading positions every 30s."""
+    """Background task: check open trading positions every 30s + stale position timeout."""
     await asyncio.sleep(15)
     engine = get_trading_engine()
     while True:
         try:
-            if any(p.status == 'open' for p in engine.positions.values()):
+            open_positions = [p for p in engine.positions.values() if p.status == 'open']
+            if open_positions:
                 actions = await engine.check_all_positions(fetch_current_price)
                 for act in actions:
                     print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+
+                # V4: Stale position timeout — close positions stuck for 12+ hours
+                now = int(time.time())
+                for pos in open_positions:
+                    hold_hours = (now - pos.entry_time) / 3600
+                    if hold_hours >= 12:
+                        try:
+                            result = await fetch_current_price(pos.asset)
+                            cur_price = result.get('price', 0)
+                            if not cur_price:
+                                continue
+                            if pos.direction == 'BUY':
+                                pnl_pct = (cur_price - pos.entry_price) / pos.entry_price * 100
+                            else:
+                                pnl_pct = (pos.entry_price - cur_price) / pos.entry_price * 100
+                            if -0.3 < pnl_pct < 0.3:
+                                close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
+                                print(f"Trading: stale timeout {pos.asset} after {hold_hours:.1f}h (flat {pnl_pct:+.2f}%) P&L: {close_result.get('pnl')}")
+                        except Exception:
+                            continue
         except Exception as e:
             print(f"Position monitor error: {e}")
         await asyncio.sleep(30)
@@ -648,7 +685,7 @@ async def serve_appjs():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "3.0", "ts": int(time.time())}
+    return {"status": "ok", "version": "4.0", "ts": int(time.time())}
 
 
 @app.post("/predict")
@@ -776,12 +813,14 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         db_sentiment = {'hours': len(db_news), 'avg_24h': avg_24h, 'trend': trend}
         slog(f"✓ Sentiment memory: {len(db_news)}h history, avg={avg_24h:+.2f}, trend={trend:+.3f}")
 
-    # ── MTF daily context ────────────────────────────────────────────────
-    slog("📅 Fetching daily trend context...")
-    daily_candles = await fetch_candles(req.asset, '1d', 32)
+    # ── MTF: 4H + Daily context ─────────────────────────────────────────
+    slog("📅 Fetching MTF trend context (4H + Daily)...")
+    daily_candles, h4_candles = await asyncio.gather(
+        fetch_candles(req.asset, '1d', 32),
+        fetch_candles(req.asset, '4h', 60),
+    )
     mtf_data = {}
     if daily_candles and len(daily_candles) >= 20:
-        # Use closed candles only (drop last)
         dc = daily_candles[:-1]
         daily_ind = compute_indicators(dc)
         if daily_ind:
@@ -792,12 +831,22 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 'daily_bear': daily_ind['dist_e20'] < -1 and daily_ind['macd_hist'] < 0,
             }
             slog(f"✓ Daily: {'BULL' if mtf_data['daily_bull'] else 'BEAR' if mtf_data['daily_bear'] else 'NEUTRAL'}")
+    if h4_candles and len(h4_candles) >= 20:
+        h4c = h4_candles[:-1]
+        h4_ind = compute_indicators(h4c)
+        if h4_ind:
+            mtf_data['h4_macd_hist'] = h4_ind['macd_hist']
+            mtf_data['h4_dist_e20'] = h4_ind['dist_e20']
+            mtf_data['h4_bull'] = h4_ind['dist_e20'] > 0.5 and h4_ind['macd_hist'] > 0
+            mtf_data['h4_bear'] = h4_ind['dist_e20'] < -0.5 and h4_ind['macd_hist'] < 0
+            mtf_data['h4_rsi'] = h4_ind['rsi14']
+            slog(f"✓ 4H: {'BULL' if mtf_data['h4_bull'] else 'BEAR' if mtf_data['h4_bear'] else 'NEUTRAL'} RSI={h4_ind['rsi14']:.1f}")
 
     # ── ML Ensemble ──────────────────────────────────────────────────────
     ml_result = {'confidence': 50, 'available': False}
     model_artifact = _ml_cache.get(req.asset)
     if model_artifact:
-        ml_result = predict_ensemble(model_artifact, ind)
+        ml_result = predict_ensemble(ind)
         slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
     else:
         slog("⚠ ML ensemble: no trained model yet")
@@ -806,7 +855,8 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
     slog(f"📐 Agent 1 (Quant/{quant_model_label}) analyzing...")
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
-                                       cluster_data=cluster_data, correlation_data=correlation_data)
+                                       cluster_data=cluster_data, correlation_data=correlation_data,
+                                       bot_mode=getattr(req, 'bot_mode', False))
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
@@ -864,23 +914,25 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     if model_used == 'gpt-4o' and decision.get('_r1_error'):
         slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
 
-    # ── ML OVERRIDE: When ML is confident, enforce its direction ─────────
+    # ── V4 ML OVERRIDE: Only when ML is VERY confident ──────────────────
     if ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
-        ml_dir = 'BUY' if ml_score > 58 else 'SELL' if ml_score < 42 else None
+        ml_dir = 'BUY' if ml_score > 62 else 'SELL' if ml_score < 38 else None
         ai_dir = decision.get('decision')
 
         if ml_dir and ai_dir != ml_dir:
-            if ml_score > 62 or ml_score < 38:
+            if ml_score > 68 or ml_score < 32:
                 slog(f"🔄 ML OVERRIDE: ML says {ml_dir} ({ml_score:.1f}%) but AI said {ai_dir} — forcing ML direction")
                 decision['_original_decision'] = ai_dir
                 decision['decision'] = ml_dir
                 decision['confidence'] = max(decision.get('confidence', 50), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
-            elif ai_dir == 'NO_TRADE' and ml_dir:
-                slog(f"🔄 ML activates trade: ML says {ml_dir} ({ml_score:.1f}%) — overriding NO_TRADE")
+            elif ai_dir == 'NO_TRADE' and ml_dir and (ml_score > 70 or ml_score < 30):
+                slog(f"🔄 ML activates trade: ML says {ml_dir} ({ml_score:.1f}%) — overriding NO_TRADE (very high ML confidence)")
                 decision['_original_decision'] = 'NO_TRADE'
                 decision['decision'] = ml_dir
-                decision['confidence'] = max(decision.get('confidence', 40), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+                decision['confidence'] = max(decision.get('confidence', 55), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+            elif ai_dir == 'NO_TRADE':
+                slog(f"ML suggests {ml_dir} ({ml_score:.1f}%) but not strong enough to override NO_TRADE (need >70%)")
 
     # ── A6: Session Intelligence — track recent predictions per asset ────
     recent_session = _session_predictions.get(req.asset, [])
@@ -991,14 +1043,34 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             decision['confidence'] = max(0, old_conf - 15)
             slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + very low confluence = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE':
-        inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
-        very_low_confluence = decision.get('confidence', 0) < 42
-        if inside_cloud and very_low_confluence:
+    # V4: 4H COUNTER-TREND PENALTY — closer timeframe, stronger signal
+    if decision.get('decision') != 'NO_TRADE' and mtf_data:
+        h4_bull = mtf_data.get('h4_bull', False)
+        h4_bear = mtf_data.get('h4_bear', False)
+        daily_bull = mtf_data.get('daily_bull', False)
+        daily_bear = mtf_data.get('daily_bear', False)
+        h4_opposes = (h4_bear and decision.get('decision') == 'BUY') or \
+                     (h4_bull and decision.get('decision') == 'SELL')
+        daily_opposes = (daily_bear and decision.get('decision') == 'BUY') or \
+                        (daily_bull and decision.get('decision') == 'SELL')
+        if h4_opposes and daily_opposes:
             decision['_original_decision'] = decision.get('decision')
             decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 42%)"
+            gate_reason = f"Both 4H and Daily oppose {decision.get('_original_decision')} — full MTF rejection"
+            slog(f"⚠ MTF REJECT: Both 4H and Daily oppose signal — forced NO_TRADE")
+        elif h4_opposes:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 12)
+            slog(f"⚠ 4H counter-trend: {decision['decision']} vs 4H {'BEAR' if h4_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + low confluence = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE':
+        inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
+        low_confluence = decision.get('confidence', 0) < 58
+        if inside_cloud and low_confluence:
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 58%)"
             slog(f"⚠ Ichimoku cloud gate: inside cloud + confidence {decision.get('confidence', 0)}%")
 
     # Confidence cap: neutral daily + bearish MACD
