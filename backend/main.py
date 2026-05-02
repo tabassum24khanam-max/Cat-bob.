@@ -42,6 +42,7 @@ from orderbook import get_orderbook_imbalance
 from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
+import forensic_log
 
 app = FastAPI(title="ULTRAMAX Backend", version="4.0")
 
@@ -50,6 +51,48 @@ _equity_tracker = EquityTracker()
 
 # A6: Session Intelligence — track recent predictions per asset
 _session_predictions: dict = {}  # {asset: [{'ts': int, 'direction': str, 'confidence': int}]}
+
+# ─── Autonomous Trader State ────────────────────────────────────────────────
+_autotrader = {
+    'enabled': False,
+    'assets': [],
+    'interval_minutes': 60,
+    'last_cycle': 0,
+    'total_cycles': 0,
+    'trades_opened': 0,
+    'trades_closed': 0,
+    'status': 'stopped',
+    'cycle_log': [],
+    'trade_size': 0,
+    'starting_equity': 10000,
+}
+
+# ─── Learning Memory ────────────────────────────────────────────────────────
+from typing import Dict
+_trade_lessons: Dict[str, list] = {}
+
+def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
+                   pnl: float, reason: str):
+    if asset not in _trade_lessons:
+        _trade_lessons[asset] = []
+    was_correct = pnl > 0
+    pnl_pct = (exit_price - entry) / entry * 100 if direction == 'BUY' else (entry - exit_price) / entry * 100
+    if was_correct:
+        lesson = f"{direction} was correct ({pnl_pct:+.2f}%). Closed via {reason}."
+    else:
+        lesson = f"{direction} was WRONG ({pnl_pct:+.2f}%). Lost ${abs(pnl):.2f}."
+    _trade_lessons[asset].append({
+        'ts': int(time.time()),
+        'direction': direction,
+        'entry': entry,
+        'exit': exit_price,
+        'pnl': round(pnl, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'reason': reason,
+        'was_correct': was_correct,
+        'lesson': lesson,
+    })
+    _trade_lessons[asset] = _trade_lessons[asset][-20:]
 
 app.add_middleware(
     CORSMiddleware,
@@ -681,6 +724,14 @@ async def serve_appjs():
     if os.path.exists(fp):
         return FileResponse(fp, media_type="application/javascript")
     raise HTTPException(404, "app.js not found")
+
+
+@app.get("/bot")
+async def serve_bot():
+    fp = os.path.join(frontend_path, 'bot.html')
+    if os.path.exists(fp):
+        return FileResponse(fp)
+    raise HTTPException(404, "bot.html not found")
 
 
 @app.get("/health")
@@ -2025,6 +2076,135 @@ class WebhookPayload(BaseModel):
 async def trade_webhook(payload: WebhookPayload):
     engine = get_trading_engine()
     return await engine.handle_webhook(payload.dict())
+
+
+# ─── Autonomous Trader Control ──────────────────────────────────────────
+
+class AutotraderStartRequest(BaseModel):
+    assets: list
+    interval_minutes: int = 60
+    trade_size: float = 0
+    starting_equity: float = 10000
+
+
+@app.post("/autotrader/start")
+async def autotrader_start(req: AutotraderStartRequest):
+    valid_assets = [a for a in req.assets if a in ALL_ASSETS]
+    if not valid_assets:
+        return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
+    _autotrader['enabled'] = True
+    _autotrader['assets'] = valid_assets
+    _autotrader['interval_minutes'] = max(10, req.interval_minutes)
+    _autotrader['trade_size'] = max(0, req.trade_size)
+    _autotrader['starting_equity'] = max(100, req.starting_equity)
+    _autotrader['status'] = 'starting'
+    engine = get_trading_engine()
+    engine._equity = _autotrader['starting_equity']
+    asyncio.create_task(_autotrader_loop())
+    from telegram_bot import send_message
+    size_label = f"${_autotrader['trade_size']:.0f}/trade" if _autotrader['trade_size'] > 0 else "Auto (Kelly)"
+    asyncio.create_task(send_message(
+        f"AUTOTRADER STARTED\nAssets: {', '.join(valid_assets)}\n"
+        f"Interval: every {_autotrader['interval_minutes']} min\n"
+        f"Mode: {'PAPER' if engine.paper_mode else 'LIVE'}\n"
+        f"Starting equity: ${engine._equity:,.2f}\nTrade size: {size_label}"
+    ))
+    return {
+        "ok": True, "assets": valid_assets,
+        "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader['trade_size'],
+        "starting_equity": _autotrader['starting_equity'],
+        "mode": "paper" if engine.paper_mode else "live",
+    }
+
+
+@app.post("/autotrader/stop")
+async def autotrader_stop():
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+    engine = get_trading_engine()
+    open_positions = engine.get_positions('open')
+    from telegram_bot import send_message
+    asyncio.create_task(send_message(
+        f"AUTOTRADER STOPPED\nOpen positions: {len(open_positions)}\n"
+        f"Equity: ${engine._equity:,.2f}\nTotal cycles: {_autotrader['total_cycles']}"
+    ))
+    return {"ok": True, "open_positions": len(open_positions), "equity": engine._equity,
+            "total_cycles": _autotrader['total_cycles']}
+
+
+@app.post("/autotrader/cashout")
+async def autotrader_cashout():
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+    engine = get_trading_engine()
+    closed = []
+    total_pnl = 0.0
+    for pos in list(engine.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if price:
+                close_result = await engine.close_position(pos.id, price, 'cashout')
+                pnl = close_result.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({'asset': pos.asset, 'direction': pos.direction,
+                               'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
+        except Exception:
+            continue
+    return {"ok": True, "closed": closed, "total_pnl": round(total_pnl, 2),
+            "final_equity": round(engine._equity, 2)}
+
+
+@app.get("/autotrader/status")
+async def autotrader_status():
+    engine = get_trading_engine()
+    hb = engine.heartbeat()
+    open_positions = engine.get_positions('open')
+    trade_log = engine.get_trade_log(20)
+    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
+    total = len(trade_log)
+    win_rate = (wins / total * 100) if total > 0 else 0
+    return {
+        "enabled": _autotrader['enabled'], "status": _autotrader['status'],
+        "assets": _autotrader['assets'], "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader.get('trade_size', 0),
+        "total_cycles": _autotrader['total_cycles'],
+        "trades_opened": _autotrader['trades_opened'],
+        "last_cycle": _autotrader['last_cycle'],
+        "heartbeat": hb, "open_positions": open_positions,
+        "recent_trades": trade_log, "win_rate": round(win_rate, 1),
+        "cycle_log": _autotrader['cycle_log'][-20:],
+        "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
+        "all_positions": engine.get_positions(),
+    }
+
+
+# ─── Forensic Log Endpoints ─────────────────────────────────────────────
+
+@app.get("/forensic/stats")
+async def forensic_stats():
+    return forensic_log.stats()
+
+
+@app.get("/forensic/log")
+async def forensic_log_get(limit: int = 200, asset: str = None, type: str = None):
+    events = forensic_log.get_events(limit=limit, asset_filter=asset, type_filter=type)
+    return {"events": events, "count": len(events)}
+
+
+@app.get("/forensic/export")
+async def forensic_export(asset: str = None):
+    text = forensic_log.export_text(asset_filter=asset)
+    return PlainTextResponse(content=text, media_type="text/plain")
+
+
+@app.post("/forensic/clear")
+async def forensic_clear():
+    forensic_log.clear()
+    return {"ok": True}
 
 
 # ─── Portfolio Scanner ───────────────────────────────────────────────────
