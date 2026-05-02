@@ -339,11 +339,19 @@ def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = 
     bear   = finals[int(n_sims * 0.2)]
     prob_up = sum(1 for f in finals if f > cur_price) / n_sims
 
-    max_pct = (0.4 if is_crypto else 0.2) if horizon_h <= 1 else \
-              (1.2 if is_crypto else 0.6) if horizon_h <= 4 else \
-              (2.0 if is_crypto else 1.0) if horizon_h <= 8 else \
-              (4.0 if is_crypto else 2.5) if horizon_h <= 24 else \
-              (12.0 if is_crypto else 6.0)
+    atr_pct = (atr / cur_price) * 100 if cur_price else 0.5
+    if horizon_h <= 1:
+        max_pct = max(0.4 if is_crypto else 0.2, atr_pct * 1.5)
+    elif horizon_h <= 2:
+        max_pct = max(0.8 if is_crypto else 0.4, atr_pct * 2.0)
+    elif horizon_h <= 4:
+        max_pct = max(1.2 if is_crypto else 0.6, atr_pct * 2.5)
+    elif horizon_h <= 8:
+        max_pct = max(2.0 if is_crypto else 1.0, atr_pct * 3.0)
+    elif horizon_h <= 24:
+        max_pct = max(4.0 if is_crypto else 2.5, atr_pct * 4.0)
+    else:
+        max_pct = max(12.0 if is_crypto else 6.0, atr_pct * 6.0)
 
     def clamp(p):
         pct = (p - cur_price) / cur_price * 100
