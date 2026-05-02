@@ -11,12 +11,12 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 from config import ALPACA_KEY, ALPACA_SECRET, BINANCE_SYMBOLS, get_asset_type
 
-# D10: Safety Controls
+# D10: Safety Controls — V4: raised floors, quality-first philosophy
 MAX_POSITIONS = 10
 MAX_DAILY_LOSS_PCT = 5.0
 MAX_POSITION_SIZE_PCT = 20.0
-MIN_CONFIDENCE = 40
-MIN_PQS = 3
+MIN_CONFIDENCE = 55   # V4: was 40 — need real edge, not coin-flip
+MIN_PQS = 5           # V4: was 3 — require strong signal confluence
 
 @dataclass
 class Position:

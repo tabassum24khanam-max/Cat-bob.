@@ -45,7 +45,7 @@ from smart_money import analyze_smart_money
 from smart_money_intel import get_smart_money_score, refresh_all_smart_money, get_source_leaderboard
 import forensic_log
 
-app = FastAPI(title="ULTRAMAX Backend", version="3.0")
+app = FastAPI(title="ULTRAMAX Backend", version="4.0")
 
 # Singletons
 _equity_tracker = EquityTracker()
@@ -395,15 +395,16 @@ _gate_stats = {'trades': 0, 'wins': 0}
 
 
 def get_adaptive_floor():
-    """Confidence floor adapts: if recent accuracy is high, lower the floor."""
+    """V4: Confidence floor — starts at 55, adapts only when track record is proven.
+    Below this confidence = not enough edge = certain loss over time."""
     if _gate_stats['trades'] < 20:
-        return 38
+        return 55  # V4: was 38 — need real edge to trade
     win_rate = _gate_stats['wins'] / _gate_stats['trades']
-    if win_rate > 0.6:
-        return 32
-    if win_rate > 0.5:
-        return 35
-    return 42
+    if win_rate > 0.65:
+        return 52  # Proven good — can take slightly lower conf trades
+    if win_rate > 0.55:
+        return 55
+    return 60  # Below 55% win rate = raise the bar higher
 
 
 async def _continuous_scanner():
@@ -462,8 +463,9 @@ async def _autotrader_loop():
 
                 # Bot mode: AI's thinking shifts from "predict 4h ahead" to
                 # "what's the right side to be on RIGHT NOW to maintain profit?"
+                # V4: 2h horizon — validated better than 1h (more candles, less noise)
                 req = PredictRequest(
-                    asset=asset_name, horizon=1,
+                    asset=asset_name, horizon=2,
                     api_key=api_key, ds_key=ds_key,
                     use_r1=True, bot_mode=True,
                 )
@@ -483,34 +485,14 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # Force a direction even on NO_TRADE — AI shifts to "what should we do anyway?"
+                # V4: RESPECT NO_TRADE — never force a direction.
+                # A coin-flip trade minus fees is a guaranteed loss.
+                # The AI correctly identified insufficient edge — honour it.
                 if direction == 'NO_TRADE':
-                    ind_data = result.get('ind', {})
-                    bull_score = 0
-                    bear_score = 0
-                    if ind_data.get('rsi14', 50) < 45: bull_score += 1
-                    if ind_data.get('rsi14', 50) > 55: bear_score += 1
-                    if ind_data.get('macd_hist', 0) > 0: bull_score += 1
-                    else: bear_score += 1
-                    if ind_data.get('supertrend_bull'): bull_score += 1
-                    else: bear_score += 1
-                    if result.get('quant', {}).get('direction') == 'BUY': bull_score += 2
-                    elif result.get('quant', {}).get('direction') == 'SELL': bear_score += 2
-                    mc_prob = result.get('monte_carlo', {}).get('prob_up', 0.5)
-                    if mc_prob > 0.55: bull_score += 1
-                    elif mc_prob < 0.45: bear_score += 1
-
-                    if bull_score > bear_score:
-                        direction = 'BUY'
-                        confidence = max(confidence, 42)
-                    elif bear_score > bull_score:
-                        direction = 'SELL'
-                        confidence = max(confidence, 42)
-                    else:
-                        direction = 'BUY' if mc_prob >= 0.5 else 'SELL'
-                        confidence = max(confidence, 40)
-                    pqs_score = max(pqs_score, 3)
-                    print(f"  {asset_name}: FORCED {direction} (bull={bull_score} bear={bear_score})")
+                    gate_r = result.get('gate_reason', 'no edge')
+                    print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
+                    cycle_summary.append(f"{asset_name}: SKIP (no edge)")
+                    continue
 
                 # Check if already holding this asset
                 open_for_asset = [p for p in engine.positions.values()
@@ -539,6 +521,16 @@ async def _autotrader_loop():
                         asyncio.create_task(send_message(
                             f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
                         ))
+
+                # V4: Hard quality gate before trading
+                if confidence < 55:
+                    print(f"  {asset_name}: SKIP (confidence {confidence}% < 55% V4 floor)")
+                    cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
+                    continue
+                if pqs_score < 5:
+                    print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5 V4 floor)")
+                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
+                    continue
 
                 # Safety checks
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
@@ -713,7 +705,7 @@ async def serve_bot():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "3.0", "ts": int(time.time())}
+    return {"status": "ok", "version": "4.0", "ts": int(time.time())}
 
 
 @app.post("/predict")
@@ -857,12 +849,14 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         db_sentiment = {'hours': len(db_news), 'avg_24h': avg_24h, 'trend': trend}
         slog(f"✓ Sentiment memory: {len(db_news)}h history, avg={avg_24h:+.2f}, trend={trend:+.3f}")
 
-    # ── MTF daily context ────────────────────────────────────────────────
-    slog("📅 Fetching daily trend context...")
-    daily_candles = await fetch_candles(req.asset, '1d', 32)
+    # ── MTF context: daily + 4h ───────────────────────────────────────────
+    slog("📅 Fetching multi-timeframe context (daily + 4h)...")
+    daily_candles, h4_candles = await asyncio.gather(
+        fetch_candles(req.asset, '1d', 32),
+        fetch_candles(req.asset, '4h', 100),
+    )
     mtf_data = {}
     if daily_candles and len(daily_candles) >= 20:
-        # Use closed candles only (drop last)
         dc = daily_candles[:-1]
         daily_ind = compute_indicators(dc)
         if daily_ind:
@@ -873,15 +867,25 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 'daily_bear': daily_ind['dist_e20'] < -1 and daily_ind['macd_hist'] < 0,
             }
             slog(f"✓ Daily: {'BULL' if mtf_data['daily_bull'] else 'BEAR' if mtf_data['daily_bear'] else 'NEUTRAL'}")
+    # 4h trend alignment — V4 addition for better signal filtering
+    if h4_candles and len(h4_candles) >= 60:
+        h4_ind = compute_indicators(h4_candles[:-1])
+        if h4_ind:
+            mtf_data['h4_macd_hist'] = h4_ind['macd_hist']
+            mtf_data['h4_dist_e20'] = h4_ind['dist_e20']
+            mtf_data['h4_bull'] = h4_ind['macd_hist'] > 0 and h4_ind['supertrend_bull']
+            mtf_data['h4_bear'] = h4_ind['macd_hist'] < 0 and not h4_ind['supertrend_bull']
+            h4_label = 'BULL' if mtf_data['h4_bull'] else 'BEAR' if mtf_data['h4_bear'] else 'NEUTRAL'
+            slog(f"✓ 4H: {h4_label} (MACD={h4_ind['macd_hist']:+.4f} ST={'bull' if h4_ind['supertrend_bull'] else 'bear'})")
 
     # ── ML Ensemble ──────────────────────────────────────────────────────
-    ml_result = {'confidence': 50, 'available': False}
-    model_artifact = _ml_cache.get(req.asset)
-    if model_artifact:
-        ml_result = predict_ensemble(model_artifact, ind)
-        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
+    # V4 fix: predict_ensemble loads from pkl.gz directly — call with actual ind
+    # Previously called as predict_ensemble(model_artifact, ind) which was backwards
+    ml_result = predict_ensemble(ind)
+    if ml_result.get('available'):
+        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)} n={ml_result.get('n_train', 0)}")
     else:
-        slog("⚠ ML ensemble: no trained model yet")
+        slog("⚠ ML ensemble: model not confident enough or not yet trained")
 
     # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
@@ -1076,6 +1080,16 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             decision['confidence'] = max(0, old_conf - 15)
             slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
 
+    # V4: 4H COUNTER-TREND PENALTY — trading against the 4h trend is a common loss source
+    if decision.get('decision') != 'NO_TRADE' and mtf_data:
+        h4_bull = mtf_data.get('h4_bull', False)
+        h4_bear = mtf_data.get('h4_bear', False)
+        if (h4_bear and decision.get('decision') == 'BUY') or \
+           (h4_bull and decision.get('decision') == 'SELL'):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 12)
+            slog(f"⚠ V4 4H counter-trend: {decision['decision']} vs 4h {'BEAR' if h4_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
+
     # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + very low confluence = NO_TRADE
     if decision.get('decision') != 'NO_TRADE':
         inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
@@ -1173,6 +1187,87 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         if entropy > 0.9 and decision.get('confidence', 0) > 55:
             slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
             decision['confidence'] = 55
+
+    # ── V4 NEW GATES ─────────────────────────────────────────────────────────
+
+    # GATE 16: PURE NOISE HARD BLOCK — entropy > 0.87 + Hurst 0.45-0.55 + conf < 65
+    # This is a random walk in pure noise — any trade is a coin flip minus fees
+    if decision.get('decision') != 'NO_TRADE':
+        entropy = ind.get('entropy_ratio', 0.5)
+        hurst = ind.get('hurst_exp', 0.5)
+        pure_noise = entropy > 0.87 and 0.44 <= hurst <= 0.56
+        if pure_noise and decision.get('confidence', 0) < 65:
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"V4 Pure noise: entropy={entropy:.3f} Hurst={hurst:.3f} — coin flip territory"
+            slog(f"🛑 V4 NOISE GATE: entropy={entropy:.3f} Hurst={hurst:.3f} conf={decision.get('confidence',0)}% < 65% — SKIP")
+
+    # GATE 17: LOW VOLUME PENALTY — below 20th percentile = -15% confidence
+    # Thin volume means price moves are unreliable and stop hunts are common
+    if decision.get('decision') != 'NO_TRADE':
+        vol_pct = ind.get('vol_percentile', 50)
+        if vol_pct < 20:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 15)
+            slog(f"⚠ V4 Low volume: {vol_pct:.0f}th percentile — confidence {old_conf}% → {decision['confidence']}%")
+        elif vol_pct < 30:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 8)
+            slog(f"⚠ V4 Thin volume: {vol_pct:.0f}th percentile — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 18: STRONG DOLLAR PENALTY — DXY > 110 caps BUY confidence for crypto
+    # A DXY above 110 is historically very bearish for crypto
+    if decision.get('decision') == 'BUY' and is_crypto:
+        macro_raw = macro_data or {}
+        dxy = macro_raw.get('dxy', 0) or macro_context.get('fred_data', {}).get('dxy_fred', 0) if isinstance(macro_context, dict) else 0
+        if not dxy and isinstance(macro_context, dict):
+            dxy = macro_context.get('fred_data', {}).get('dxy_fred', 0) or 0
+        if dxy > 115:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 20)
+            slog(f"⚠ V4 Extreme DXY gate: DXY={dxy:.1f} (>115) — crypto BUY confidence {old_conf}% → {decision['confidence']}%")
+        elif dxy > 110:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 12)
+            slog(f"⚠ V4 Strong DXY gate: DXY={dxy:.1f} (>110) — crypto BUY confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 19: RANGING + TRIPLE BEARISH VOLUME — in a ranging market with bad volume signals
+    # RANGING + CMF negative + OBV falling + no volume = very likely chop, skip it
+    if decision.get('decision') != 'NO_TRADE':
+        regime = ind.get('regime', 'NEUTRAL')
+        cmf = ind.get('cmf', 0)
+        obv_slope = ind.get('obv_slope', 0)
+        vol_pct = ind.get('vol_percentile', 50)
+        if regime == 'RANGING' and vol_pct < 35:
+            # Count how many volume/flow signals contradict direction
+            dir_is_buy = decision['decision'] == 'BUY'
+            contradictions = sum([
+                cmf < -0.08 if dir_is_buy else cmf > 0.08,
+                obv_slope < 0 if dir_is_buy else obv_slope > 0,
+                ind.get('mfi', 50) < 40 if dir_is_buy else ind.get('mfi', 50) > 60,
+            ])
+            if contradictions >= 2 and decision.get('confidence', 0) < 62:
+                decision['_original_decision'] = decision.get('decision')
+                decision['decision'] = 'NO_TRADE'
+                gate_reason = f"V4 Ranging+volume conflict: {contradictions}/3 flow signals contradict {decision.get('_original_decision')}"
+                slog(f"🛑 V4 RANGING FLOW GATE: regime=RANGING, {contradictions}/3 flow contradict, vol={vol_pct:.0f}% — SKIP")
+
+    # GATE 20: TRIPLE DOJI FILTER — doji in compression = indecision, require higher bar
+    # Compression + Doji = market is waiting for catalyst. Don't front-run it.
+    if decision.get('decision') != 'NO_TRADE':
+        if ind.get('doji') and ind.get('compression') and decision.get('confidence', 0) < 60:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 10)
+            slog(f"⚠ V4 Doji+compression: indecision signal — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 21: V4 FINAL FLOOR — raised from 38% to 55%
+    # 38% means we trade when we lose money 62% of the time — not acceptable
+    v4_conf_floor = 55
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < v4_conf_floor:
+        decision['_original_decision'] = decision.get('decision')
+        decision['decision'] = 'NO_TRADE'
+        gate_reason = f"V4 confidence floor: {decision.get('confidence', 0)}% < {v4_conf_floor}% (requires real edge)"
+        slog(f"🛑 V4 FLOOR GATE: {decision.get('confidence', 0)}% < {v4_conf_floor}% — SKIP")
 
     # SMART MONEY INTEL GATE — boost or reduce based on institutional consensus
     if decision.get('decision') != 'NO_TRADE' and smi_data.get('score', 0) > 0:
@@ -1305,7 +1400,10 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 "bayes": round(bayes_conf, 1),
                 "ml": ml_result.get('score') if ml_result else None,
                 "cluster": cluster_data.get('confidence') if isinstance(cluster_data, dict) else None,
-                "weights": "AI 25% + Bayes 30% + ML 25% + Cluster 20%",
+                "weights": ("AI 15% + Bayes 20% + ML 45% + Cluster 20%" if (ml_conf is not None and cluster_conf is not None)
+                            else "AI 20% + Bayes 25% + ML 55%" if ml_conf is not None
+                            else "AI 35% + Bayes 35% + Cluster 30%" if cluster_conf is not None
+                            else "AI 55% + Bayes 45%"),
                 "final": quant_result.get('confidence'),
             },
             pqs=pqs,
