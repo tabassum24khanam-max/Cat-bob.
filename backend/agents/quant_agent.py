@@ -74,7 +74,8 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
 
 def build_quant_prompt(asset: str, ind: dict, sim: dict, horizon: int,
                         hist_stats: dict = None, pattern_mem: dict = None,
-                        cluster_data: dict = None, correlation_data: dict = None) -> str:
+                        cluster_data: dict = None, correlation_data: dict = None,
+                        bot_mode: bool = False) -> str:
     mc = sim if sim else {}
 
     # Cluster context
@@ -100,9 +101,32 @@ BTC: {correlation_data.get('btc_corr', 0):.2f} | SPY: {correlation_data.get('spy
             ll = correlation_data['lead_lag'][0]
             corr_ctx += f"Lead/lag: {ll['leader']} leads {ll['follower']} by {ll['lag_hours']}h (r={ll['correlation']:.2f})\n"
 
-    return f"""You are a quantitative trading analyst. Respond ONLY with valid JSON.
+    # V4: allow HOLD/NO_TRADE when market is pure noise — don't force bad trades
+    entropy = ind.get('entropy_ratio', 0.5)
+    hurst = ind.get('hurst_exp', 0.5)
+    pure_noise = entropy > 0.87 and 0.45 <= hurst <= 0.55
+    role_header = (
+        """You are a position-management trader running an autonomous bot. Your job is to protect capital first, grow it second.
+Each cycle you must evaluate: is there a real edge RIGHT NOW, or is the market too noisy to trade?
 
-ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon}h
+PRIMARY RULE: Capital preservation > profit chasing. A "no trade" when uncertain is always better than a coin-flip.
+TRADING RULE: Only output BUY or SELL when at least 3 of these 5 conditions are met:
+  1. CMF agrees with direction (CMF > 0.05 for BUY, CMF < -0.05 for SELL)
+  2. OBV slope agrees with direction
+  3. MACD histogram agrees
+  4. Price is on the correct side of VWAP
+  5. At least 2/4 EMAs align with direction
+
+If fewer than 3 conditions are met, output NO_TRADE.
+If entropy > 0.87 AND Hurst is between 0.45-0.55 (random walk), output NO_TRADE — pure noise.
+Respond ONLY with valid JSON."""
+        if bot_mode else
+        "You are a quantitative trading analyst. Respond ONLY with valid JSON. Only output NO_TRADE if indicators are genuinely contradictory."
+    )
+    horizon_label = "NOW (position-maintenance check)" if bot_mode else f"{horizon}h"
+    return f"""{role_header}
+
+ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon_label}
 
 MARKET REGIME: {ind['regime']} (HMM: TREND={ind['hmm_probs'].get('TRENDING',0):.0%} RANGE={ind['hmm_probs'].get('RANGING',0):.0%} VOL={ind['hmm_probs'].get('VOLATILE',0):.0%})
 KALMAN TREND: {ind['kalman_trend']:+.3f}% | Uncertainty: {ind['kalman_uncertainty']:.4f} {'⚠ HIGH' if ind['kalman_uncertainty'] > 0.1 else '✓ clean'}
@@ -145,9 +169,10 @@ Prob up: {mc.get('prob_up', 0.5)*100:.0f}%
 RULES:
 - prob_up + prob_down MUST sum to exactly 100.
 - Hurst > 0.55: use momentum signals. Hurst < 0.45: use RSI extremes.
-- High entropy (>0.6): require strong confirmation before trading.
-- Pick a direction (BUY or SELL) based on the weight of evidence. Only output NO_TRADE if indicators are genuinely contradictory with no clear majority.
+- High entropy (>0.87) + Hurst 0.45-0.55: output NO_TRADE — market is pure noise.
+- {"V4 BOT MODE: Prioritize capital protection. Only trade when you have 3/5 confluence. NO_TRADE is valid and often correct." if bot_mode else "Pick BUY or SELL based on weight of evidence. NO_TRADE if genuinely contradictory."}
 - Candle patterns add confirmation only — never trade on pattern alone.
+- DOJI alone = NO signal. Compression alone = wait for breakout, NO_TRADE.
 
 DEVIL'S ADVOCATE: Before finalizing, consider the strongest argument AGAINST your chosen direction. State this counter-argument in your reasoning. For example, if you lean BUY, what is the single most compelling reason it could drop? Include this in "counter_argument".
 

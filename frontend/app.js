@@ -6,8 +6,7 @@ let backendUrl = (_stored && !_stored.includes('localhost')) ? _stored : window.
 let apiKey  = localStorage.getItem('um_key')   || '';
 let dsKey   = localStorage.getItem('um_dskey') || '';
 let fredKey = localStorage.getItem('um_fred')  || '';
-let redditId = localStorage.getItem('um_reddit_id') || '';
-let redditSecret = localStorage.getItem('um_reddit_secret') || '';
+let finnhubKey = localStorage.getItem('um_finnhub') || '';
 let alpacaKey = localStorage.getItem('um_alpaca_key') || '';
 let alpacaSecret = localStorage.getItem('um_alpaca_secret') || '';
 let telegramToken = localStorage.getItem('um_tg_token') || '';
@@ -20,6 +19,9 @@ let lastResult = null;
 let _predicting = false;
 let _alertsCache = [];
 let useR1 = localStorage.getItem('um_use_r1') !== 'false'; // default ON
+let _atInterval = 30;
+let _atSelectedAssets = JSON.parse(localStorage.getItem('um_at_assets') || '["BTC","ETH","SOL"]');
+let _atRunning = false;
 
 const ASSETS = {
   crypto: ['BTC','ETH','SOL','BNB','XRP','DOGE'],
@@ -46,6 +48,8 @@ window.addEventListener('DOMContentLoaded', () => {
   retroactivelyScoreHistory();
   fetchAlerts();
   pushSettingsToBackend();
+  initAutotrader();
+  setInterval(refreshAutotraderStatus, 15000);
 });
 
 function toggleR1() {
@@ -417,6 +421,34 @@ function displayResult(r) {
     set('rp-calibration', `Raw:${c.raw}% → Cal:${c.calibrated}% (${c.reliability}, ${c.n_samples} samples)`);
   } else { set('rp-calibration', '—'); }
 
+  // Smart Money Intel
+  const smi = r.smart_money_intel || {};
+  if (smi.score > 0) {
+    const dirColor = smi.direction === 'bullish' ? '#00e676' : smi.direction === 'bearish' ? '#ff1744' : smi.direction === 'split' ? '#ffd600' : '#5a7a9a';
+    const confirmed = smi.confirmed ? ' ✓CONFIRMED' : '';
+    set('rp-smi', `Score: ${smi.score}/100 `);
+    const smiEl = document.getElementById('rp-smi');
+    if (smiEl) smiEl.innerHTML = `Score: <b style="color:${dirColor}">${smi.score}/100 ${smi.direction.toUpperCase()}${confirmed}</b> | Data: ${smi.data_completeness}%${smi.top_signal ? ' | ' + smi.top_signal : ''}`;
+    const detailEl = document.getElementById('rp-smi-detail');
+    if (detailEl) {
+      const comps = smi.components || {};
+      const parts = Object.entries(comps).map(([k,v]) => {
+        const dc = v.direction === 'bullish' ? '#00e676' : v.direction === 'bearish' ? '#ff1744' : '#5a7a9a';
+        return `<span style="color:${dc}">${k}: ${v.score}pts</span>`;
+      });
+      let html = parts.join(' · ');
+      if (smi.high_quality_flags && smi.high_quality_flags.length) {
+        html += '<br>★ ' + smi.high_quality_flags.join(' | ★ ');
+      }
+      if (smi.macro_context) html += `<br>Macro: ${smi.macro_context.substring(0, 200)}`;
+      detailEl.innerHTML = html;
+    }
+  } else {
+    set('rp-smi', '—');
+    const detailEl = document.getElementById('rp-smi-detail');
+    if (detailEl) detailEl.innerHTML = '';
+  }
+
   const sim = r.similarity||{};
   const parts = [];
   if (r.insight) parts.push(`<strong>R1 Reasoning:</strong> ${r.insight}`);
@@ -551,6 +583,34 @@ function scorePrediction(e) {
 
 function openHistory() { renderHistory(); document.getElementById('history-panel')?.classList.add('on'); }
 function closeHistory() { document.getElementById('history-panel')?.classList.remove('on'); }
+
+async function exportForensic() {
+  try {
+    const r = await fetch(`${backendUrl}/forensic/stats`);
+    const stats = await r.json();
+    const ok = confirm(
+      `Export forensic log?\n\n` +
+      `Events captured: ${stats.total_events}\n` +
+      `By type: ${JSON.stringify(stats.by_type)}\n\n` +
+      `Downloads a complete decision-by-decision log: every indicator value, ` +
+      `news headline, AI prompt, gate trigger, trade, and outcome.\n\n` +
+      `Paste into Claude or GPT and ask: "why did the bot lose money?"`
+    );
+    if (!ok) return;
+    const a = document.createElement('a');
+    a.href = `${backendUrl}/forensic/export`;
+    a.download = `ultramax_forensic_${Date.now()}.txt`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => {
+      if (confirm('Also download JSON version (for programmatic analysis)?')) {
+        const a2 = document.createElement('a');
+        a2.href = `${backendUrl}/forensic/export.json`;
+        a2.download = `ultramax_forensic_${Date.now()}.json`;
+        document.body.appendChild(a2); a2.click(); document.body.removeChild(a2);
+      }
+    }, 500);
+  } catch(e) { alert('Export failed: ' + e.message); }
+}
 
 function renderHistory() {
   const history = getHistory();
@@ -834,7 +894,7 @@ function openModal() {
   document.getElementById('kmodal')?.classList.add('on');
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
   set('k-backend',backendUrl); set('k-openai',apiKey); set('k-deepseek',dsKey);
-  set('k-fred',fredKey); set('k-reddit-id',redditId); set('k-reddit-secret',redditSecret);
+  set('k-fred',fredKey); set('k-finnhub',finnhubKey);
   set('k-alpaca-key',alpacaKey); set('k-alpaca-secret',alpacaSecret);
   set('k-tg-token',telegramToken); set('k-tg-chat',telegramChat);
 }
@@ -845,8 +905,7 @@ function saveKeys() {
   const ds=document.getElementById('k-deepseek')?.value.trim();
   backendUrl=(bk && !bk.includes('localhost')) ? bk : window.location.origin; apiKey=oai||''; dsKey=ds||'';
   fredKey=document.getElementById('k-fred')?.value.trim()||'';
-  redditId=document.getElementById('k-reddit-id')?.value.trim()||'';
-  redditSecret=document.getElementById('k-reddit-secret')?.value.trim()||'';
+  finnhubKey=document.getElementById('k-finnhub')?.value.trim()||'';
   alpacaKey=document.getElementById('k-alpaca-key')?.value.trim()||'';
   alpacaSecret=document.getElementById('k-alpaca-secret')?.value.trim()||'';
   telegramToken=document.getElementById('k-tg-token')?.value.trim()||'';
@@ -855,8 +914,7 @@ function saveKeys() {
   localStorage.setItem('um_key',apiKey);
   localStorage.setItem('um_dskey',dsKey);
   localStorage.setItem('um_fred',fredKey);
-  localStorage.setItem('um_reddit_id',redditId);
-  localStorage.setItem('um_reddit_secret',redditSecret);
+  localStorage.setItem('um_finnhub',finnhubKey);
   localStorage.setItem('um_alpaca_key',alpacaKey);
   localStorage.setItem('um_alpaca_secret',alpacaSecret);
   localStorage.setItem('um_tg_token',telegramToken);
@@ -1118,4 +1176,203 @@ function showToast(msg) {
   t.textContent=msg; t.classList.add('on');
   clearTimeout(_toastTimer);
   _toastTimer=setTimeout(()=>t.classList.remove('on'),3500);
+}
+
+
+// ─── AUTONOMOUS TRADER ─────────────────────────────────────────────────────
+
+const ALL_TRADE_ASSETS = ['BTC','ETH','SOL','BNB','XRP','DOGE','AAPL','TSLA','NVDA','MSFT','GOOGL','SPY','GC=F','CL=F','SI=F','XOM','LMT','RTX'];
+
+function initAutotrader() {
+  renderATAssets();
+  refreshAutotraderStatus();
+}
+
+function renderATAssets() {
+  const el = document.getElementById('at-asset-picks');
+  if (!el) return;
+  el.innerHTML = ALL_TRADE_ASSETS.map(a => {
+    const selected = _atSelectedAssets.includes(a);
+    return `<button class="asset-btn ${selected?'active':''}" onclick="toggleATAsset('${a}')" style="font-size:7px;padding:3px 6px">${a}</button>`;
+  }).join('');
+}
+
+function toggleATAsset(a) {
+  if (_atSelectedAssets.includes(a)) {
+    _atSelectedAssets = _atSelectedAssets.filter(x => x !== a);
+  } else {
+    _atSelectedAssets.push(a);
+  }
+  localStorage.setItem('um_at_assets', JSON.stringify(_atSelectedAssets));
+  renderATAssets();
+}
+
+function setATInterval(mins, btn) {
+  _atInterval = mins;
+  document.querySelectorAll('.at-interval').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+function openAutotrader() {
+  document.getElementById('autotrader-panel')?.classList.add('on');
+  refreshAutotraderStatus();
+}
+function closeAutotrader() {
+  document.getElementById('autotrader-panel')?.classList.remove('on');
+}
+
+async function toggleAutotrader() {
+  const btn = document.getElementById('at-start-btn');
+  if (_atRunning) {
+    // Stop
+    try {
+      btn.disabled = true;
+      btn.textContent = 'STOPPING...';
+      const r = await fetch(`${backendUrl}/autotrader/stop`, {method:'POST'});
+      const d = await r.json();
+      if (d.ok) {
+        _atRunning = false;
+        showToast('Bot stopped');
+      }
+    } catch(e) { showToast('Error: '+e.message); }
+    btn.disabled = false;
+  } else {
+    // Start
+    if (!_atSelectedAssets.length) { showToast('Select at least 1 asset'); return; }
+    try {
+      btn.disabled = true;
+      btn.textContent = 'STARTING...';
+      const r = await fetch(`${backendUrl}/autotrader/start`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        _atRunning = true;
+        showToast(`Bot started on ${d.assets.join(', ')} every ${_atInterval}min`);
+      } else {
+        showToast(d.error || 'Failed to start');
+      }
+    } catch(e) { showToast('Error: '+e.message); }
+    btn.disabled = false;
+  }
+  refreshAutotraderStatus();
+}
+
+async function cashoutAutotrader() {
+  if (!confirm('Close ALL positions and stop the bot?')) return;
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/cashout`, {method:'POST'});
+    const d = await r.json();
+    _atRunning = false;
+    let msg = `Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}. ${d.recommendation}`;
+    showToast(msg);
+    refreshAutotraderStatus();
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
+async function refreshAutotraderStatus() {
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/status`, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    _atRunning = d.enabled;
+
+    // Status badge
+    const badge = document.getElementById('at-status-badge');
+    if (badge) {
+      if (d.status === 'running' || d.status === 'sleeping') {
+        badge.textContent = d.status === 'running' ? 'TRADING...' : `SLEEPING (${d.seconds_until_next}s)`;
+        badge.style.background = 'rgba(0,230,118,.15)';
+        badge.style.color = 'var(--green)';
+      } else {
+        badge.textContent = 'STOPPED';
+        badge.style.background = 'var(--dim)';
+        badge.style.color = 'var(--muted)';
+      }
+    }
+
+    // Button
+    const btn = document.getElementById('at-start-btn');
+    if (btn) {
+      btn.textContent = _atRunning ? 'STOP BOT' : 'START BOT';
+      btn.style.background = _atRunning ? 'var(--red)' : 'var(--cyan)';
+    }
+
+    // BOT header button glow
+    const botBtn = document.getElementById('bot-btn');
+    if (botBtn) {
+      if (_atRunning) {
+        botBtn.style.color = 'var(--green)';
+        botBtn.style.borderColor = 'var(--green)';
+        botBtn.textContent = 'BOT ON';
+      } else {
+        botBtn.style.color = 'var(--yellow)';
+        botBtn.style.borderColor = 'var(--yellow)';
+        botBtn.textContent = 'BOT';
+      }
+    }
+
+    // Stats
+    const hb = d.heartbeat || {};
+    const set = (id,v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('at-equity', '$' + (hb.equity||10000).toLocaleString('en',{maximumFractionDigits:2}));
+    const pnlEl = document.getElementById('at-pnl');
+    if (pnlEl) {
+      const pnl = hb.daily_pnl || 0;
+      pnlEl.textContent = '$' + pnl.toFixed(2);
+      pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    }
+    set('at-positions', hb.positions || 0);
+    const wrEl = document.getElementById('at-winrate');
+    if (wrEl) {
+      wrEl.textContent = d.win_rate !== undefined ? d.win_rate + '%' : '—';
+      wrEl.style.color = (d.win_rate||0) >= 50 ? 'var(--green)' : 'var(--red)';
+    }
+
+    // Recommendation
+    set('at-recommendation', d.recommendation || '');
+
+    // Open positions
+    const posEl = document.getElementById('at-open-positions');
+    if (posEl) {
+      const positions = d.open_positions || [];
+      if (positions.length === 0) {
+        posEl.innerHTML = '<div style="color:var(--muted)">No open positions</div>';
+      } else {
+        posEl.innerHTML = positions.map(p => {
+          const pnl = p.direction==='BUY' ? ((p.highest_price||p.entry_price)-p.entry_price)/p.entry_price*100 : (p.entry_price-(p.lowest_price||p.entry_price))/p.entry_price*100;
+          const color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const age = Math.round((Date.now()/1000 - p.entry_time) / 60);
+          return `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">
+            <span><b style="color:${p.direction==='BUY'?'var(--green)':'var(--red)'}">${p.direction}</b> ${p.asset} @ $${p.entry_price.toFixed(2)}</span>
+            <span style="color:${color}">${pnl>=0?'+':''}${pnl.toFixed(2)}% (${age}min)</span>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // Trade log
+    const logEl = document.getElementById('at-trade-log');
+    if (logEl) {
+      const trades = d.recent_trades || [];
+      if (trades.length === 0) {
+        logEl.innerHTML = '<div style="color:var(--muted)">No trades yet</div>';
+      } else {
+        logEl.innerHTML = trades.slice().reverse().map(t => {
+          const color = t.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const time = new Date(t.ts*1000).toLocaleTimeString();
+          return `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid rgba(0,229,255,.06)">
+            <span>${time} ${t.direction} ${t.asset}</span>
+            <span>$${t.entry.toFixed(2)} → $${t.exit.toFixed(2)}</span>
+            <span style="color:${color}">$${t.pnl>=0?'+':''}${t.pnl.toFixed(2)} (${t.reason})</span>
+          </div>`;
+        }).join('');
+      }
+    }
+
+  } catch(e) {
+    // Backend not reachable — ignore
+  }
 }

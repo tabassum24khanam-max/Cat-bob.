@@ -11,12 +11,12 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 from config import ALPACA_KEY, ALPACA_SECRET, BINANCE_SYMBOLS, get_asset_type
 
-# D10: Safety Controls
-MAX_POSITIONS = 5
-MAX_DAILY_LOSS_PCT = 3.0
+# D10: Safety Controls — V4: raised floors, quality-first philosophy
+MAX_POSITIONS = 10
+MAX_DAILY_LOSS_PCT = 5.0
 MAX_POSITION_SIZE_PCT = 20.0
-MIN_CONFIDENCE = 55
-MIN_PQS = 5
+MIN_CONFIDENCE = 55   # V4: was 40 — need real edge, not coin-flip
+MIN_PQS = 5           # V4: was 3 — require strong signal confluence
 
 @dataclass
 class Position:
@@ -265,7 +265,8 @@ class TradingEngine:
                 check = self.check_exit(pos, current_price)
                 if check['action'] == 'exit':
                     close_result = await self.close_position(pos.id, current_price, check['reason'])
-                    actions.append({**close_result, 'asset': pos.asset, 'reason': check['reason']})
+                    actions.append({**close_result, 'asset': pos.asset, 'reason': check['reason'],
+                                    'position': {'direction': pos.direction, 'entry_price': pos.entry_price, 'exit_price': current_price}})
             except Exception:
                 continue
         return actions

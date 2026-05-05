@@ -5,7 +5,10 @@ Each source degrades gracefully when API keys are missing
 import asyncio
 import time
 import httpx
-from config import REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, is_configured, ASSET_NAMES
+from config import is_configured, ASSET_NAMES
+import os
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
 from database import save_sentiment_snapshot
 
 # Asset-to-subreddit mapping
