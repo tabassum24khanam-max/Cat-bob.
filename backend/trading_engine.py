@@ -36,6 +36,7 @@ class Position:
     exit_price: float = 0.0
     exit_time: int = 0
     paper: bool = True
+    entry_confidence: int = 0
 
 class TradingEngine:
     def __init__(self):
@@ -117,29 +118,39 @@ class TradingEngine:
         self.daily_trades += 1
         return {'ok': True, 'position': asdict(pos)}
 
-    # D7: Stay/Exit decision
+    # D7: Stay/Exit decision — V4: smarter trailing with break-even protection
     def check_exit(self, pos: Position, current_price: float) -> dict:
         """Decide whether to stay or exit a position."""
         if pos.direction == 'BUY':
             pnl_pct = (current_price - pos.entry_price) / pos.entry_price * 100
             pos.highest_price = max(pos.highest_price, current_price)
-            # D6: Trailing stop
             trailing_stop = pos.highest_price * (1 - pos.trailing_stop_pct / 100)
+
+            # V4: Break-even stop — once 1%+ in profit, move SL to entry
+            if pnl_pct > 1.0 and pos.stop_loss < pos.entry_price:
+                pos.stop_loss = pos.entry_price
+
             if current_price <= pos.stop_loss:
                 return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
             if current_price >= pos.take_profit:
                 return {'action': 'exit', 'reason': 'take_profit', 'pnl_pct': pnl_pct}
-            if current_price <= trailing_stop and pos.highest_price > pos.entry_price * 1.005:
+            # V4: trailing activates at 1.5% profit (was 0.5%), giving trades room
+            if current_price <= trailing_stop and pos.highest_price > pos.entry_price * 1.015:
                 return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
         else:  # SELL
             pnl_pct = (pos.entry_price - current_price) / pos.entry_price * 100
             pos.lowest_price = min(pos.lowest_price, current_price)
             trailing_stop = pos.lowest_price * (1 + pos.trailing_stop_pct / 100)
+
+            # V4: Break-even stop for SELL
+            if pnl_pct > 1.0 and pos.stop_loss > pos.entry_price:
+                pos.stop_loss = pos.entry_price
+
             if current_price >= pos.stop_loss:
                 return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
             if current_price <= pos.take_profit:
                 return {'action': 'exit', 'reason': 'take_profit', 'pnl_pct': pnl_pct}
-            if current_price >= trailing_stop and pos.lowest_price < pos.entry_price * 0.995:
+            if current_price >= trailing_stop and pos.lowest_price < pos.entry_price * 0.985:
                 return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
 
         return {'action': 'hold', 'pnl_pct': pnl_pct}

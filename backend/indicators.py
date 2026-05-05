@@ -339,11 +339,8 @@ def monte_carlo(cur_price: float, atr: float, horizon_h: int, is_crypto: bool = 
     bear   = finals[int(n_sims * 0.2)]
     prob_up = sum(1 for f in finals if f > cur_price) / n_sims
 
-    # V4: ATR-dynamic range — use actual recent volatility instead of fixed cap
-    # ATR as % of price gives the real expected move per bar
     atr_pct = (atr / cur_price * 100) if cur_price > 0 else 1.0
     if horizon_h <= 1:
-        # For 1h: use max(1× ATR, 0.4%) so simulation reflects actual volatility
         max_pct = max(0.4, atr_pct * 1.5) if is_crypto else max(0.2, atr_pct * 1.0)
     elif horizon_h <= 2:
         max_pct = max(0.8, atr_pct * 2.0) if is_crypto else max(0.4, atr_pct * 1.5)

@@ -1,4 +1,4 @@
-// ULTRAMAX Frontend v3.0
+// ULTRAMAX Frontend v4.0
 
 // Auto-detect backend URL — always same origin since FastAPI serves both
 let _stored = localStorage.getItem('um_backend') || '';

@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Optional, Dict
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -31,7 +31,7 @@ from macro_engine import get_macro_context
 from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
-from telegram_bot import send_prediction, send_scanner_summary, send_message
+from telegram_bot import send_prediction, send_scanner_summary
 from trading_engine import get_engine as get_trading_engine
 from portfolio import scan_portfolio
 from calibration import calibrate_confidence
@@ -42,8 +42,21 @@ from orderbook import get_orderbook_imbalance
 from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
-from smart_money_intel import get_smart_money_score, refresh_all_smart_money, get_source_leaderboard
 import forensic_log
+# V5: New intelligence modules
+from funding_oi import get_funding_oi_combined
+from liquidations import get_liquidation_intel
+from volume_profile import compute_volume_profile, volume_profile_signal
+from order_flow import get_order_flow
+from walkforward import get_walkforward_tester
+from feature_pruner import get_feature_pruner
+from model_retrainer import get_retrainer
+from regime_strategies import apply_regime_adjustments, regime_confidence_adjustment, get_regime_from_hmm
+from pre_event import get_pre_event_adjustments, should_skip_trade
+from disagreement_signal import compute_disagreement, apply_disagreement
+from rl_lite import get_rl_lite
+from tick_engine import get_tick_engine, start_tick_stream
+from execution_optimizer import get_execution_optimizer
 
 app = FastAPI(title="ULTRAMAX Backend", version="4.0")
 
@@ -63,15 +76,16 @@ _autotrader = {
     'trades_opened': 0,
     'trades_closed': 0,
     'status': 'stopped',
-    'cycle_log': [],  # [{ts, cycle, summaries: [{asset, action, detail}]}]
-    'trade_size': 0,  # 0 = auto (Kelly), >0 = fixed USD per trade
-    'starting_equity': 10000,  # paper trading starting balance
+    'cycle_log': [],
+    'trade_size': 0,
+    'starting_equity': 10000,
+    'force_trade': True,
+    'force_size_scale': 0.5,
 }
 
 # ─── Learning Memory ────────────────────────────────────────────────────────
-# Every closed trade gets logged as a "lesson". Before each cycle, the bot
-# reviews its last few trades per asset to avoid repeating mistakes.
-_trade_lessons: Dict[str, list] = {}  # {asset: [{ts, direction, entry, exit, pnl, reason, was_correct, lesson}]}
+from typing import Dict
+_trade_lessons: Dict[str, list] = {}
 
 def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
                    pnl: float, reason: str):
@@ -82,7 +96,7 @@ def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
     if was_correct:
         lesson = f"{direction} was correct ({pnl_pct:+.2f}%). Closed via {reason}."
     else:
-        lesson = f"{direction} was WRONG ({pnl_pct:+.2f}%). Should have gone {'SELL' if direction == 'BUY' else 'BUY'}. Lost ${abs(pnl):.2f}."
+        lesson = f"{direction} was WRONG ({pnl_pct:+.2f}%). Lost ${abs(pnl):.2f}."
     _trade_lessons[asset].append({
         'ts': int(time.time()),
         'direction': direction,
@@ -96,23 +110,19 @@ def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
     })
     _trade_lessons[asset] = _trade_lessons[asset][-20:]
 
-def get_lessons_context(asset: str) -> str:
-    lessons = _trade_lessons.get(asset, [])
-    if not lessons:
-        return ""
-    recent = lessons[-5:]
-    wins = sum(1 for l in lessons if l['was_correct'])
-    total = len(lessons)
-    lines = [f"BOT LEARNING MEMORY ({wins}/{total} correct):"]
-    for l in recent:
-        lines.append(f"  [{l['direction']}] entry ${l['entry']:.2f} → exit ${l['exit']:.2f} | {l['pnl_pct']:+.2f}% | {l['lesson']}")
-    if total >= 3:
-        wrong = [l for l in lessons if not l['was_correct']]
-        if len(wrong) >= 2:
-            last_wrong_dirs = [l['direction'] for l in wrong[-3:]]
-            if all(d == last_wrong_dirs[0] for d in last_wrong_dirs):
-                lines.append(f"  ⚠ PATTERN: Last {len(last_wrong_dirs)} losing trades were all {last_wrong_dirs[0]} — consider bias toward {('SELL' if last_wrong_dirs[0] == 'BUY' else 'BUY')}")
-    return "\n".join(lines)
+    # V5: RL-Lite — update trust scores from trade outcome
+    try:
+        rl = get_rl_lite()
+        trade_signals = {
+            'funding_oi': direction == 'BUY',
+            'order_flow': direction == 'BUY',
+            'volume_profile': direction == 'BUY',
+            'tick_structure': direction == 'BUY',
+            'model_disagreement': False,
+        }
+        rl.record_outcome(trade_signals, was_correct, pnl_pct)
+    except Exception:
+        pass
 
 app.add_middleware(
     CORSMiddleware,
@@ -137,24 +147,14 @@ async def startup():
     print(f"  Database: {DB_PATH}")
     print(f"  Worker: {WORKER_URL}")
     asyncio.create_task(warm_ml_models())
+    # V5: Start tick stream for crypto assets
+    asyncio.create_task(start_tick_stream(['BTC', 'ETH', 'SOL']))
+    # V5: Schedule periodic model retraining check
+    asyncio.create_task(_periodic_retrain_check())
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
     asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
-    asyncio.create_task(_smart_money_background_refresh())
-
-
-async def _smart_money_background_refresh():
-    """Refresh Smart Money Intelligence data every 6 hours for all assets."""
-    await asyncio.sleep(60)
-    while True:
-        try:
-            print("Smart Money Intel: background refresh starting...")
-            await refresh_all_smart_money(ALL_ASSETS)
-            print("Smart Money Intel: refresh complete")
-        except Exception as e:
-            print(f"Smart Money Intel refresh error: {e}")
-        await asyncio.sleep(6 * 3600)
 
 
 # ─── Models ─────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ class PredictRequest(BaseModel):
     ds_key: Optional[str] = None
     worker_url: Optional[str] = None
     use_r1: Optional[bool] = True
-    bot_mode: Optional[bool] = False  # True = "maintain position" framing, not "predict future"
+    bot_mode: Optional[bool] = False
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -395,16 +395,15 @@ _gate_stats = {'trades': 0, 'wins': 0}
 
 
 def get_adaptive_floor():
-    """V4: Confidence floor — starts at 55, adapts only when track record is proven.
-    Below this confidence = not enough edge = certain loss over time."""
+    """V4: Confidence floor adapts but never below 50% — no coin-flip trades."""
     if _gate_stats['trades'] < 20:
-        return 55  # V4: was 38 — need real edge to trade
+        return 55
     win_rate = _gate_stats['wins'] / _gate_stats['trades']
     if win_rate > 0.65:
-        return 52  # Proven good — can take slightly lower conf trades
+        return 50
     if win_rate > 0.55:
-        return 55
-    return 60  # Below 55% win rate = raise the bar higher
+        return 52
+    return 58
 
 
 async def _continuous_scanner():
@@ -485,14 +484,31 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # V4: RESPECT NO_TRADE — never force a direction.
-                # A coin-flip trade minus fees is a guaranteed loss.
-                # The AI correctly identified insufficient edge — honour it.
+                # V5: FORCE TRADE MODE — machine must always be in the market
+                # If AI says NO_TRADE but force_trade is on, derive direction from momentum
                 if direction == 'NO_TRADE':
-                    gate_r = result.get('gate_reason', 'no edge')
-                    print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
-                    cycle_summary.append(f"{asset_name}: SKIP (no edge)")
-                    continue
+                    if _autotrader.get('force_trade'):
+                        ind = result.get('ind', {})
+                        rsi = ind.get('rsi14', 50)
+                        macd_h = ind.get('macd_hist', 0)
+                        ema_diff = ind.get('ema_diff', 0)
+                        trend_slope = ind.get('trend_slope', 0)
+                        momentum_score = ind.get('momentum_score', 0)
+                        score_buy = sum([
+                            1 if rsi < 55 else -1,
+                            1 if macd_h > 0 else -1,
+                            1 if ema_diff > 0 else -1,
+                            1 if trend_slope > 0 else -1,
+                            1 if momentum_score > 0 else -1,
+                        ])
+                        direction = 'BUY' if score_buy > 0 else 'SELL'
+                        confidence = max(50, confidence) if confidence > 0 else 52
+                        print(f"  {asset_name}: FORCE {direction} (momentum score={score_buy}, AI said NO_TRADE)")
+                    else:
+                        gate_r = result.get('gate_reason', 'no edge')
+                        print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
+                        cycle_summary.append(f"{asset_name}: SKIP (no edge)")
+                        continue
 
                 # Check if already holding this asset
                 open_for_asset = [p for p in engine.positions.values()
@@ -500,79 +516,148 @@ async def _autotrader_loop():
 
                 if open_for_asset:
                     current_pos = open_for_asset[0]
+                    pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
+
                     # Same direction — STAY, do nothing
                     if current_pos.direction == direction:
-                        pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
                         print(f"  {asset_name}: HOLD {current_pos.direction} (P&L: {pnl_pct:+.2f}%)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
                         continue
-                    else:
-                        # FLIP — close old position, open opposite
-                        close_result = await engine.close_position(current_pos.id, price, 'flip')
-                        old_pnl = close_result.get('pnl', 0)
-                        _autotrader['trades_closed'] += 1
-                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
-                        forensic_log.log_trade_flip(
-                            asset_name, current_pos.direction, direction,
-                            current_pos.entry_price, price, old_pnl, 0,
-                            parent_id=cycle_id,
-                        )
-                        print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
-                        asyncio.create_task(send_message(
-                            f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
-                        ))
 
-                # V4: Hard quality gate before trading
-                if confidence < 55:
-                    print(f"  {asset_name}: SKIP (confidence {confidence}% < 55% V4 floor)")
-                    cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
-                    continue
-                if pqs_score < 5:
-                    print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5 V4 floor)")
-                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
-                    continue
+                    # ── V4 ANTI-WHIPSAW PROTECTION ──────────────────────────
+                    # This is the #1 source of money loss. The bot flips every
+                    # cycle, eating small losses each time. Let trades breathe.
+
+                    hold_seconds = int(time.time()) - current_pos.entry_time
+                    hold_minutes = hold_seconds / 60
+
+                    # Rule 1: MINIMUM HOLD TIME — never flip before 3 hours
+                    # Let the SL/TP do their job instead of panic-flipping
+                    min_hold_minutes = 180  # 3 hours
+                    if hold_minutes < min_hold_minutes:
+                        print(f"  {asset_name}: HOLD (anti-whipsaw: only {hold_minutes:.0f}min, need {min_hold_minutes}min)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon to flip)")
+                        continue
+
+                    # Rule 2: PROFITABLE POSITION PROTECTION
+                    # If we're in profit, require VERY strong signal to flip
+                    if pnl_pct > 0.3:
+                        if confidence < 72:
+                            print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.2f}%, won't flip for {confidence}% conf)")
+                            cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
+                            continue
+
+                    # Rule 3: CONFIDENCE DELTA — new signal must be significantly
+                    # stronger than the original entry confidence to justify flip
+                    original_conf = current_pos.entry_confidence or 55
+                    if confidence < original_conf + 15:
+                        print(f"  {asset_name}: HOLD (flip requires {original_conf+15}% conf, got {confidence}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip signal too weak)")
+                        continue
+
+                    # Rule 4: LOSING BADLY — only allow flip if losing more than 0.8%
+                    # Small losses should be held — they may recover
+                    if -0.8 < pnl_pct < 0:
+                        print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.2f}%, may recover)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
+                        continue
+
+                    # All anti-whipsaw checks passed — this is a justified flip
+                    print(f"  {asset_name}: FLIP APPROVED after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, new conf={confidence}%")
+                    close_result = await engine.close_position(current_pos.id, price, 'flip')
+                    old_pnl = close_result.get('pnl', 0)
+                    _autotrader['trades_closed'] += 1
+                    record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
+                    forensic_log.log_trade_flip(
+                        asset_name, current_pos.direction, direction,
+                        current_pos.entry_price, price, old_pnl, 0,
+                        parent_id=cycle_id,
+                    )
+                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
+                    asyncio.create_task(send_message(
+                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
+                    ))
+
+                # V5: Quality gate — if force_trade is off, respect floors
+                # If force_trade is on, reduce size instead of skipping
+                is_forced = False
+                if confidence < 55 or pqs_score < 5:
+                    if _autotrader.get('force_trade'):
+                        is_forced = True
+                        print(f"  {asset_name}: FORCE TRADE (conf={confidence}%, PQS={pqs_score}) — reduced size")
+                    else:
+                        if confidence < 55:
+                            print(f"  {asset_name}: SKIP (confidence {confidence}% < 55%)")
+                            cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
+                            continue
+                        if pqs_score < 5:
+                            print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5)")
+                            cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
+                            continue
 
                 # Safety checks
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
-                if open_count >= 10:
-                    cycle_summary.append(f"{asset_name}: max positions (10)")
+                if open_count >= 5:
+                    cycle_summary.append(f"{asset_name}: max positions (5)")
                     continue
-                if engine.daily_pnl <= -(engine._equity * 0.05):
-                    cycle_summary.append(f"{asset_name}: daily loss limit")
+                if engine.daily_pnl <= -(engine._equity * 0.03):
+                    cycle_summary.append(f"{asset_name}: daily loss limit (3%)")
                     continue
 
-                # Position size — use custom size if set, otherwise Kelly/default
+                # V4: ATR-based dynamic stop losses
+                atr = result.get('ind', {}).get('atr', 0)
+                if atr and price:
+                    atr_pct = (atr / price) * 100
+                    sl_pct = max(0.8, min(3.0, atr_pct * 2.0))
+                    tp_pct = max(1.5, min(6.0, atr_pct * 3.5))
+                    trail_pct = max(0.5, min(2.5, atr_pct * 1.5))
+                else:
+                    sl_pct = min(stop_loss, 2.0)
+                    tp_pct = min(stop_loss * 2, 4.0)
+                    trail_pct = 1.5
+
+                # V4: Confidence-scaled position sizing
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
-                    size = min(custom_size, engine._equity * 0.25)  # never more than 25% of equity
+                    base_size = min(custom_size, engine._equity * 0.20)
                 else:
+                    base_size = min(200, engine._equity * 0.05)
                     stats = _equity_tracker.get_stats()
-                    n_trades = stats.get('n_trades', 0)
-                    if n_trades >= 10:
+                    if stats.get('n_trades', 0) >= 10:
                         win_rate = 0.5
                         rated = await get_predictions(asset_name, 100)
                         wins = sum(1 for p in rated if p.get('feedback') == 'correct')
                         total_rated = sum(1 for p in rated if p.get('feedback') in ('correct', 'wrong'))
                         if total_rated >= 5:
                             win_rate = wins / total_rated
-                        size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
-                    else:
-                        size = min(200, engine._equity * 0.05)
+                        base_size = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
 
-                if size < 10:
-                    size = min(100, engine._equity * 0.05)
+                if base_size < 10:
+                    base_size = min(100, engine._equity * 0.05)
+
+                conf_scale = 0.5 + (confidence - 55) / 90.0
+                conf_scale = max(0.3, min(1.0, conf_scale))
+                # V5: Force-trade uses smaller size (risk protection when signal is weak)
+                if is_forced:
+                    conf_scale *= _autotrader.get('force_size_scale', 0.5)
+                size = round(base_size * conf_scale, 2)
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {conf_scale:.2f} {'FORCED' if is_forced else 'conf_scale'}) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
                     asset_name, direction, price, size,
-                    stop_loss_pct=min(stop_loss, 3.0),
-                    take_profit_pct=min(stop_loss * 2, 6.0),
-                    trailing=1.5,
+                    stop_loss_pct=sl_pct,
+                    take_profit_pct=tp_pct,
+                    trailing=trail_pct,
                 )
 
                 if trade_result.get('ok'):
                     _autotrader['trades_opened'] += 1
                     pos_data = trade_result.get('position', {})
+                    # Store entry confidence for anti-whipsaw Rule 3
+                    pos_id = pos_data.get('id', '')
+                    if pos_id and pos_id in engine.positions:
+                        engine.positions[pos_id].entry_confidence = confidence
                     forensic_log.log_trade_open(
                         asset_name, direction, price, size,
                         pos_data.get('stop_loss', 0), pos_data.get('take_profit', 0),
@@ -634,29 +719,36 @@ async def _autotrader_loop():
 
 
 async def _trading_position_monitor():
-    """Background task: check open trading positions every 30s."""
+    """Background task: check open trading positions every 30s + stale position timeout."""
     await asyncio.sleep(15)
     engine = get_trading_engine()
     while True:
         try:
-            if any(p.status == 'open' for p in engine.positions.values()):
+            open_positions = [p for p in engine.positions.values() if p.status == 'open']
+            if open_positions:
                 actions = await engine.check_all_positions(fetch_current_price)
                 for act in actions:
-                    a = act.get('asset', '?')
-                    pnl = act.get('pnl', 0)
-                    reason = act.get('reason', 'unknown')
-                    print(f"Trading: auto-closed {a} ({reason}) P&L: {pnl}")
-                    pos_data = act.get('position', {})
-                    if pos_data:
-                        record_lesson(a, pos_data.get('direction', '?'),
-                                      pos_data.get('entry_price', 0),
-                                      pos_data.get('exit_price', 0), pnl, reason)
-                        forensic_log.log_trade_close(
-                            a, pos_data.get('direction', '?'),
-                            pos_data.get('entry_price', 0),
-                            pos_data.get('exit_price', 0),
-                            pnl, reason, was_correct=(pnl > 0),
-                        )
+                    print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+
+                # V4: Stale position timeout — close positions stuck for 12+ hours
+                now = int(time.time())
+                for pos in open_positions:
+                    hold_hours = (now - pos.entry_time) / 3600
+                    if hold_hours >= 12:
+                        try:
+                            result = await fetch_current_price(pos.asset)
+                            cur_price = result.get('price', 0)
+                            if not cur_price:
+                                continue
+                            if pos.direction == 'BUY':
+                                pnl_pct = (cur_price - pos.entry_price) / pos.entry_price * 100
+                            else:
+                                pnl_pct = (pos.entry_price - cur_price) / pos.entry_price * 100
+                            if -0.3 < pnl_pct < 0.3:
+                                close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
+                                print(f"Trading: stale timeout {pos.asset} after {hold_hours:.1f}h (flat {pnl_pct:+.2f}%) P&L: {close_result.get('pnl')}")
+                        except Exception:
+                            continue
         except Exception as e:
             print(f"Position monitor error: {e}")
         await asyncio.sleep(30)
@@ -776,10 +868,11 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Found {len(similar)} similar periods — {wins/len(similar)*100:.0f}% were up")
 
     # ── Fetch parallel data ──────────────────────────────────────────────
-    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales in parallel...")
+    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales, funding, liquidations, order flow...")
     asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
     (macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data,
-     cluster_data, smc_data, orderbook_data, whale_data, options_data) = await asyncio.gather(
+     cluster_data, smc_data, orderbook_data, whale_data, options_data,
+     funding_oi_data, liquidation_data, order_flow_data) = await asyncio.gather(
         fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset),
         get_sentiment_snapshot(req.asset),
         get_macro_context(req.asset, req.horizon),
@@ -789,24 +882,27 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         get_orderbook_imbalance(req.asset),
         get_whale_activity(req.asset),
         get_options_sentiment(req.asset),
+        get_funding_oi_combined(req.asset),
+        get_liquidation_intel(req.asset, ind.get('cur', 0)),
+        get_order_flow(req.asset),
     )
     smart_money_data = analyze_smart_money(candles)
+    # V5: Volume Profile
+    vp_data = compute_volume_profile(candles)
+    vp_signal = volume_profile_signal(vp_data, ind.get('cur', 0)) if vp_data.get('available') else {}
+    # V5: Tick engine micro-structure
+    tick_data = get_tick_engine().get_micro_structure(req.asset)
 
-    # ── Smart Money Intelligence (politicians, insiders, funds, options, dark pool, top traders) ──
-    slog("🕵️ Fetching Smart Money Intelligence...")
-    try:
-        smi_data = await get_smart_money_score(req.asset)
-        smi_score = smi_data.get('score', 0)
-        smi_dir = smi_data.get('direction', 'neutral')
-        smi_top = smi_data.get('top_signal', '')
-        slog(f"✓ Smart Money Intel: score={smi_score}/100 direction={smi_dir} | {smi_top[:80]}")
-        if smi_data.get('high_quality_flags'):
-            for flag in smi_data['high_quality_flags'][:2]:
-                slog(f"  ★ {flag}")
-    except Exception as smi_err:
-        smi_data = {'score': 0, 'direction': 'neutral', 'data_completeness': 0, 'components': {}}
-        slog(f"⚠ Smart Money Intel: {str(smi_err)[:60]}")
-
+    if funding_oi_data.get('available'):
+        slog(f"✓ Funding/OI: bias={funding_oi_data.get('bias',0):+d} ({funding_oi_data.get('signal')})")
+    if liquidation_data.get('available'):
+        slog(f"✓ Liquidations: bias={liquidation_data.get('bias',0):+d} ({liquidation_data.get('signal')})")
+    if order_flow_data.get('available'):
+        slog(f"✓ Order flow: bias={order_flow_data.get('bias',0):+d} ({order_flow_data.get('signal')})")
+    if vp_data.get('available'):
+        slog(f"✓ Volume Profile: VPOC={vp_data.get('vpoc',0):.2f} VAH={vp_data.get('vah',0):.2f} VAL={vp_data.get('val',0):.2f}")
+    if tick_data.get('available'):
+        slog(f"✓ Tick engine: CVD={tick_data.get('cvd_pct',0):+.1f}% ({tick_data.get('signal')})")
     if sentiment_data.get('available'):
         slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
     if macro_context.get('warnings'):
@@ -849,11 +945,11 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         db_sentiment = {'hours': len(db_news), 'avg_24h': avg_24h, 'trend': trend}
         slog(f"✓ Sentiment memory: {len(db_news)}h history, avg={avg_24h:+.2f}, trend={trend:+.3f}")
 
-    # ── MTF context: daily + 4h ───────────────────────────────────────────
-    slog("📅 Fetching multi-timeframe context (daily + 4h)...")
+    # ── MTF: 4H + Daily context ─────────────────────────────────────────
+    slog("📅 Fetching MTF trend context (4H + Daily)...")
     daily_candles, h4_candles = await asyncio.gather(
         fetch_candles(req.asset, '1d', 32),
-        fetch_candles(req.asset, '4h', 100),
+        fetch_candles(req.asset, '4h', 60),
     )
     mtf_data = {}
     if daily_candles and len(daily_candles) >= 20:
@@ -867,25 +963,25 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                 'daily_bear': daily_ind['dist_e20'] < -1 and daily_ind['macd_hist'] < 0,
             }
             slog(f"✓ Daily: {'BULL' if mtf_data['daily_bull'] else 'BEAR' if mtf_data['daily_bear'] else 'NEUTRAL'}")
-    # 4h trend alignment — V4 addition for better signal filtering
-    if h4_candles and len(h4_candles) >= 60:
-        h4_ind = compute_indicators(h4_candles[:-1])
+    if h4_candles and len(h4_candles) >= 20:
+        h4c = h4_candles[:-1]
+        h4_ind = compute_indicators(h4c)
         if h4_ind:
             mtf_data['h4_macd_hist'] = h4_ind['macd_hist']
             mtf_data['h4_dist_e20'] = h4_ind['dist_e20']
-            mtf_data['h4_bull'] = h4_ind['macd_hist'] > 0 and h4_ind['supertrend_bull']
-            mtf_data['h4_bear'] = h4_ind['macd_hist'] < 0 and not h4_ind['supertrend_bull']
-            h4_label = 'BULL' if mtf_data['h4_bull'] else 'BEAR' if mtf_data['h4_bear'] else 'NEUTRAL'
-            slog(f"✓ 4H: {h4_label} (MACD={h4_ind['macd_hist']:+.4f} ST={'bull' if h4_ind['supertrend_bull'] else 'bear'})")
+            mtf_data['h4_bull'] = h4_ind['dist_e20'] > 0.5 and h4_ind['macd_hist'] > 0
+            mtf_data['h4_bear'] = h4_ind['dist_e20'] < -0.5 and h4_ind['macd_hist'] < 0
+            mtf_data['h4_rsi'] = h4_ind['rsi14']
+            slog(f"✓ 4H: {'BULL' if mtf_data['h4_bull'] else 'BEAR' if mtf_data['h4_bear'] else 'NEUTRAL'} RSI={h4_ind['rsi14']:.1f}")
 
     # ── ML Ensemble ──────────────────────────────────────────────────────
-    # V4 fix: predict_ensemble loads from pkl.gz directly — call with actual ind
-    # Previously called as predict_ensemble(model_artifact, ind) which was backwards
-    ml_result = predict_ensemble(ind)
-    if ml_result.get('available'):
-        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)} n={ml_result.get('n_train', 0)}")
+    ml_result = {'confidence': 50, 'available': False}
+    model_artifact = _ml_cache.get(req.asset)
+    if model_artifact:
+        ml_result = predict_ensemble(ind)
+        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
     else:
-        slog("⚠ ML ensemble: model not confident enough or not yet trained")
+        slog("⚠ ML ensemble: no trained model yet")
 
     # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
@@ -893,9 +989,6 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
                                        cluster_data=cluster_data, correlation_data=correlation_data,
                                        bot_mode=getattr(req, 'bot_mode', False))
-    lessons_ctx = get_lessons_context(req.asset)
-    if lessons_ctx:
-        quant_prompt += f"\n\n{lessons_ctx}\nUse these past trades to avoid repeating mistakes. If a direction kept losing, weigh the opposite more heavily."
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
@@ -953,23 +1046,25 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     if model_used == 'gpt-4o' and decision.get('_r1_error'):
         slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
 
-    # ── ML OVERRIDE: When ML is confident, enforce its direction ─────────
+    # ── V4 ML OVERRIDE: Only when ML is VERY confident ──────────────────
     if ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
-        ml_dir = 'BUY' if ml_score > 58 else 'SELL' if ml_score < 42 else None
+        ml_dir = 'BUY' if ml_score > 62 else 'SELL' if ml_score < 38 else None
         ai_dir = decision.get('decision')
 
         if ml_dir and ai_dir != ml_dir:
-            if ml_score > 62 or ml_score < 38:
+            if ml_score > 68 or ml_score < 32:
                 slog(f"🔄 ML OVERRIDE: ML says {ml_dir} ({ml_score:.1f}%) but AI said {ai_dir} — forcing ML direction")
                 decision['_original_decision'] = ai_dir
                 decision['decision'] = ml_dir
                 decision['confidence'] = max(decision.get('confidence', 50), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
-            elif ai_dir == 'NO_TRADE' and ml_dir:
-                slog(f"🔄 ML activates trade: ML says {ml_dir} ({ml_score:.1f}%) — overriding NO_TRADE")
+            elif ai_dir == 'NO_TRADE' and ml_dir and (ml_score > 70 or ml_score < 30):
+                slog(f"🔄 ML activates trade: ML says {ml_dir} ({ml_score:.1f}%) — overriding NO_TRADE (very high ML confidence)")
                 decision['_original_decision'] = 'NO_TRADE'
                 decision['decision'] = ml_dir
-                decision['confidence'] = max(decision.get('confidence', 40), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+                decision['confidence'] = max(decision.get('confidence', 55), int(ml_score if ml_dir == 'BUY' else 100 - ml_score))
+            elif ai_dir == 'NO_TRADE':
+                slog(f"ML suggests {ml_dir} ({ml_score:.1f}%) but not strong enough to override NO_TRADE (need >70%)")
 
     # ── A6: Session Intelligence — track recent predictions per asset ────
     recent_session = _session_predictions.get(req.asset, [])
@@ -1080,24 +1175,34 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             decision['confidence'] = max(0, old_conf - 15)
             slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # V4: 4H COUNTER-TREND PENALTY — trading against the 4h trend is a common loss source
+    # V4: 4H COUNTER-TREND PENALTY — closer timeframe, stronger signal
     if decision.get('decision') != 'NO_TRADE' and mtf_data:
         h4_bull = mtf_data.get('h4_bull', False)
         h4_bear = mtf_data.get('h4_bear', False)
-        if (h4_bear and decision.get('decision') == 'BUY') or \
-           (h4_bull and decision.get('decision') == 'SELL'):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 12)
-            slog(f"⚠ V4 4H counter-trend: {decision['decision']} vs 4h {'BEAR' if h4_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
-
-    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + very low confluence = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE':
-        inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
-        very_low_confluence = decision.get('confidence', 0) < 42
-        if inside_cloud and very_low_confluence:
+        daily_bull = mtf_data.get('daily_bull', False)
+        daily_bear = mtf_data.get('daily_bear', False)
+        h4_opposes = (h4_bear and decision.get('decision') == 'BUY') or \
+                     (h4_bull and decision.get('decision') == 'SELL')
+        daily_opposes = (daily_bear and decision.get('decision') == 'BUY') or \
+                        (daily_bull and decision.get('decision') == 'SELL')
+        if h4_opposes and daily_opposes:
             decision['_original_decision'] = decision.get('decision')
             decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 42%)"
+            gate_reason = f"Both 4H and Daily oppose {decision.get('_original_decision')} — full MTF rejection"
+            slog(f"⚠ MTF REJECT: Both 4H and Daily oppose signal — forced NO_TRADE")
+        elif h4_opposes:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 12)
+            slog(f"⚠ 4H counter-trend: {decision['decision']} vs 4H {'BEAR' if h4_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + low confluence = NO_TRADE
+    if decision.get('decision') != 'NO_TRADE':
+        inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
+        low_confluence = decision.get('confidence', 0) < 58
+        if inside_cloud and low_confluence:
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 58%)"
             slog(f"⚠ Ichimoku cloud gate: inside cloud + confidence {decision.get('confidence', 0)}%")
 
     # Confidence cap: neutral daily + bearish MACD
@@ -1188,107 +1293,122 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
             decision['confidence'] = 55
 
-    # ── V4 NEW GATES ─────────────────────────────────────────────────────────
+    # ── V5 GATES: Funding, Liquidations, Order Flow, Volume Profile, Disagreement ──
 
-    # GATE 16: PURE NOISE HARD BLOCK — entropy > 0.87 + Hurst 0.45-0.55 + conf < 65
-    # This is a random walk in pure noise — any trade is a coin flip minus fees
-    if decision.get('decision') != 'NO_TRADE':
-        entropy = ind.get('entropy_ratio', 0.5)
-        hurst = ind.get('hurst_exp', 0.5)
-        pure_noise = entropy > 0.87 and 0.44 <= hurst <= 0.56
-        if pure_noise and decision.get('confidence', 0) < 65:
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"V4 Pure noise: entropy={entropy:.3f} Hurst={hurst:.3f} — coin flip territory"
-            slog(f"🛑 V4 NOISE GATE: entropy={entropy:.3f} Hurst={hurst:.3f} conf={decision.get('confidence',0)}% < 65% — SKIP")
-
-    # GATE 17: LOW VOLUME PENALTY — below 20th percentile = -15% confidence
-    # Thin volume means price moves are unreliable and stop hunts are common
-    if decision.get('decision') != 'NO_TRADE':
-        vol_pct = ind.get('vol_percentile', 50)
-        if vol_pct < 20:
+    # GATE 16: FUNDING CROWDING — from detailed funding_oi module
+    if decision.get('decision') != 'NO_TRADE' and funding_oi_data.get('available'):
+        foi_bias = funding_oi_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and foi_bias <= -3) or \
+           (decision['decision'] == 'SELL' and foi_bias >= 3):
             old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ V4 Low volume: {vol_pct:.0f}th percentile — confidence {old_conf}% → {decision['confidence']}%")
-        elif vol_pct < 30:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 8)
-            slog(f"⚠ V4 Thin volume: {vol_pct:.0f}th percentile — confidence {old_conf}% → {decision['confidence']}%")
+            penalty = min(15, abs(foi_bias) * 3)
+            decision['confidence'] = max(0, old_conf - penalty)
+            slog(f"⚠ Funding/OI gate: bias={foi_bias:+d} opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # GATE 18: STRONG DOLLAR PENALTY — DXY > 110 caps BUY confidence for crypto
-    # A DXY above 110 is historically very bearish for crypto
-    if decision.get('decision') == 'BUY' and is_crypto:
-        macro_raw = macro_data or {}
-        dxy = macro_raw.get('dxy', 0) or macro_context.get('fred_data', {}).get('dxy_fred', 0) if isinstance(macro_context, dict) else 0
-        if not dxy and isinstance(macro_context, dict):
-            dxy = macro_context.get('fred_data', {}).get('dxy_fred', 0) or 0
-        if dxy > 115:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 20)
-            slog(f"⚠ V4 Extreme DXY gate: DXY={dxy:.1f} (>115) — crypto BUY confidence {old_conf}% → {decision['confidence']}%")
-        elif dxy > 110:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 12)
-            slog(f"⚠ V4 Strong DXY gate: DXY={dxy:.1f} (>110) — crypto BUY confidence {old_conf}% → {decision['confidence']}%")
-
-    # GATE 19: RANGING + TRIPLE BEARISH VOLUME — in a ranging market with bad volume signals
-    # RANGING + CMF negative + OBV falling + no volume = very likely chop, skip it
-    if decision.get('decision') != 'NO_TRADE':
-        regime = ind.get('regime', 'NEUTRAL')
-        cmf = ind.get('cmf', 0)
-        obv_slope = ind.get('obv_slope', 0)
-        vol_pct = ind.get('vol_percentile', 50)
-        if regime == 'RANGING' and vol_pct < 35:
-            # Count how many volume/flow signals contradict direction
-            dir_is_buy = decision['decision'] == 'BUY'
-            contradictions = sum([
-                cmf < -0.08 if dir_is_buy else cmf > 0.08,
-                obv_slope < 0 if dir_is_buy else obv_slope > 0,
-                ind.get('mfi', 50) < 40 if dir_is_buy else ind.get('mfi', 50) > 60,
-            ])
-            if contradictions >= 2 and decision.get('confidence', 0) < 62:
-                decision['_original_decision'] = decision.get('decision')
-                decision['decision'] = 'NO_TRADE'
-                gate_reason = f"V4 Ranging+volume conflict: {contradictions}/3 flow signals contradict {decision.get('_original_decision')}"
-                slog(f"🛑 V4 RANGING FLOW GATE: regime=RANGING, {contradictions}/3 flow contradict, vol={vol_pct:.0f}% — SKIP")
-
-    # GATE 20: TRIPLE DOJI FILTER — doji in compression = indecision, require higher bar
-    # Compression + Doji = market is waiting for catalyst. Don't front-run it.
-    if decision.get('decision') != 'NO_TRADE':
-        if ind.get('doji') and ind.get('compression') and decision.get('confidence', 0) < 60:
+    # GATE 17: ORDER FLOW CONTRADICTION
+    if decision.get('decision') != 'NO_TRADE' and order_flow_data.get('available'):
+        of_bias = order_flow_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and of_bias <= -3) or \
+           (decision['decision'] == 'SELL' and of_bias >= 3):
             old_conf = decision.get('confidence', 50)
             decision['confidence'] = max(0, old_conf - 10)
-            slog(f"⚠ V4 Doji+compression: indecision signal — confidence {old_conf}% → {decision['confidence']}%")
+            slog(f"⚠ Order flow gate: bias={of_bias:+d} contradicts {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
 
-    # GATE 21: V4 FINAL FLOOR — raised from 38% to 55%
-    # 38% means we trade when we lose money 62% of the time — not acceptable
-    v4_conf_floor = 55
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < v4_conf_floor:
-        decision['_original_decision'] = decision.get('decision')
-        decision['decision'] = 'NO_TRADE'
-        gate_reason = f"V4 confidence floor: {decision.get('confidence', 0)}% < {v4_conf_floor}% (requires real edge)"
-        slog(f"🛑 V4 FLOOR GATE: {decision.get('confidence', 0)}% < {v4_conf_floor}% — SKIP")
-
-    # SMART MONEY INTEL GATE — boost or reduce based on institutional consensus
-    if decision.get('decision') != 'NO_TRADE' and smi_data.get('score', 0) > 0:
-        smi_score = smi_data.get('score', 0)
-        smi_dir = smi_data.get('direction', 'neutral')
-        smi_completeness = smi_data.get('data_completeness', 0)
-        if smi_completeness >= 30 and smi_score >= 60:
-            decision_dir = decision['decision']
-            smi_matches = (decision_dir == 'BUY' and smi_dir == 'bullish') or \
-                          (decision_dir == 'SELL' and smi_dir == 'bearish')
-            smi_contradicts = (decision_dir == 'BUY' and smi_dir == 'bearish') or \
-                              (decision_dir == 'SELL' and smi_dir == 'bullish')
+    # GATE 18: VOLUME PROFILE — price far outside value area (mean reversion pressure)
+    if decision.get('decision') != 'NO_TRADE' and vp_signal.get('signal'):
+        if vp_signal['signal'] != 'NEUTRAL' and vp_signal['signal'] != decision['decision']:
             old_conf = decision.get('confidence', 50)
-            if smi_matches:
-                boost = min(10, smi_score // 10)
-                decision['confidence'] = min(90, old_conf + boost)
-                slog(f"✓ Smart Money boost: score={smi_score} {smi_dir} confirms {decision_dir} → +{boost}% (conf {old_conf}→{decision['confidence']}%)")
-            elif smi_contradicts:
-                penalty = min(12, smi_score // 8)
-                decision['confidence'] = max(40, old_conf - penalty)
-                slog(f"⚠ Smart Money conflict: score={smi_score} {smi_dir} contradicts {decision_dir} → -{penalty}% (conf {old_conf}→{decision['confidence']}%)")
+            adj = vp_signal.get('confidence_adj', 0)
+            decision['confidence'] = max(0, old_conf - abs(adj))
+            slog(f"⚠ VP gate: {vp_signal.get('reason','')} — confidence {old_conf}% → {decision['confidence']}%")
+        elif vp_signal['signal'] == decision['decision']:
+            # VP confirms direction — small boost
+            old_conf = decision.get('confidence', 50)
+            adj = min(5, vp_signal.get('confidence_adj', 0))
+            decision['confidence'] = min(90, old_conf + adj)
+
+    # GATE 19: LIQUIDATION MAGNET — if price heading toward liq cluster in our direction
+    if decision.get('decision') != 'NO_TRADE' and liquidation_data.get('available'):
+        liq_bias = liquidation_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and liq_bias >= 2) or \
+           (decision['decision'] == 'SELL' and liq_bias <= -2):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = min(90, old_conf + 5)
+            slog(f"✓ Liq magnet confirms {decision['decision']} (bias={liq_bias:+d}) — confidence +5%")
+        elif (decision['decision'] == 'BUY' and liq_bias <= -2) or \
+             (decision['decision'] == 'SELL' and liq_bias >= 2):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 8)
+            slog(f"⚠ Liq magnet opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 20: TICK MICRO-STRUCTURE
+    if decision.get('decision') != 'NO_TRADE' and tick_data.get('available'):
+        tick_bias = tick_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and tick_bias <= -3) or \
+           (decision['decision'] == 'SELL' and tick_bias >= 3):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 8)
+            slog(f"⚠ Tick gate: micro-structure bias={tick_bias:+d} contradicts — confidence -8%")
+
+    # GATE 21: MODEL DISAGREEMENT (V5)
+    model_preds = {
+        'quant_agent': {'direction': quant_result.get('direction', ''), 'confidence': quant_result.get('confidence', 50)},
+        'news_agent': {'direction': 'BUY' if news_result.get('sentiment','').upper() == 'BULLISH' else 'SELL' if news_result.get('sentiment','').upper() == 'BEARISH' else '', 'confidence': news_result.get('confidence', 50)},
+        'ml_ensemble': {'direction': 'BUY' if ml_result.get('score', 50) > 55 else 'SELL' if ml_result.get('score', 50) < 45 else '', 'confidence': ml_result.get('score', 50)},
+        'decision_agent': {'direction': decision.get('decision', ''), 'confidence': decision.get('confidence', 50)},
+    }
+    disagreement = compute_disagreement(model_preds)
+    if disagreement.get('available') and disagreement.get('disagreement_score', 0) >= 5:
+        old_conf = decision.get('confidence', 50)
+        adj = apply_disagreement(old_conf, 100, disagreement)
+        decision['confidence'] = adj['confidence']
+        slog(f"⚠ Disagreement gate: score={disagreement['disagreement_score']}/10 — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 22: PRE-EVENT (V5) — from detailed pre_event module
+    upcoming = macro_context.get('upcoming_events', [])
+    pre_event_adj = get_pre_event_adjustments(upcoming, hours_ahead=4.0)
+    if pre_event_adj.get('active') and decision.get('decision') != 'NO_TRADE':
+        skip, skip_reason = should_skip_trade(pre_event_adj, decision.get('confidence', 50))
+        if skip and not getattr(req, 'bot_mode', False):
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Pre-event: {skip_reason}"
+            slog(f"⚠ Pre-event gate: {skip_reason}")
+        elif pre_event_adj.get('confidence_penalty', 0) > 0:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(40, old_conf - pre_event_adj['confidence_penalty'])
+            slog(f"⚠ Pre-event penalty: -{pre_event_adj['confidence_penalty']}% conf (events: {len(pre_event_adj.get('events',[]))})")
+
+    # GATE 23: RL-LITE TRUST ADJUSTMENT (V5)
+    rl = get_rl_lite()
+    active_gates_list = []
+    if funding_oi_data.get('available') and abs(funding_oi_data.get('bias',0)) >= 2:
+        active_gates_list.append('funding_oi')
+    if order_flow_data.get('available') and abs(order_flow_data.get('bias',0)) >= 2:
+        active_gates_list.append('order_flow')
+    if vp_signal.get('signal') and vp_signal['signal'] != 'NEUTRAL':
+        active_gates_list.append('volume_profile')
+    if tick_data.get('available') and abs(tick_data.get('bias',0)) >= 2:
+        active_gates_list.append('tick_structure')
+    if disagreement.get('disagreement_score', 0) >= 3:
+        active_gates_list.append('model_disagreement')
+    rl_adj = rl.get_confidence_adjustment(active_gates_list)
+    if rl_adj != 0 and decision.get('decision') != 'NO_TRADE':
+        old_conf = decision.get('confidence', 50)
+        decision['confidence'] = max(40, min(90, old_conf + rl_adj))
+        slog(f"✓ RL-lite: trust adj={rl_adj:+d}% (confidence {old_conf}% → {decision['confidence']}%)")
+
+    # GATE 24: REGIME CONFIDENCE ADJUSTMENT (V5)
+    hmm_probs = ind.get('hmm_probs', {})
+    regime_name = get_regime_from_hmm(hmm_probs)
+    if decision.get('decision') != 'NO_TRADE':
+        regime_adj_conf = regime_confidence_adjustment(
+            regime_name, decision.get('confidence', 50),
+            decision['decision'], ind.get('trend_slope', 0)
+        )
+        if regime_adj_conf != decision.get('confidence', 50):
+            slog(f"✓ Regime ({regime_name}): confidence {decision['confidence']}% → {regime_adj_conf}%")
+            decision['confidence'] = regime_adj_conf
 
     # ML CONFIDENCE BOOST — when ML strongly agrees, boost confidence
     if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
@@ -1331,94 +1451,6 @@ async def _run_prediction(req, worker, start_time, logs, slog):
 
     total_ms = int((time.time() - start_time) * 1000)
     slog(f"✅ Complete in {total_ms}ms")
-
-    # ── FORENSIC LOG: capture EVERYTHING ─────────────────────────────────
-    try:
-        gates_extracted = []
-        for entry in (logs or []):
-            msg = entry.get("msg", "") if isinstance(entry, dict) else str(entry)
-            if "Gate" in msg or "gate" in msg or "GATE" in msg or "capped" in msg or "→" in msg and "%" in msg:
-                gates_extracted.append({
-                    "ts_ms": entry.get("ts", 0) if isinstance(entry, dict) else 0,
-                    "gate": msg[:200],
-                    "action": "see_message",
-                    "conf_before": None, "conf_after": None,
-                    "reason": msg[:300],
-                })
-        forensic_log.log_prediction(
-            asset=req.asset,
-            request_data={
-                "horizon": req.horizon,
-                "bot_mode": getattr(req, 'bot_mode', False),
-                "use_r1": req.use_r1,
-                "quant_model": quant_result.get('_quant_model', '?'),
-                "decision_model": decision.get('_model', '?'),
-            },
-            indicators=ind,
-            monte_carlo=mc,
-            news={
-                "count": len(articles) if articles else 0,
-                "headlines": [{"title": a.get('title', '')[:200],
-                               "source": a.get('source', '?'),
-                               "sentiment": a.get('sentiment', None),
-                               "url": a.get('url', '')[:200]} for a in (articles or [])[:30]],
-                "sentiment_score": news_result.get('sentiment_score'),
-                "sources": list(set(a.get('source', '?') for a in (articles or []))),
-            },
-            macro=macro_context if isinstance(macro_context, dict) else {"raw": str(macro_context)[:500]},
-            sentiment=sentiment_data if isinstance(sentiment_data, dict) else {},
-            correlation=correlation_data if isinstance(correlation_data, dict) else {},
-            cluster=cluster_data if isinstance(cluster_data, dict) else {},
-            smc=smc_data if isinstance(smc_data, dict) else {},
-            orderbook=orderbook_data if isinstance(orderbook_data, dict) else {},
-            whales=whale_data if isinstance(whale_data, dict) else {},
-            options=options_data if isinstance(options_data, dict) else {},
-            smart_money=smart_money_data if isinstance(smart_money_data, dict) else {},
-            ml_result=ml_result if isinstance(ml_result, dict) else {},
-            quant_agent={
-                "model": quant_result.get('_quant_model', '?'),
-                "prompt": quant_prompt[:8000] if isinstance(quant_prompt, str) else "",
-                "response": {k: v for k, v in quant_result.items() if not k.startswith('_')},
-                "latency_ms": quant_result.get('_latency_ms', 0),
-            },
-            news_agent={
-                "model": news_result.get('_model', '?'),
-                "prompt": f"Asset: {req.asset} | {len(articles or [])} articles fed",
-                "response": {k: v for k, v in news_result.items() if not k.startswith('_')},
-                "latency_ms": news_result.get('_latency_ms', 0),
-            },
-            decision_agent={
-                "model": decision.get('_model', '?'),
-                "prompt": f"Quant: {quant_result.get('direction')}/{quant_result.get('confidence')}% | News: {news_result.get('sentiment')}/{news_result.get('sentiment_score')} | ML: {ml_result.get('score') if ml_result else 'N/A'}",
-                "response": {k: v for k, v in decision.items() if not k.startswith('_')},
-                "latency_ms": decision.get('_latency_ms', 0),
-                "r1_error": decision.get('_r1_error'),
-            },
-            gates=gates_extracted,
-            confidence_blend={
-                "ai_raw": raw_ai_conf,
-                "bayes": round(bayes_conf, 1),
-                "ml": ml_result.get('score') if ml_result else None,
-                "cluster": cluster_data.get('confidence') if isinstance(cluster_data, dict) else None,
-                "weights": ("AI 15% + Bayes 20% + ML 45% + Cluster 20%" if (ml_conf is not None and cluster_conf is not None)
-                            else "AI 20% + Bayes 25% + ML 55%" if ml_conf is not None
-                            else "AI 35% + Bayes 35% + Cluster 30%" if cluster_conf is not None
-                            else "AI 55% + Bayes 45%"),
-                "final": quant_result.get('confidence'),
-            },
-            pqs=pqs,
-            final_decision={
-                "direction": decision.get('decision'),
-                "confidence": decision.get('confidence'),
-                "reasoning": decision.get('insight', '') or decision.get('primary_reason', ''),
-                "counter_argument": quant_result.get('counter_argument', ''),
-                "gate_reason": gate_reason,
-                "original_decision": decision.get('_original_decision'),
-            },
-            timing_ms=total_ms,
-        )
-    except Exception as fe:
-        forensic_log.log_error(req.asset, "_run_prediction.forensic_log", str(fe))
 
     response = {
         "decision": decision.get('decision', 'NO_TRADE'),
@@ -1489,19 +1521,18 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "whale_activity": whale_data,
         "options_flow": options_data,
         "smart_money": smart_money_data,
-        "smart_money_intel": {
-            "score": smi_data.get('score', 0),
-            "direction": smi_data.get('direction', 'neutral'),
-            "confirmed": smi_data.get('confirmed', False),
-            "data_completeness": smi_data.get('data_completeness', 0),
-            "top_signal": smi_data.get('top_signal', ''),
-            "high_quality_flags": smi_data.get('high_quality_flags', []),
-            "components": {k: {"score": v.get("score", 0), "direction": v.get("direction", "neutral"),
-                               "detail": v.get("detail", "")}
-                           for k, v in smi_data.get('components', {}).items()},
-            "macro_context": smi_data.get('macro_context', ''),
-        },
         "monte_carlo": mc,
+        # V5: New intelligence data
+        "funding_oi": funding_oi_data,
+        "liquidations": liquidation_data,
+        "order_flow": order_flow_data,
+        "volume_profile": vp_data,
+        "vp_signal": vp_signal,
+        "tick_structure": tick_data,
+        "disagreement": disagreement,
+        "pre_event": pre_event_adj if pre_event_adj.get('active') else None,
+        "rl_trust": rl.get_report(),
+        "regime_strategy": regime_name,
         "similarity": {
             "count": len(similar),
             "win_rate": sum(1 for s in similar if (s.get('fwd_4h') or 0) > 0) / len(similar) * 100 if similar else 0,
@@ -2256,6 +2287,137 @@ async def trade_webhook(payload: WebhookPayload):
     return await engine.handle_webhook(payload.dict())
 
 
+# ─── Autonomous Trader Control ──────────────────────────────────────────
+
+class AutotraderStartRequest(BaseModel):
+    assets: list
+    interval_minutes: int = 60
+    trade_size: float = 0
+    starting_equity: float = 10000
+    force_trade: bool = True
+
+
+@app.post("/autotrader/start")
+async def autotrader_start(req: AutotraderStartRequest):
+    valid_assets = [a for a in req.assets if a in ALL_ASSETS]
+    if not valid_assets:
+        return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
+    _autotrader['enabled'] = True
+    _autotrader['assets'] = valid_assets
+    _autotrader['interval_minutes'] = max(10, req.interval_minutes)
+    _autotrader['trade_size'] = max(0, req.trade_size)
+    _autotrader['starting_equity'] = max(100, req.starting_equity)
+    _autotrader['force_trade'] = req.force_trade
+    _autotrader['status'] = 'starting'
+    engine = get_trading_engine()
+    engine._equity = _autotrader['starting_equity']
+    asyncio.create_task(_autotrader_loop())
+    from telegram_bot import send_message
+    size_label = f"${_autotrader['trade_size']:.0f}/trade" if _autotrader['trade_size'] > 0 else "Auto (Kelly)"
+    asyncio.create_task(send_message(
+        f"AUTOTRADER STARTED\nAssets: {', '.join(valid_assets)}\n"
+        f"Interval: every {_autotrader['interval_minutes']} min\n"
+        f"Mode: {'PAPER' if engine.paper_mode else 'LIVE'}\n"
+        f"Starting equity: ${engine._equity:,.2f}\nTrade size: {size_label}"
+    ))
+    return {
+        "ok": True, "assets": valid_assets,
+        "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader['trade_size'],
+        "starting_equity": _autotrader['starting_equity'],
+        "mode": "paper" if engine.paper_mode else "live",
+    }
+
+
+@app.post("/autotrader/stop")
+async def autotrader_stop():
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+    engine = get_trading_engine()
+    open_positions = engine.get_positions('open')
+    from telegram_bot import send_message
+    asyncio.create_task(send_message(
+        f"AUTOTRADER STOPPED\nOpen positions: {len(open_positions)}\n"
+        f"Equity: ${engine._equity:,.2f}\nTotal cycles: {_autotrader['total_cycles']}"
+    ))
+    return {"ok": True, "open_positions": len(open_positions), "equity": engine._equity,
+            "total_cycles": _autotrader['total_cycles']}
+
+
+@app.post("/autotrader/cashout")
+async def autotrader_cashout():
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+    engine = get_trading_engine()
+    closed = []
+    total_pnl = 0.0
+    for pos in list(engine.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if price:
+                close_result = await engine.close_position(pos.id, price, 'cashout')
+                pnl = close_result.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({'asset': pos.asset, 'direction': pos.direction,
+                               'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
+        except Exception:
+            continue
+    return {"ok": True, "closed": closed, "total_pnl": round(total_pnl, 2),
+            "final_equity": round(engine._equity, 2)}
+
+
+@app.get("/autotrader/status")
+async def autotrader_status():
+    engine = get_trading_engine()
+    hb = engine.heartbeat()
+    open_positions = engine.get_positions('open')
+    trade_log = engine.get_trade_log(20)
+    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
+    total = len(trade_log)
+    win_rate = (wins / total * 100) if total > 0 else 0
+    return {
+        "enabled": _autotrader['enabled'], "status": _autotrader['status'],
+        "assets": _autotrader['assets'], "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader.get('trade_size', 0),
+        "total_cycles": _autotrader['total_cycles'],
+        "trades_opened": _autotrader['trades_opened'],
+        "last_cycle": _autotrader['last_cycle'],
+        "heartbeat": hb, "open_positions": open_positions,
+        "recent_trades": trade_log, "win_rate": round(win_rate, 1),
+        "cycle_log": _autotrader['cycle_log'][-20:],
+        "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
+        "all_positions": engine.get_positions(),
+    }
+
+
+# ─── Forensic Log Endpoints ─────────────────────────────────────────────
+
+@app.get("/forensic/stats")
+async def forensic_stats():
+    return forensic_log.stats()
+
+
+@app.get("/forensic/log")
+async def forensic_log_get(limit: int = 200, asset: str = None, type: str = None):
+    events = forensic_log.get_events(limit=limit, asset_filter=asset, type_filter=type)
+    return {"events": events, "count": len(events)}
+
+
+@app.get("/forensic/export")
+async def forensic_export(asset: str = None):
+    text = forensic_log.export_text(asset_filter=asset)
+    return PlainTextResponse(content=text, media_type="text/plain")
+
+
+@app.post("/forensic/clear")
+async def forensic_clear():
+    forensic_log.clear()
+    return {"ok": True}
+
+
 # ─── Portfolio Scanner ───────────────────────────────────────────────────
 
 @app.get("/portfolio/scan")
@@ -2288,253 +2450,6 @@ async def get_calibration(asset: str = 'BTC', horizon: int = 4):
 # ─── WebSocket ──────────────────────────────────────────────────────────
 
 from fastapi import WebSocket as WSType
-
-
-# ─── Autonomous Trader Control ──────────────────────────────────────────
-
-class AutotraderStartRequest(BaseModel):
-    assets: list  # e.g. ["BTC", "ETH", "SOL"]
-    interval_minutes: int = 60  # how often to trade (default 1hr)
-    trade_size: float = 0  # 0 = auto (Kelly sizing), >0 = fixed USD per trade
-    starting_equity: float = 10000  # paper trading starting balance
-
-
-@app.post("/autotrader/start")
-async def autotrader_start(req: AutotraderStartRequest):
-    """Start the autonomous trader on specified assets."""
-    valid_assets = [a for a in req.assets if a in ALL_ASSETS]
-    if not valid_assets:
-        return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
-
-    _autotrader['enabled'] = True
-    _autotrader['assets'] = valid_assets
-    _autotrader['interval_minutes'] = max(10, req.interval_minutes)
-    _autotrader['trade_size'] = max(0, req.trade_size)
-    _autotrader['starting_equity'] = max(100, req.starting_equity)
-    _autotrader['status'] = 'starting'
-
-    engine = get_trading_engine()
-    engine._equity = _autotrader['starting_equity']
-
-    # Start the loop if not already running
-    asyncio.create_task(_autotrader_loop())
-
-    from telegram_bot import send_message
-    size_label = f"${_autotrader['trade_size']:.0f}/trade" if _autotrader['trade_size'] > 0 else "Auto (Kelly)"
-    asyncio.create_task(send_message(
-        f"🤖 AUTOTRADER STARTED\n"
-        f"Assets: {', '.join(valid_assets)}\n"
-        f"Interval: every {_autotrader['interval_minutes']} min\n"
-        f"Mode: {'PAPER' if engine.paper_mode else 'LIVE'}\n"
-        f"Starting equity: ${engine._equity:,.2f}\n"
-        f"Trade size: {size_label}"
-    ))
-
-    return {
-        "ok": True,
-        "assets": valid_assets,
-        "interval_minutes": _autotrader['interval_minutes'],
-        "trade_size": _autotrader['trade_size'],
-        "starting_equity": _autotrader['starting_equity'],
-        "mode": "paper" if engine.paper_mode else "live",
-    }
-
-
-@app.post("/autotrader/stop")
-async def autotrader_stop():
-    """Stop the autonomous trader. Keeps positions open."""
-    _autotrader['enabled'] = False
-    _autotrader['status'] = 'stopped'
-
-    engine = get_trading_engine()
-    open_positions = engine.get_positions('open')
-
-    from telegram_bot import send_message
-    asyncio.create_task(send_message(
-        f"🛑 AUTOTRADER STOPPED\n"
-        f"Open positions: {len(open_positions)}\n"
-        f"Equity: ${engine._equity:,.2f}\n"
-        f"Total cycles: {_autotrader['total_cycles']}\n"
-        f"Trades opened: {_autotrader['trades_opened']}"
-    ))
-
-    return {
-        "ok": True,
-        "open_positions": len(open_positions),
-        "equity": engine._equity,
-        "total_cycles": _autotrader['total_cycles'],
-    }
-
-
-@app.post("/autotrader/cashout")
-async def autotrader_cashout():
-    """Stop trading and close ALL open positions at current prices."""
-    _autotrader['enabled'] = False
-    _autotrader['status'] = 'stopped'
-
-    engine = get_trading_engine()
-    closed = []
-    total_pnl = 0.0
-
-    for pos in list(engine.positions.values()):
-        if pos.status != 'open':
-            continue
-        try:
-            result = await fetch_current_price(pos.asset)
-            price = result.get('price', 0)
-            if price:
-                close_result = await engine.close_position(pos.id, price, 'cashout')
-                pnl = close_result.get('pnl', 0)
-                total_pnl += pnl
-                closed.append({
-                    'asset': pos.asset,
-                    'direction': pos.direction,
-                    'entry': pos.entry_price,
-                    'exit': price,
-                    'pnl': pnl,
-                })
-        except Exception:
-            continue
-
-    from telegram_bot import send_message
-    lines = [f"  {c['asset']}: {c['direction']} ${c['pnl']:+.2f}" for c in closed]
-    asyncio.create_task(send_message(
-        f"💰 AUTOTRADER CASHOUT\n"
-        f"Closed {len(closed)} positions\n"
-        + '\n'.join(lines) + '\n'
-        f"Total P&L: ${total_pnl:+,.2f}\n"
-        f"Final equity: ${engine._equity:,.2f}"
-    ))
-
-    # Should you keep going?
-    stats = _equity_tracker.get_stats()
-    recommendation = "KEEP GOING" if stats.get('total_return', 0) > 0 and stats.get('sharpe_ratio', 0) > 0.3 else "STOP — system is not profitable yet"
-
-    return {
-        "ok": True,
-        "closed": closed,
-        "total_pnl": round(total_pnl, 2),
-        "final_equity": round(engine._equity, 2),
-        "total_return_pct": stats.get('total_return', 0),
-        "sharpe_ratio": stats.get('sharpe_ratio', 0),
-        "max_drawdown_pct": stats.get('max_drawdown', 0),
-        "recommendation": recommendation,
-    }
-
-
-@app.get("/autotrader/status")
-async def autotrader_status():
-    """Get current autotrader status, equity, open positions, and recommendation."""
-    engine = get_trading_engine()
-    hb = engine.heartbeat()
-    open_positions = engine.get_positions('open')
-    trade_log = engine.get_trade_log(20)
-    equity_stats = _equity_tracker.get_stats()
-
-    # Calculate win rate from trade log
-    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
-    total = len(trade_log)
-    win_rate = (wins / total * 100) if total > 0 else 0
-
-    # Recommendation
-    if not _autotrader['enabled']:
-        rec = "Bot is stopped."
-    elif hb['equity'] < 7000:
-        rec = "WARNING: Down significantly. Consider stopping."
-    elif hb['equity'] > 12000 and win_rate > 55:
-        rec = "Profitable and consistent. Keep running."
-    elif hb['equity'] > 10500:
-        rec = "Slightly profitable. Keep running but monitor."
-    elif total < 10:
-        rec = "Still learning. Need more trades for reliable assessment."
-    else:
-        rec = "Mixed results. Monitor closely."
-
-    return {
-        "enabled": _autotrader['enabled'],
-        "status": _autotrader['status'],
-        "assets": _autotrader['assets'],
-        "interval_minutes": _autotrader['interval_minutes'],
-        "trade_size": _autotrader.get('trade_size', 0),
-        "starting_equity": _autotrader.get('starting_equity', 10000),
-        "total_cycles": _autotrader['total_cycles'],
-        "trades_opened": _autotrader['trades_opened'],
-        "last_cycle": _autotrader['last_cycle'],
-        "seconds_until_next": max(0, (_autotrader['last_cycle'] + _autotrader['interval_minutes'] * 60) - int(time.time())) if _autotrader['enabled'] else 0,
-        "heartbeat": hb,
-        "open_positions": open_positions,
-        "recent_trades": trade_log,
-        "equity_stats": equity_stats,
-        "win_rate": round(win_rate, 1),
-        "recommendation": rec,
-        "cycle_log": _autotrader['cycle_log'][-20:],
-        "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
-        "all_positions": engine.get_positions(),
-    }
-
-
-# ─── Smart Money Intel Endpoints ─────────────────────────────────────────
-
-@app.get("/smart_money/{asset}")
-async def smart_money_endpoint(asset: str):
-    try:
-        data = await get_smart_money_score(asset)
-        return data
-    except Exception as e:
-        return {"score": 0, "error": str(e)[:200]}
-
-
-@app.get("/smart_money_leaderboard")
-async def smart_money_leaderboard():
-    return {"leaderboard": get_source_leaderboard()}
-
-
-# ─── Forensic Log Endpoints ─────────────────────────────────────────────
-
-@app.get("/forensic/stats")
-async def forensic_stats():
-    """Quick stats about the forensic log buffer."""
-    return forensic_log.stats()
-
-
-@app.get("/forensic/log")
-async def forensic_log_get(limit: int = 200, asset: str = None, type: str = None):
-    """Recent forensic events as JSON (for dashboard display)."""
-    events = forensic_log.get_events(limit=limit, asset_filter=asset, type_filter=type)
-    return {"count": len(events), "events": events}
-
-
-@app.get("/forensic/export")
-async def forensic_export(asset: str = None):
-    """
-    Big fat human-readable log file. Click EXPORT in the dashboard to download.
-    Paste into Claude/ChatGPT for post-mortem analysis.
-    """
-    text = forensic_log.export_text(asset_filter=asset)
-    fname = f"ultramax_forensic_{int(time.time())}.txt"
-    return PlainTextResponse(
-        text,
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
-
-
-@app.get("/forensic/export.json")
-async def forensic_export_json(asset: str = None):
-    """Same data as JSON for programmatic analysis."""
-    text = forensic_log.export_json(asset_filter=asset)
-    fname = f"ultramax_forensic_{int(time.time())}.json"
-    return PlainTextResponse(
-        text,
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
-
-
-@app.post("/forensic/clear")
-async def forensic_clear():
-    """Clear the forensic log buffer."""
-    forensic_log.clear()
-    return {"ok": True, "cleared": True}
 
 
 @app.websocket("/ws")
@@ -2570,3 +2485,137 @@ async def db_status():
         assets = await cursor.fetchall()
         stats['assets'] = [{'asset': r[0], 'latest': r[1], 'hours': r[2]} for r in assets]
     return stats
+
+
+# ─── V5: Periodic Model Retrain Check ──────────────────────────────────────
+
+async def _periodic_retrain_check():
+    """Check every 6 hours if any models need retraining."""
+    await asyncio.sleep(60)  # wait for startup
+    while True:
+        try:
+            retrainer = get_retrainer()
+            for asset in list(BINANCE_SYMBOLS.keys())[:5]:
+                if retrainer.needs_retrain(asset):
+                    print(f"[V5] Auto-retrain triggered for {asset}")
+                    preds = await get_predictions(asset, 500)
+                    retrainer.retrain_if_needed(asset, preds)
+            # Decay RL trust scores toward neutral
+            get_rl_lite().decay_unused()
+        except Exception as e:
+            print(f"[V5] Retrain check error: {e}")
+        await asyncio.sleep(6 * 3600)  # every 6 hours
+
+
+# ─── V5: New Intelligence Endpoints ────────────────────────────────────────
+
+@app.get("/v5/funding-oi/{asset}")
+async def v5_funding_oi(asset: str):
+    return await get_funding_oi_combined(asset)
+
+
+@app.get("/v5/liquidations/{asset}")
+async def v5_liquidations(asset: str):
+    from indicators import compute_indicators
+    candles = await fetch_candles(asset, '1h', 50)
+    price = candles[-1]['close'] if candles else 0
+    return await get_liquidation_intel(asset, price)
+
+
+@app.get("/v5/order-flow/{asset}")
+async def v5_order_flow(asset: str):
+    return await get_order_flow(asset)
+
+
+@app.get("/v5/volume-profile/{asset}")
+async def v5_volume_profile(asset: str):
+    candles = await fetch_candles(asset, '1h', 200)
+    if not candles:
+        return {"available": False}
+    vp = compute_volume_profile(candles)
+    signal = volume_profile_signal(vp, candles[-1]['close']) if vp.get('available') else {}
+    return {"profile": vp, "signal": signal}
+
+
+@app.get("/v5/tick-structure/{asset}")
+async def v5_tick_structure(asset: str):
+    return get_tick_engine().get_micro_structure(asset)
+
+
+@app.get("/v5/rl-report")
+async def v5_rl_report():
+    return get_rl_lite().get_report()
+
+
+@app.get("/v5/execution-report")
+async def v5_execution_report():
+    return get_execution_optimizer().get_report()
+
+
+@app.get("/v5/walkforward/{asset}")
+async def v5_walkforward(asset: str, horizon: int = 4):
+    tester = get_walkforward_tester()
+    preds = await get_predictions(asset, 500)
+    if len(preds) < 30:
+        return {"available": False, "reason": "Need 30+ predictions for walk-forward"}
+    result = tester.run(preds, asset, horizon)
+    return result
+
+
+@app.get("/v5/feature-importance/{asset}")
+async def v5_feature_importance(asset: str):
+    pruner = get_feature_pruner()
+    preds = await get_predictions(asset, 500)
+    if len(preds) < 50:
+        return {"available": False, "reason": "Need 50+ predictions with indicators"}
+    return pruner.analyze(preds)
+
+
+@app.get("/v5/regime-strategy")
+async def v5_regime_strategy(asset: str = 'BTC'):
+    candles = await fetch_candles(asset, '1h', 100)
+    if not candles:
+        return {"available": False}
+    ind = compute_indicators(candles)
+    if not ind:
+        return {"available": False}
+    hmm_probs = ind.get('hmm_probs', {})
+    regime = get_regime_from_hmm(hmm_probs)
+    adjustments = apply_regime_adjustments(regime, {
+        'confidence': 60, 'position_size_pct': 100,
+        'stop_loss_pct': 2.0, 'take_profit_pct': 4.0,
+    })
+    return {
+        "regime": regime,
+        "hmm_probs": hmm_probs,
+        "adjustments": adjustments,
+    }
+
+
+@app.get("/v5/disagreement")
+async def v5_disagreement():
+    """Show current model disagreement analysis for last prediction."""
+    return {"info": "Disagreement computed per-prediction. Check prediction response 'disagreement' field."}
+
+
+@app.get("/v5/intelligence-summary/{asset}")
+async def v5_intelligence_summary(asset: str):
+    """One-shot summary of all V5 intelligence for an asset."""
+    is_crypto = asset in BINANCE_SYMBOLS
+    results = {}
+    try:
+        if is_crypto:
+            funding_oi, liq, of = await asyncio.gather(
+                get_funding_oi_combined(asset),
+                get_liquidation_intel(asset, 0),
+                get_order_flow(asset),
+            )
+            results['funding_oi'] = funding_oi
+            results['liquidations'] = liq
+            results['order_flow'] = of
+        results['tick'] = get_tick_engine().get_micro_structure(asset)
+        results['rl'] = get_rl_lite().get_report()
+        results['execution'] = get_execution_optimizer().get_report()
+    except Exception as e:
+        results['error'] = str(e)
+    return results
