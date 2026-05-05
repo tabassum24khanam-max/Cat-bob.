@@ -43,6 +43,20 @@ from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
 import forensic_log
+# V5: New intelligence modules
+from funding_oi import get_funding_oi_combined
+from liquidations import get_liquidation_intel
+from volume_profile import compute_volume_profile, volume_profile_signal
+from order_flow import get_order_flow
+from walkforward import get_walkforward_tester
+from feature_pruner import get_feature_pruner
+from model_retrainer import get_retrainer
+from regime_strategies import apply_regime_adjustments, regime_confidence_adjustment, get_regime_from_hmm
+from pre_event import get_pre_event_adjustments, should_skip_trade
+from disagreement_signal import compute_disagreement, apply_disagreement
+from rl_lite import get_rl_lite
+from tick_engine import get_tick_engine, start_tick_stream
+from execution_optimizer import get_execution_optimizer
 
 app = FastAPI(title="ULTRAMAX Backend", version="4.0")
 
@@ -65,6 +79,8 @@ _autotrader = {
     'cycle_log': [],
     'trade_size': 0,
     'starting_equity': 10000,
+    'force_trade': True,
+    'force_size_scale': 0.5,
 }
 
 # ─── Learning Memory ────────────────────────────────────────────────────────
@@ -94,6 +110,20 @@ def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
     })
     _trade_lessons[asset] = _trade_lessons[asset][-20:]
 
+    # V5: RL-Lite — update trust scores from trade outcome
+    try:
+        rl = get_rl_lite()
+        trade_signals = {
+            'funding_oi': direction == 'BUY',
+            'order_flow': direction == 'BUY',
+            'volume_profile': direction == 'BUY',
+            'tick_structure': direction == 'BUY',
+            'model_disagreement': False,
+        }
+        rl.record_outcome(trade_signals, was_correct, pnl_pct)
+    except Exception:
+        pass
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -117,6 +147,10 @@ async def startup():
     print(f"  Database: {DB_PATH}")
     print(f"  Worker: {WORKER_URL}")
     asyncio.create_task(warm_ml_models())
+    # V5: Start tick stream for crypto assets
+    asyncio.create_task(start_tick_stream(['BTC', 'ETH', 'SOL']))
+    # V5: Schedule periodic model retraining check
+    asyncio.create_task(_periodic_retrain_check())
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
@@ -450,14 +484,31 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # V4: RESPECT NO_TRADE — never force a direction.
-                # A coin-flip trade minus fees is a guaranteed loss.
-                # The AI correctly identified insufficient edge — honour it.
+                # V5: FORCE TRADE MODE — machine must always be in the market
+                # If AI says NO_TRADE but force_trade is on, derive direction from momentum
                 if direction == 'NO_TRADE':
-                    gate_r = result.get('gate_reason', 'no edge')
-                    print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
-                    cycle_summary.append(f"{asset_name}: SKIP (no edge)")
-                    continue
+                    if _autotrader.get('force_trade'):
+                        ind = result.get('ind', {})
+                        rsi = ind.get('rsi14', 50)
+                        macd_h = ind.get('macd_hist', 0)
+                        ema_diff = ind.get('ema_diff', 0)
+                        trend_slope = ind.get('trend_slope', 0)
+                        momentum_score = ind.get('momentum_score', 0)
+                        score_buy = sum([
+                            1 if rsi < 55 else -1,
+                            1 if macd_h > 0 else -1,
+                            1 if ema_diff > 0 else -1,
+                            1 if trend_slope > 0 else -1,
+                            1 if momentum_score > 0 else -1,
+                        ])
+                        direction = 'BUY' if score_buy > 0 else 'SELL'
+                        confidence = max(50, confidence) if confidence > 0 else 52
+                        print(f"  {asset_name}: FORCE {direction} (momentum score={score_buy}, AI said NO_TRADE)")
+                    else:
+                        gate_r = result.get('gate_reason', 'no edge')
+                        print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
+                        cycle_summary.append(f"{asset_name}: SKIP (no edge)")
+                        continue
 
                 # Check if already holding this asset
                 open_for_asset = [p for p in engine.positions.values()
@@ -527,15 +578,22 @@ async def _autotrader_loop():
                         f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
                     ))
 
-                # V4: Hard quality gate before trading
-                if confidence < 55:
-                    print(f"  {asset_name}: SKIP (confidence {confidence}% < 55% V4 floor)")
-                    cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
-                    continue
-                if pqs_score < 5:
-                    print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5 V4 floor)")
-                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
-                    continue
+                # V5: Quality gate — if force_trade is off, respect floors
+                # If force_trade is on, reduce size instead of skipping
+                is_forced = False
+                if confidence < 55 or pqs_score < 5:
+                    if _autotrader.get('force_trade'):
+                        is_forced = True
+                        print(f"  {asset_name}: FORCE TRADE (conf={confidence}%, PQS={pqs_score}) — reduced size")
+                    else:
+                        if confidence < 55:
+                            print(f"  {asset_name}: SKIP (confidence {confidence}% < 55%)")
+                            cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
+                            continue
+                        if pqs_score < 5:
+                            print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5)")
+                            cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
+                            continue
 
                 # Safety checks
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
@@ -579,8 +637,11 @@ async def _autotrader_loop():
 
                 conf_scale = 0.5 + (confidence - 55) / 90.0
                 conf_scale = max(0.3, min(1.0, conf_scale))
+                # V5: Force-trade uses smaller size (risk protection when signal is weak)
+                if is_forced:
+                    conf_scale *= _autotrader.get('force_size_scale', 0.5)
                 size = round(base_size * conf_scale, 2)
-                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {conf_scale:.2f} conf_scale) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {conf_scale:.2f} {'FORCED' if is_forced else 'conf_scale'}) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
@@ -807,10 +868,11 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         slog(f"✓ Found {len(similar)} similar periods — {wins/len(similar)*100:.0f}% were up")
 
     # ── Fetch parallel data ──────────────────────────────────────────────
-    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales in parallel...")
+    slog("🌐 Fetching macro, on-chain, sentiment, correlation, cluster, SMC, orderbook, whales, funding, liquidations, order flow...")
     asset_type = 'crypto' if is_crypto else 'macro' if req.asset in ['GC=F','CL=F','SI=F'] else 'stock'
     (macro_data, fg_data, onchain_data, sentiment_data, macro_context, correlation_data,
-     cluster_data, smc_data, orderbook_data, whale_data, options_data) = await asyncio.gather(
+     cluster_data, smc_data, orderbook_data, whale_data, options_data,
+     funding_oi_data, liquidation_data, order_flow_data) = await asyncio.gather(
         fetch_macro(), fetch_fear_greed(), fetch_onchain(req.asset),
         get_sentiment_snapshot(req.asset),
         get_macro_context(req.asset, req.horizon),
@@ -820,8 +882,27 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         get_orderbook_imbalance(req.asset),
         get_whale_activity(req.asset),
         get_options_sentiment(req.asset),
+        get_funding_oi_combined(req.asset),
+        get_liquidation_intel(req.asset, ind.get('cur', 0)),
+        get_order_flow(req.asset),
     )
     smart_money_data = analyze_smart_money(candles)
+    # V5: Volume Profile
+    vp_data = compute_volume_profile(candles)
+    vp_signal = volume_profile_signal(vp_data, ind.get('cur', 0)) if vp_data.get('available') else {}
+    # V5: Tick engine micro-structure
+    tick_data = get_tick_engine().get_micro_structure(req.asset)
+
+    if funding_oi_data.get('available'):
+        slog(f"✓ Funding/OI: bias={funding_oi_data.get('bias',0):+d} ({funding_oi_data.get('signal')})")
+    if liquidation_data.get('available'):
+        slog(f"✓ Liquidations: bias={liquidation_data.get('bias',0):+d} ({liquidation_data.get('signal')})")
+    if order_flow_data.get('available'):
+        slog(f"✓ Order flow: bias={order_flow_data.get('bias',0):+d} ({order_flow_data.get('signal')})")
+    if vp_data.get('available'):
+        slog(f"✓ Volume Profile: VPOC={vp_data.get('vpoc',0):.2f} VAH={vp_data.get('vah',0):.2f} VAL={vp_data.get('val',0):.2f}")
+    if tick_data.get('available'):
+        slog(f"✓ Tick engine: CVD={tick_data.get('cvd_pct',0):+.1f}% ({tick_data.get('signal')})")
     if sentiment_data.get('available'):
         slog(f"✓ Sentiment: score={sentiment_data.get('composite', 0):.2f}")
     if macro_context.get('warnings'):
@@ -1212,6 +1293,123 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
             decision['confidence'] = 55
 
+    # ── V5 GATES: Funding, Liquidations, Order Flow, Volume Profile, Disagreement ──
+
+    # GATE 16: FUNDING CROWDING — from detailed funding_oi module
+    if decision.get('decision') != 'NO_TRADE' and funding_oi_data.get('available'):
+        foi_bias = funding_oi_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and foi_bias <= -3) or \
+           (decision['decision'] == 'SELL' and foi_bias >= 3):
+            old_conf = decision.get('confidence', 50)
+            penalty = min(15, abs(foi_bias) * 3)
+            decision['confidence'] = max(0, old_conf - penalty)
+            slog(f"⚠ Funding/OI gate: bias={foi_bias:+d} opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 17: ORDER FLOW CONTRADICTION
+    if decision.get('decision') != 'NO_TRADE' and order_flow_data.get('available'):
+        of_bias = order_flow_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and of_bias <= -3) or \
+           (decision['decision'] == 'SELL' and of_bias >= 3):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 10)
+            slog(f"⚠ Order flow gate: bias={of_bias:+d} contradicts {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 18: VOLUME PROFILE — price far outside value area (mean reversion pressure)
+    if decision.get('decision') != 'NO_TRADE' and vp_signal.get('signal'):
+        if vp_signal['signal'] != 'NEUTRAL' and vp_signal['signal'] != decision['decision']:
+            old_conf = decision.get('confidence', 50)
+            adj = vp_signal.get('confidence_adj', 0)
+            decision['confidence'] = max(0, old_conf - abs(adj))
+            slog(f"⚠ VP gate: {vp_signal.get('reason','')} — confidence {old_conf}% → {decision['confidence']}%")
+        elif vp_signal['signal'] == decision['decision']:
+            # VP confirms direction — small boost
+            old_conf = decision.get('confidence', 50)
+            adj = min(5, vp_signal.get('confidence_adj', 0))
+            decision['confidence'] = min(90, old_conf + adj)
+
+    # GATE 19: LIQUIDATION MAGNET — if price heading toward liq cluster in our direction
+    if decision.get('decision') != 'NO_TRADE' and liquidation_data.get('available'):
+        liq_bias = liquidation_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and liq_bias >= 2) or \
+           (decision['decision'] == 'SELL' and liq_bias <= -2):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = min(90, old_conf + 5)
+            slog(f"✓ Liq magnet confirms {decision['decision']} (bias={liq_bias:+d}) — confidence +5%")
+        elif (decision['decision'] == 'BUY' and liq_bias <= -2) or \
+             (decision['decision'] == 'SELL' and liq_bias >= 2):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 8)
+            slog(f"⚠ Liq magnet opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 20: TICK MICRO-STRUCTURE
+    if decision.get('decision') != 'NO_TRADE' and tick_data.get('available'):
+        tick_bias = tick_data.get('bias', 0)
+        if (decision['decision'] == 'BUY' and tick_bias <= -3) or \
+           (decision['decision'] == 'SELL' and tick_bias >= 3):
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 8)
+            slog(f"⚠ Tick gate: micro-structure bias={tick_bias:+d} contradicts — confidence -8%")
+
+    # GATE 21: MODEL DISAGREEMENT (V5)
+    model_preds = {
+        'quant_agent': {'direction': quant_result.get('direction', ''), 'confidence': quant_result.get('confidence', 50)},
+        'news_agent': {'direction': 'BUY' if news_result.get('sentiment','').upper() == 'BULLISH' else 'SELL' if news_result.get('sentiment','').upper() == 'BEARISH' else '', 'confidence': news_result.get('confidence', 50)},
+        'ml_ensemble': {'direction': 'BUY' if ml_result.get('score', 50) > 55 else 'SELL' if ml_result.get('score', 50) < 45 else '', 'confidence': ml_result.get('score', 50)},
+        'decision_agent': {'direction': decision.get('decision', ''), 'confidence': decision.get('confidence', 50)},
+    }
+    disagreement = compute_disagreement(model_preds)
+    if disagreement.get('available') and disagreement.get('disagreement_score', 0) >= 5:
+        old_conf = decision.get('confidence', 50)
+        adj = apply_disagreement(old_conf, 100, disagreement)
+        decision['confidence'] = adj['confidence']
+        slog(f"⚠ Disagreement gate: score={disagreement['disagreement_score']}/10 — confidence {old_conf}% → {decision['confidence']}%")
+
+    # GATE 22: PRE-EVENT (V5) — from detailed pre_event module
+    upcoming = macro_context.get('upcoming_events', [])
+    pre_event_adj = get_pre_event_adjustments(upcoming, hours_ahead=4.0)
+    if pre_event_adj.get('active') and decision.get('decision') != 'NO_TRADE':
+        skip, skip_reason = should_skip_trade(pre_event_adj, decision.get('confidence', 50))
+        if skip and not getattr(req, 'bot_mode', False):
+            decision['_original_decision'] = decision.get('decision')
+            decision['decision'] = 'NO_TRADE'
+            gate_reason = f"Pre-event: {skip_reason}"
+            slog(f"⚠ Pre-event gate: {skip_reason}")
+        elif pre_event_adj.get('confidence_penalty', 0) > 0:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(40, old_conf - pre_event_adj['confidence_penalty'])
+            slog(f"⚠ Pre-event penalty: -{pre_event_adj['confidence_penalty']}% conf (events: {len(pre_event_adj.get('events',[]))})")
+
+    # GATE 23: RL-LITE TRUST ADJUSTMENT (V5)
+    rl = get_rl_lite()
+    active_gates_list = []
+    if funding_oi_data.get('available') and abs(funding_oi_data.get('bias',0)) >= 2:
+        active_gates_list.append('funding_oi')
+    if order_flow_data.get('available') and abs(order_flow_data.get('bias',0)) >= 2:
+        active_gates_list.append('order_flow')
+    if vp_signal.get('signal') and vp_signal['signal'] != 'NEUTRAL':
+        active_gates_list.append('volume_profile')
+    if tick_data.get('available') and abs(tick_data.get('bias',0)) >= 2:
+        active_gates_list.append('tick_structure')
+    if disagreement.get('disagreement_score', 0) >= 3:
+        active_gates_list.append('model_disagreement')
+    rl_adj = rl.get_confidence_adjustment(active_gates_list)
+    if rl_adj != 0 and decision.get('decision') != 'NO_TRADE':
+        old_conf = decision.get('confidence', 50)
+        decision['confidence'] = max(40, min(90, old_conf + rl_adj))
+        slog(f"✓ RL-lite: trust adj={rl_adj:+d}% (confidence {old_conf}% → {decision['confidence']}%)")
+
+    # GATE 24: REGIME CONFIDENCE ADJUSTMENT (V5)
+    hmm_probs = ind.get('hmm_probs', {})
+    regime_name = get_regime_from_hmm(hmm_probs)
+    if decision.get('decision') != 'NO_TRADE':
+        regime_adj_conf = regime_confidence_adjustment(
+            regime_name, decision.get('confidence', 50),
+            decision['decision'], ind.get('trend_slope', 0)
+        )
+        if regime_adj_conf != decision.get('confidence', 50):
+            slog(f"✓ Regime ({regime_name}): confidence {decision['confidence']}% → {regime_adj_conf}%")
+            decision['confidence'] = regime_adj_conf
+
     # ML CONFIDENCE BOOST — when ML strongly agrees, boost confidence
     if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
@@ -1324,6 +1522,17 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "options_flow": options_data,
         "smart_money": smart_money_data,
         "monte_carlo": mc,
+        # V5: New intelligence data
+        "funding_oi": funding_oi_data,
+        "liquidations": liquidation_data,
+        "order_flow": order_flow_data,
+        "volume_profile": vp_data,
+        "vp_signal": vp_signal,
+        "tick_structure": tick_data,
+        "disagreement": disagreement,
+        "pre_event": pre_event_adj if pre_event_adj.get('active') else None,
+        "rl_trust": rl.get_report(),
+        "regime_strategy": regime_name,
         "similarity": {
             "count": len(similar),
             "win_rate": sum(1 for s in similar if (s.get('fwd_4h') or 0) > 0) / len(similar) * 100 if similar else 0,
@@ -2085,6 +2294,7 @@ class AutotraderStartRequest(BaseModel):
     interval_minutes: int = 60
     trade_size: float = 0
     starting_equity: float = 10000
+    force_trade: bool = True
 
 
 @app.post("/autotrader/start")
@@ -2097,6 +2307,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['interval_minutes'] = max(10, req.interval_minutes)
     _autotrader['trade_size'] = max(0, req.trade_size)
     _autotrader['starting_equity'] = max(100, req.starting_equity)
+    _autotrader['force_trade'] = req.force_trade
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
@@ -2274,3 +2485,137 @@ async def db_status():
         assets = await cursor.fetchall()
         stats['assets'] = [{'asset': r[0], 'latest': r[1], 'hours': r[2]} for r in assets]
     return stats
+
+
+# ─── V5: Periodic Model Retrain Check ──────────────────────────────────────
+
+async def _periodic_retrain_check():
+    """Check every 6 hours if any models need retraining."""
+    await asyncio.sleep(60)  # wait for startup
+    while True:
+        try:
+            retrainer = get_retrainer()
+            for asset in list(BINANCE_SYMBOLS.keys())[:5]:
+                if retrainer.needs_retrain(asset):
+                    print(f"[V5] Auto-retrain triggered for {asset}")
+                    preds = await get_predictions(asset, 500)
+                    retrainer.retrain_if_needed(asset, preds)
+            # Decay RL trust scores toward neutral
+            get_rl_lite().decay_unused()
+        except Exception as e:
+            print(f"[V5] Retrain check error: {e}")
+        await asyncio.sleep(6 * 3600)  # every 6 hours
+
+
+# ─── V5: New Intelligence Endpoints ────────────────────────────────────────
+
+@app.get("/v5/funding-oi/{asset}")
+async def v5_funding_oi(asset: str):
+    return await get_funding_oi_combined(asset)
+
+
+@app.get("/v5/liquidations/{asset}")
+async def v5_liquidations(asset: str):
+    from indicators import compute_indicators
+    candles = await fetch_candles(asset, '1h', 50)
+    price = candles[-1]['close'] if candles else 0
+    return await get_liquidation_intel(asset, price)
+
+
+@app.get("/v5/order-flow/{asset}")
+async def v5_order_flow(asset: str):
+    return await get_order_flow(asset)
+
+
+@app.get("/v5/volume-profile/{asset}")
+async def v5_volume_profile(asset: str):
+    candles = await fetch_candles(asset, '1h', 200)
+    if not candles:
+        return {"available": False}
+    vp = compute_volume_profile(candles)
+    signal = volume_profile_signal(vp, candles[-1]['close']) if vp.get('available') else {}
+    return {"profile": vp, "signal": signal}
+
+
+@app.get("/v5/tick-structure/{asset}")
+async def v5_tick_structure(asset: str):
+    return get_tick_engine().get_micro_structure(asset)
+
+
+@app.get("/v5/rl-report")
+async def v5_rl_report():
+    return get_rl_lite().get_report()
+
+
+@app.get("/v5/execution-report")
+async def v5_execution_report():
+    return get_execution_optimizer().get_report()
+
+
+@app.get("/v5/walkforward/{asset}")
+async def v5_walkforward(asset: str, horizon: int = 4):
+    tester = get_walkforward_tester()
+    preds = await get_predictions(asset, 500)
+    if len(preds) < 30:
+        return {"available": False, "reason": "Need 30+ predictions for walk-forward"}
+    result = tester.run(preds, asset, horizon)
+    return result
+
+
+@app.get("/v5/feature-importance/{asset}")
+async def v5_feature_importance(asset: str):
+    pruner = get_feature_pruner()
+    preds = await get_predictions(asset, 500)
+    if len(preds) < 50:
+        return {"available": False, "reason": "Need 50+ predictions with indicators"}
+    return pruner.analyze(preds)
+
+
+@app.get("/v5/regime-strategy")
+async def v5_regime_strategy(asset: str = 'BTC'):
+    candles = await fetch_candles(asset, '1h', 100)
+    if not candles:
+        return {"available": False}
+    ind = compute_indicators(candles)
+    if not ind:
+        return {"available": False}
+    hmm_probs = ind.get('hmm_probs', {})
+    regime = get_regime_from_hmm(hmm_probs)
+    adjustments = apply_regime_adjustments(regime, {
+        'confidence': 60, 'position_size_pct': 100,
+        'stop_loss_pct': 2.0, 'take_profit_pct': 4.0,
+    })
+    return {
+        "regime": regime,
+        "hmm_probs": hmm_probs,
+        "adjustments": adjustments,
+    }
+
+
+@app.get("/v5/disagreement")
+async def v5_disagreement():
+    """Show current model disagreement analysis for last prediction."""
+    return {"info": "Disagreement computed per-prediction. Check prediction response 'disagreement' field."}
+
+
+@app.get("/v5/intelligence-summary/{asset}")
+async def v5_intelligence_summary(asset: str):
+    """One-shot summary of all V5 intelligence for an asset."""
+    is_crypto = asset in BINANCE_SYMBOLS
+    results = {}
+    try:
+        if is_crypto:
+            funding_oi, liq, of = await asyncio.gather(
+                get_funding_oi_combined(asset),
+                get_liquidation_intel(asset, 0),
+                get_order_flow(asset),
+            )
+            results['funding_oi'] = funding_oi
+            results['liquidations'] = liq
+            results['order_flow'] = of
+        results['tick'] = get_tick_engine().get_micro_structure(asset)
+        results['rl'] = get_rl_lite().get_report()
+        results['execution'] = get_execution_optimizer().get_report()
+    except Exception as e:
+        results['error'] = str(e)
+    return results
