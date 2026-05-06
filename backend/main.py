@@ -531,33 +531,30 @@ async def _autotrader_loop():
                     hold_seconds = int(time.time()) - current_pos.entry_time
                     hold_minutes = hold_seconds / 60
 
-                    # Rule 1: MINIMUM HOLD TIME — never flip before 3 hours
-                    # Let the SL/TP do their job instead of panic-flipping
-                    min_hold_minutes = 180  # 3 hours
+                    # Rule 1: MINIMUM HOLD TIME — never flip before 90 minutes
+                    min_hold_minutes = 90
                     if hold_minutes < min_hold_minutes:
                         print(f"  {asset_name}: HOLD (anti-whipsaw: only {hold_minutes:.0f}min, need {min_hold_minutes}min)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon to flip)")
                         continue
 
                     # Rule 2: PROFITABLE POSITION PROTECTION
-                    # If we're in profit, require VERY strong signal to flip
-                    if pnl_pct > 0.3:
-                        if confidence < 72:
+                    # If we're meaningfully in profit, require strong signal to flip
+                    if pnl_pct > 1.0:
+                        if confidence < 65:
                             print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.2f}%, won't flip for {confidence}% conf)")
                             cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
                             continue
 
-                    # Rule 3: CONFIDENCE DELTA — new signal must be significantly
-                    # stronger than the original entry confidence to justify flip
+                    # Rule 3: CONFIDENCE DELTA — new signal must be stronger than entry
                     original_conf = current_pos.entry_confidence or 55
-                    if confidence < original_conf + 15:
-                        print(f"  {asset_name}: HOLD (flip requires {original_conf+15}% conf, got {confidence}%)")
+                    if confidence < original_conf + 8:
+                        print(f"  {asset_name}: HOLD (flip requires {original_conf+8}% conf, got {confidence}%)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip signal too weak)")
                         continue
 
-                    # Rule 4: LOSING BADLY — only allow flip if losing more than 0.8%
-                    # Small losses should be held — they may recover
-                    if -0.8 < pnl_pct < 0:
+                    # Rule 4: LOSING BADLY — only allow flip if losing more than 0.5%
+                    if -0.5 < pnl_pct < 0:
                         print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.2f}%, may recover)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
                         continue
@@ -595,10 +592,11 @@ async def _autotrader_loop():
                             cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
                             continue
 
-                # Safety checks
+                # Safety checks — max positions scales with how many assets are selected
                 open_count = len([p for p in engine.positions.values() if p.status == 'open'])
-                if open_count >= 5:
-                    cycle_summary.append(f"{asset_name}: max positions (5)")
+                max_positions = max(10, len(_autotrader.get('assets', [])))
+                if open_count >= max_positions:
+                    cycle_summary.append(f"{asset_name}: max positions ({max_positions})")
                     continue
                 if engine.daily_pnl <= -(engine._equity * 0.03):
                     cycle_summary.append(f"{asset_name}: daily loss limit (3%)")
@@ -730,25 +728,36 @@ async def _trading_position_monitor():
                 for act in actions:
                     print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
 
-                # V4: Stale position timeout — close positions stuck for 12+ hours
+                # V5: Stale position timeout — close positions stuck for 6+ hours not making progress
                 now = int(time.time())
                 for pos in open_positions:
                     hold_hours = (now - pos.entry_time) / 3600
-                    if hold_hours >= 12:
-                        try:
-                            result = await fetch_current_price(pos.asset)
-                            cur_price = result.get('price', 0)
-                            if not cur_price:
-                                continue
-                            if pos.direction == 'BUY':
-                                pnl_pct = (cur_price - pos.entry_price) / pos.entry_price * 100
-                            else:
-                                pnl_pct = (pos.entry_price - cur_price) / pos.entry_price * 100
-                            if -0.3 < pnl_pct < 0.3:
-                                close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
-                                print(f"Trading: stale timeout {pos.asset} after {hold_hours:.1f}h (flat {pnl_pct:+.2f}%) P&L: {close_result.get('pnl')}")
-                        except Exception:
+                    if hold_hours < 6:
+                        continue
+                    try:
+                        result = await fetch_current_price(pos.asset)
+                        cur_price = result.get('price', 0)
+                        if not cur_price:
                             continue
+                        if pos.direction == 'BUY':
+                            pnl_pct = (cur_price - pos.entry_price) / pos.entry_price * 100
+                        else:
+                            pnl_pct = (pos.entry_price - cur_price) / pos.entry_price * 100
+                        # Close stale at 6h if flat (-1% to +1.5%) — frees the slot
+                        # Close stale at 10h regardless — slot must rotate
+                        should_close = False
+                        reason = ''
+                        if 6 <= hold_hours < 10 and -1.0 < pnl_pct < 1.5:
+                            should_close = True
+                            reason = f"flat {pnl_pct:+.2f}% after {hold_hours:.1f}h"
+                        elif hold_hours >= 10:
+                            should_close = True
+                            reason = f"hard timeout {hold_hours:.1f}h ({pnl_pct:+.2f}%)"
+                        if should_close:
+                            close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
+                            print(f"Trading: stale timeout {pos.asset} — {reason} — P&L: {close_result.get('pnl')}")
+                    except Exception:
+                        continue
         except Exception as e:
             print(f"Position monitor error: {e}")
         await asyncio.sleep(30)
