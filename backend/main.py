@@ -333,13 +333,15 @@ async def warm_ml_models():
 
 
 def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
-                 ind: dict, decision: dict, mtf_data: dict = None) -> dict:
-    """Prediction Quality Score 0-10 — measures signal confluence."""
+                 ind: dict, decision: dict, mtf_data: dict = None,
+                 funding_oi: dict = None, order_flow: dict = None,
+                 vp_signal: dict = None, tick_data: dict = None) -> dict:
+    """Prediction Quality Score 0-10 — measures signal confluence across all sources."""
     score = 0
     reasons = []
     d_dir = decision.get('decision', '')
 
-    # 1. Agent agreement (0-3)
+    # 1. Agent agreement (0-2)
     q_dir = quant_result.get('direction', '').upper()
     n_sent = news_result.get('sentiment', '').upper()
     ml_dir = None
@@ -351,41 +353,57 @@ def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
         (n_sent == 'BULLISH' and d_dir == 'BUY') or (n_sent == 'BEARISH' and d_dir == 'SELL'),
         ml_dir == d_dir if ml_dir else False,
     ])
-    score += agree
-    if agree == 3: reasons.append('All agents agree')
-    elif agree == 2: reasons.append('2/3 agents agree')
+    if agree >= 3:
+        score += 2; reasons.append('All agents agree')
+    elif agree >= 2:
+        score += 1; reasons.append('2/3 agents agree')
 
-    # 2. Regime clarity (0-2)
+    # 2. Regime clarity (0-1)
     hmm = ind.get('hmm_probs', {})
     max_prob = max(hmm.values()) if hmm else 0
-    if max_prob > 0.6:
-        score += 2; reasons.append(f'Clear regime ({max_prob:.0%})')
-    elif max_prob > 0.45:
-        score += 1; reasons.append('Moderate regime')
+    if max_prob > 0.5:
+        score += 1; reasons.append(f'Clear regime ({max_prob:.0%})')
 
-    # 3. Hurst non-random (0-1)
-    hurst = ind.get('hurst_exp', 0.5)
-    if hurst > 0.6 or hurst < 0.4:
-        score += 1; reasons.append('Hurst decisive')
+    # 3. Trend confirmation — MACD + EMA agree with direction (0-1)
+    macd_agrees = (d_dir == 'BUY' and ind.get('macd_hist', 0) > 0) or \
+                  (d_dir == 'SELL' and ind.get('macd_hist', 0) < 0)
+    ema_agrees = (d_dir == 'BUY' and ind.get('dist_e20', 0) > 0) or \
+                 (d_dir == 'SELL' and ind.get('dist_e20', 0) < 0)
+    if macd_agrees and ema_agrees:
+        score += 1; reasons.append('MACD+EMA aligned')
 
-    # 4. Low entropy (0-1)
-    if ind.get('entropy_ratio', 0.5) < 0.4:
-        score += 1; reasons.append('Low noise')
-
-    # 5. Volume confirmation (0-1)
-    if ind.get('vol_percentile', 50) > 60:
+    # 4. Volume confirmation (0-1)
+    if ind.get('vol_percentile', 50) > 50:
         score += 1; reasons.append('Volume confirms')
 
-    # 6. Daily trend alignment (0-1)
+    # 5. Daily trend alignment (0-1)
     if mtf_data:
         if (mtf_data.get('daily_bull') and d_dir == 'BUY') or \
            (mtf_data.get('daily_bear') and d_dir == 'SELL'):
             score += 1; reasons.append('Daily aligned')
 
-    # 7. RSI divergence support (0-1)
-    if (d_dir == 'BUY' and ind.get('rsi_div_bull')) or \
-       (d_dir == 'SELL' and ind.get('rsi_div_bear')):
-        score += 1; reasons.append('RSI divergence confirms')
+    # 6. Funding/OI confirms direction (0-1)
+    if funding_oi and funding_oi.get('available'):
+        foi_bias = funding_oi.get('bias', 0)
+        if (d_dir == 'BUY' and foi_bias >= 2) or (d_dir == 'SELL' and foi_bias <= -2):
+            score += 1; reasons.append('Funding/OI confirms')
+
+    # 7. Order flow confirms direction (0-1)
+    if order_flow and order_flow.get('available'):
+        of_bias = order_flow.get('bias', 0)
+        if (d_dir == 'BUY' and of_bias >= 2) or (d_dir == 'SELL' and of_bias <= -2):
+            score += 1; reasons.append('Order flow confirms')
+
+    # 8. Volume profile confirms (0-1)
+    if vp_signal and vp_signal.get('signal'):
+        if vp_signal['signal'] == d_dir:
+            score += 1; reasons.append('VP confirms')
+
+    # 9. Tick micro-structure confirms (0-1)
+    if tick_data and tick_data.get('available'):
+        tick_bias = tick_data.get('bias', 0)
+        if (d_dir == 'BUY' and tick_bias >= 2) or (d_dir == 'SELL' and tick_bias <= -2):
+            score += 1; reasons.append('Tick flow confirms')
 
     return {'score': min(10, score), 'reasons': reasons, 'max': 10}
 
@@ -486,6 +504,7 @@ async def _autotrader_loop():
 
                 # V5: FORCE TRADE MODE — machine must always be in the market
                 # If AI says NO_TRADE but force_trade is on, derive direction from momentum
+                # BUT only force if indicators show real edge (≥4/5 agree)
                 if direction == 'NO_TRADE':
                     if _autotrader.get('force_trade'):
                         ind = result.get('ind', {})
@@ -501,9 +520,15 @@ async def _autotrader_loop():
                             1 if trend_slope > 0 else -1,
                             1 if momentum_score > 0 else -1,
                         ])
-                        direction = 'BUY' if score_buy > 0 else 'SELL'
-                        confidence = max(50, confidence) if confidence > 0 else 52
-                        print(f"  {asset_name}: FORCE {direction} (momentum score={score_buy}, AI said NO_TRADE)")
+                        # Only force if strong majority (4+ of 5 agree)
+                        if abs(score_buy) >= 3:
+                            direction = 'BUY' if score_buy > 0 else 'SELL'
+                            confidence = max(55, confidence) if confidence > 0 else 55
+                            print(f"  {asset_name}: FORCE {direction} (momentum score={score_buy}/5, conf={confidence}%)")
+                        else:
+                            print(f"  {asset_name}: SKIP (NO_TRADE + weak momentum score={score_buy}/5, need ±3)")
+                            cycle_summary.append(f"{asset_name}: SKIP (no edge, momentum {score_buy})")
+                            continue
                     else:
                         gate_r = result.get('gate_reason', 'no edge')
                         print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
@@ -575,16 +600,20 @@ async def _autotrader_loop():
                         f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
                     ))
 
-                # V5: Quality gate — if force_trade is off, respect floors
-                # If force_trade is on, reduce size instead of skipping
+                # V5: Quality gate — hard floor even in force_trade mode
+                # Absolute minimum: 55% confidence AND PQS ≥ 3
                 is_forced = False
-                if confidence < 55 or pqs_score < 5:
+                if confidence < 55 or pqs_score < 3:
+                    print(f"  {asset_name}: SKIP (conf={confidence}% PQS={pqs_score}/10 — below absolute minimum)")
+                    cycle_summary.append(f"{asset_name}: SKIP (quality too low)")
+                    continue
+                if confidence < 60 or pqs_score < 5:
                     if _autotrader.get('force_trade'):
                         is_forced = True
                         print(f"  {asset_name}: FORCE TRADE (conf={confidence}%, PQS={pqs_score}) — reduced size")
                     else:
-                        if confidence < 55:
-                            print(f"  {asset_name}: SKIP (confidence {confidence}% < 55%)")
+                        if confidence < 60:
+                            print(f"  {asset_name}: SKIP (confidence {confidence}% < 60%)")
                             cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
                             continue
                         if pqs_score < 5:
@@ -1446,7 +1475,9 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         decision['price_target_bear'] = None
 
     # ── PQS (A2) + Update gate stats (A5) ─────────────────────────────────
-    pqs = compute_pqs(quant_result, news_result, ml_result, ind, decision, mtf_data)
+    pqs = compute_pqs(quant_result, news_result, ml_result, ind, decision, mtf_data,
+                       funding_oi=funding_oi_data, order_flow=order_flow_data,
+                       vp_signal=vp_signal, tick_data=tick_data)
     slog(f"✓ PQS: {pqs['score']}/10 [{', '.join(pqs['reasons'][:3])}]")
 
     # Update adaptive gate stats from recent outcomes
@@ -2419,6 +2450,16 @@ async def forensic_log_get(limit: int = 200, asset: str = None, type: str = None
 async def forensic_export(asset: str = None):
     text = forensic_log.export_text(asset_filter=asset)
     return PlainTextResponse(content=text, media_type="text/plain")
+
+
+@app.get("/forensic/export.json")
+async def forensic_export_json(asset: str = None):
+    events = forensic_log.get_events(limit=5000, asset_filter=asset)
+    return {
+        "generated": int(time.time()),
+        "total_events": len(events),
+        "events": events,
+    }
 
 
 @app.post("/forensic/clear")
