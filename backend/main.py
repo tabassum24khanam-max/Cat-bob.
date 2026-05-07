@@ -502,40 +502,34 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # V5: FORCE TRADE MODE — machine must always be in the market
-                # If AI says NO_TRADE but force_trade is on, derive direction from momentum
-                # BUT only force if indicators show real edge (≥4/5 agree)
+                # ── ALWAYS TRADE: If AI says NO_TRADE, derive direction from indicators
                 if direction == 'NO_TRADE':
-                    if _autotrader.get('force_trade'):
-                        ind = result.get('ind', {})
-                        rsi = ind.get('rsi14', 50)
-                        macd_h = ind.get('macd_hist', 0)
-                        ema_diff = ind.get('ema_diff', 0)
-                        trend_slope = ind.get('trend_slope', 0)
-                        momentum_score = ind.get('momentum_score', 0)
-                        score_buy = sum([
-                            1 if rsi < 55 else -1,
-                            1 if macd_h > 0 else -1,
-                            1 if ema_diff > 0 else -1,
-                            1 if trend_slope > 0 else -1,
-                            1 if momentum_score > 0 else -1,
-                        ])
-                        # Only force if strong majority (4+ of 5 agree)
-                        if abs(score_buy) >= 3:
-                            direction = 'BUY' if score_buy > 0 else 'SELL'
-                            confidence = max(55, confidence) if confidence > 0 else 55
-                            print(f"  {asset_name}: FORCE {direction} (momentum score={score_buy}/5, conf={confidence}%)")
-                        else:
-                            print(f"  {asset_name}: SKIP (NO_TRADE + weak momentum score={score_buy}/5, need ±3)")
-                            cycle_summary.append(f"{asset_name}: SKIP (no edge, momentum {score_buy})")
-                            continue
-                    else:
-                        gate_r = result.get('gate_reason', 'no edge')
-                        print(f"  {asset_name}: SKIP (NO_TRADE — {gate_r})")
-                        cycle_summary.append(f"{asset_name}: SKIP (no edge)")
-                        continue
+                    ind_data = result.get('ind', {})
+                    rsi = ind_data.get('rsi14', 50)
+                    macd_h = ind_data.get('macd_hist', 0)
+                    dist_e20 = ind_data.get('dist_e20', 0)
+                    trend_slope = ind_data.get('trend_slope', 0)
+                    momentum = ind_data.get('momentum_score', 0)
+                    supertrend = ind_data.get('supertrend_bull', False)
+                    kalman = ind_data.get('kalman_trend', 0)
+                    score_buy = sum([
+                        1 if rsi < 55 else -1,
+                        1 if macd_h > 0 else -1,
+                        1 if dist_e20 > 0 else -1,
+                        1 if trend_slope > 0 else -1,
+                        1 if momentum > 0 else -1,
+                        1 if supertrend else -1,
+                        1 if kalman > 0 else -1,
+                    ])
+                    direction = 'BUY' if score_buy > 0 else 'SELL'
+                    confidence = max(55, confidence) if confidence > 0 else 55
+                    print(f"  {asset_name}: DERIVED {direction} (indicator score={score_buy}/7)")
 
-                # Check if already holding this asset
+                if not price or price <= 0:
+                    cycle_summary.append(f"{asset_name}: no price data")
+                    continue
+
+                # ── Check if already holding this asset
                 open_for_asset = [p for p in engine.positions.values()
                                   if p.status == 'open' and p.asset == asset_name]
 
@@ -543,49 +537,30 @@ async def _autotrader_loop():
                     current_pos = open_for_asset[0]
                     pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
 
-                    # Same direction — STAY, do nothing
+                    # Same direction — HOLD
                     if current_pos.direction == direction:
                         print(f"  {asset_name}: HOLD {current_pos.direction} (P&L: {pnl_pct:+.2f}%)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
                         continue
 
-                    # ── V4 ANTI-WHIPSAW PROTECTION ──────────────────────────
-                    # This is the #1 source of money loss. The bot flips every
-                    # cycle, eating small losses each time. Let trades breathe.
-
+                    # Opposite direction — check anti-whipsaw, then FLIP
                     hold_seconds = int(time.time()) - current_pos.entry_time
                     hold_minutes = hold_seconds / 60
 
-                    # Rule 1: MINIMUM HOLD TIME — never flip before 90 minutes
-                    min_hold_minutes = 90
-                    if hold_minutes < min_hold_minutes:
-                        print(f"  {asset_name}: HOLD (anti-whipsaw: only {hold_minutes:.0f}min, need {min_hold_minutes}min)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon to flip)")
+                    # Anti-whipsaw: minimum 60 minutes before flip
+                    if hold_minutes < 60:
+                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 60min)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon)")
                         continue
 
-                    # Rule 2: PROFITABLE POSITION PROTECTION
-                    # If we're meaningfully in profit, require strong signal to flip
-                    if pnl_pct > 1.0:
-                        if confidence < 65:
-                            print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.2f}%, won't flip for {confidence}% conf)")
-                            cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
-                            continue
-
-                    # Rule 3: CONFIDENCE DELTA — new signal must be stronger than entry
-                    original_conf = current_pos.entry_confidence or 55
-                    if confidence < original_conf + 8:
-                        print(f"  {asset_name}: HOLD (flip requires {original_conf+8}% conf, got {confidence}%)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip signal too weak)")
+                    # Profitable protection: if +2% profit, need strong signal
+                    if pnl_pct > 2.0 and confidence < 70:
+                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, keeping it)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
                         continue
 
-                    # Rule 4: LOSING BADLY — only allow flip if losing more than 0.5%
-                    if -0.5 < pnl_pct < 0:
-                        print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.2f}%, may recover)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
-                        continue
-
-                    # All anti-whipsaw checks passed — this is a justified flip
-                    print(f"  {asset_name}: FLIP APPROVED after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, new conf={confidence}%")
+                    # FLIP: close old, open new below
+                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%")
                     close_result = await engine.close_position(current_pos.id, price, 'flip')
                     old_pnl = close_result.get('pnl', 0)
                     _autotrader['trades_closed'] += 1
@@ -595,43 +570,16 @@ async def _autotrader_loop():
                         current_pos.entry_price, price, old_pnl, 0,
                         parent_id=cycle_id,
                     )
-                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} (closed P&L: ${old_pnl:+.2f})")
                     asyncio.create_task(send_message(
-                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | Closed P&L: ${old_pnl:+.2f} | New signal: {confidence}%"
+                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | P&L: ${old_pnl:+.2f} | New conf: {confidence}%"
                     ))
 
-                # V5: Quality gate — hard floor even in force_trade mode
-                # Absolute minimum: 55% confidence AND PQS ≥ 3
-                is_forced = False
-                if confidence < 55 or pqs_score < 3:
-                    print(f"  {asset_name}: SKIP (conf={confidence}% PQS={pqs_score}/10 — below absolute minimum)")
-                    cycle_summary.append(f"{asset_name}: SKIP (quality too low)")
-                    continue
-                if confidence < 60 or pqs_score < 5:
-                    if _autotrader.get('force_trade'):
-                        is_forced = True
-                        print(f"  {asset_name}: FORCE TRADE (conf={confidence}%, PQS={pqs_score}) — reduced size")
-                    else:
-                        if confidence < 60:
-                            print(f"  {asset_name}: SKIP (confidence {confidence}% < 60%)")
-                            cycle_summary.append(f"{asset_name}: SKIP (conf {confidence}% low)")
-                            continue
-                        if pqs_score < 5:
-                            print(f"  {asset_name}: SKIP (PQS {pqs_score}/10 < 5)")
-                            cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score} low)")
-                            continue
-
-                # Safety checks — max positions scales with how many assets are selected
-                open_count = len([p for p in engine.positions.values() if p.status == 'open'])
-                max_positions = max(10, len(_autotrader.get('assets', [])))
-                if open_count >= max_positions:
-                    cycle_summary.append(f"{asset_name}: max positions ({max_positions})")
-                    continue
-                if engine.daily_pnl <= -(engine._equity * 0.03):
-                    cycle_summary.append(f"{asset_name}: daily loss limit (3%)")
+                # ── Daily loss limit: only hard stop
+                if engine.daily_pnl <= -(engine._equity * 0.05):
+                    cycle_summary.append(f"{asset_name}: daily loss limit (5%)")
                     continue
 
-                # V4: ATR-based dynamic stop losses
+                # ── ATR-based dynamic stop losses
                 atr = result.get('ind', {}).get('atr', 0)
                 if atr and price:
                     atr_pct = (atr / price) * 100
@@ -643,7 +591,10 @@ async def _autotrader_loop():
                     tp_pct = min(stop_loss * 2, 4.0)
                     trail_pct = 1.5
 
-                # V4: Confidence-scaled position sizing
+                # ── Intelligence-scaled sizing:
+                # High confidence + high PQS = full size
+                # Low confidence or low PQS = small size (limits risk)
+                # Tight stop on weak signals (limits downside)
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
                     base_size = min(custom_size, engine._equity * 0.20)
@@ -662,13 +613,19 @@ async def _autotrader_loop():
                 if base_size < 10:
                     base_size = min(100, engine._equity * 0.05)
 
-                conf_scale = 0.5 + (confidence - 55) / 90.0
-                conf_scale = max(0.3, min(1.0, conf_scale))
-                # V5: Force-trade uses smaller size (risk protection when signal is weak)
-                if is_forced:
-                    conf_scale *= _autotrader.get('force_size_scale', 0.5)
-                size = round(base_size * conf_scale, 2)
-                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {conf_scale:.2f} {'FORCED' if is_forced else 'conf_scale'}) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                # Scale size by confidence AND PQS together
+                # conf 50% + PQS 2 = 0.25x size, conf 80% + PQS 8 = 1.0x size
+                conf_factor = max(0.3, min(1.0, (confidence - 45) / 50.0))
+                pqs_factor = max(0.4, min(1.0, pqs_score / 7.0))
+                size_scale = conf_factor * pqs_factor
+                size = round(base_size * size_scale, 2)
+
+                # Weak signals get tighter stops (limits loss per trade)
+                if confidence < 58 or pqs_score < 4:
+                    sl_pct = min(sl_pct, 1.2)  # tight stop
+                    tp_pct = min(tp_pct, 2.5)   # modest target
+
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {size_scale:.2f} [conf={conf_factor:.2f} pqs={pqs_factor:.2f}]) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
