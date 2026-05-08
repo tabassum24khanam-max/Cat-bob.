@@ -81,7 +81,38 @@ _autotrader = {
     'starting_equity': 10000,
     'force_trade': True,
     'force_size_scale': 0.5,
+    '_loop_running': False,
 }
+
+# Self-correction: per-asset accuracy tracker
+_asset_accuracy: Dict[str, dict] = {}
+
+def _update_asset_accuracy(asset: str, was_correct: bool, pnl_pct: float):
+    if asset not in _asset_accuracy:
+        _asset_accuracy[asset] = {'wins': 0, 'losses': 0, 'total': 0, 'streak': 0, 'pnl_sum': 0.0}
+    a = _asset_accuracy[asset]
+    a['total'] += 1
+    a['pnl_sum'] += pnl_pct
+    if was_correct:
+        a['wins'] += 1
+        a['streak'] = max(0, a['streak']) + 1
+    else:
+        a['losses'] += 1
+        a['streak'] = min(0, a['streak']) - 1
+
+def _get_asset_size_factor(asset: str) -> float:
+    """Self-correction: reduce size for assets that keep losing, increase for winners."""
+    a = _asset_accuracy.get(asset)
+    if not a or a['total'] < 3:
+        return 1.0
+    win_rate = a['wins'] / a['total']
+    if win_rate >= 0.6:
+        return 1.2
+    if win_rate >= 0.45:
+        return 1.0
+    if win_rate >= 0.3:
+        return 0.6
+    return 0.35
 
 # ─── Learning Memory ────────────────────────────────────────────────────────
 from typing import Dict
@@ -109,6 +140,7 @@ def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
         'lesson': lesson,
     })
     _trade_lessons[asset] = _trade_lessons[asset][-20:]
+    _update_asset_accuracy(asset, was_correct, pnl_pct)
 
     # V5: RL-Lite — update trust scores from trade outcome
     try:
@@ -336,12 +368,14 @@ def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
                  ind: dict, decision: dict, mtf_data: dict = None,
                  funding_oi: dict = None, order_flow: dict = None,
                  vp_signal: dict = None, tick_data: dict = None) -> dict:
-    """Prediction Quality Score 0-10 — measures signal confluence across all sources."""
+    """Prediction Quality Score 0-10 — measures signal confluence.
+    Redesigned: uses indicators available for ALL assets (stocks, crypto, futures)
+    so PQS is never stuck at 0-2 just because V5 crypto modules return unavailable."""
     score = 0
     reasons = []
     d_dir = decision.get('decision', '')
 
-    # 1. Agent agreement (0-2)
+    # 1. Agent agreement (0-2) — quant, news, ML all agree on direction
     q_dir = quant_result.get('direction', '').upper()
     n_sent = news_result.get('sentiment', '').upper()
     ml_dir = None
@@ -358,52 +392,73 @@ def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
     elif agree >= 2:
         score += 1; reasons.append('2/3 agents agree')
 
-    # 2. Regime clarity (0-1)
-    hmm = ind.get('hmm_probs', {})
-    max_prob = max(hmm.values()) if hmm else 0
-    if max_prob > 0.5:
-        score += 1; reasons.append(f'Clear regime ({max_prob:.0%})')
-
-    # 3. Trend confirmation — MACD + EMA agree with direction (0-1)
+    # 2. Trend alignment — MACD, EMA20, EMA50 all agree with direction (0-1)
     macd_agrees = (d_dir == 'BUY' and ind.get('macd_hist', 0) > 0) or \
                   (d_dir == 'SELL' and ind.get('macd_hist', 0) < 0)
-    ema_agrees = (d_dir == 'BUY' and ind.get('dist_e20', 0) > 0) or \
-                 (d_dir == 'SELL' and ind.get('dist_e20', 0) < 0)
-    if macd_agrees and ema_agrees:
-        score += 1; reasons.append('MACD+EMA aligned')
+    ema20_agrees = (d_dir == 'BUY' and ind.get('dist_e20', 0) > 0) or \
+                   (d_dir == 'SELL' and ind.get('dist_e20', 0) < 0)
+    ema50_agrees = (d_dir == 'BUY' and ind.get('dist_e50', 0) > 0) or \
+                   (d_dir == 'SELL' and ind.get('dist_e50', 0) < 0)
+    trend_count = sum([macd_agrees, ema20_agrees, ema50_agrees])
+    if trend_count >= 2:
+        score += 1; reasons.append(f'Trend aligned ({trend_count}/3)')
 
-    # 4. Volume confirmation (0-1)
-    if ind.get('vol_percentile', 50) > 50:
-        score += 1; reasons.append('Volume confirms')
+    # 3. RSI confirms (not overbought for BUY, not oversold for SELL) (0-1)
+    rsi = ind.get('rsi14', 50)
+    rsi_ok = (d_dir == 'BUY' and 30 < rsi < 68) or (d_dir == 'SELL' and 32 < rsi < 70)
+    if rsi_ok:
+        score += 1; reasons.append(f'RSI confirms ({rsi:.0f})')
 
-    # 5. Daily trend alignment (0-1)
+    # 4. Momentum score agrees with direction (0-1)
+    mom = ind.get('momentum_score', 0)
+    if (d_dir == 'BUY' and mom > 0) or (d_dir == 'SELL' and mom < 0):
+        score += 1; reasons.append(f'Momentum aligned ({mom:+.1f})')
+
+    # 5. Supertrend + Ichimoku agree (0-1)
+    st_agrees = (d_dir == 'BUY' and ind.get('supertrend_bull', False)) or \
+                (d_dir == 'SELL' and not ind.get('supertrend_bull', True))
+    ich_agrees = (d_dir == 'BUY' and ind.get('ich_bull', False)) or \
+                 (d_dir == 'SELL' and ind.get('ich_bear', False))
+    if st_agrees or ich_agrees:
+        score += 1; reasons.append('Supertrend/Ichimoku agrees')
+
+    # 6. Volume above average (0-1)
+    if ind.get('vol_percentile', 50) > 45:
+        score += 1; reasons.append('Volume active')
+
+    # 7. Regime clarity (0-1) — HMM has a clear dominant state
+    hmm = ind.get('hmm_probs', {})
+    max_prob = max(hmm.values()) if hmm else 0
+    if max_prob > 0.45:
+        score += 1; reasons.append(f'Clear regime ({max_prob:.0%})')
+
+    # 8. Daily timeframe alignment (0-1)
     if mtf_data:
         if (mtf_data.get('daily_bull') and d_dir == 'BUY') or \
            (mtf_data.get('daily_bear') and d_dir == 'SELL'):
             score += 1; reasons.append('Daily aligned')
 
-    # 6. Funding/OI confirms direction (0-1)
+    # 9. V5 bonus: if crypto modules available and confirm, add a point (0-1)
+    v5_confirms = 0
     if funding_oi and funding_oi.get('available'):
         foi_bias = funding_oi.get('bias', 0)
         if (d_dir == 'BUY' and foi_bias >= 2) or (d_dir == 'SELL' and foi_bias <= -2):
-            score += 1; reasons.append('Funding/OI confirms')
-
-    # 7. Order flow confirms direction (0-1)
+            v5_confirms += 1
     if order_flow and order_flow.get('available'):
         of_bias = order_flow.get('bias', 0)
         if (d_dir == 'BUY' and of_bias >= 2) or (d_dir == 'SELL' and of_bias <= -2):
-            score += 1; reasons.append('Order flow confirms')
-
-    # 8. Volume profile confirms (0-1)
-    if vp_signal and vp_signal.get('signal'):
-        if vp_signal['signal'] == d_dir:
-            score += 1; reasons.append('VP confirms')
-
-    # 9. Tick micro-structure confirms (0-1)
+            v5_confirms += 1
     if tick_data and tick_data.get('available'):
         tick_bias = tick_data.get('bias', 0)
         if (d_dir == 'BUY' and tick_bias >= 2) or (d_dir == 'SELL' and tick_bias <= -2):
-            score += 1; reasons.append('Tick flow confirms')
+            v5_confirms += 1
+    if v5_confirms >= 1:
+        score += 1; reasons.append(f'V5 confirms ({v5_confirms} sources)')
+
+    # 10. Kalman trend agrees (0-1)
+    kalman = ind.get('kalman_trend', 0)
+    if (d_dir == 'BUY' and kalman > 0) or (d_dir == 'SELL' and kalman < 0):
+        score += 1; reasons.append('Kalman trend agrees')
 
     return {'score': min(10, score), 'reasons': reasons, 'max': 10}
 
@@ -440,16 +495,20 @@ async def _continuous_scanner():
 
 async def _autotrader_loop():
     """The autonomous trading brain. Wakes up every interval, runs predictions, opens trades."""
+    if _autotrader['_loop_running']:
+        print("AUTOTRADER: Loop already running, refusing duplicate spawn")
+        return
+    _autotrader['_loop_running'] = True
     from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
     from telegram_bot import send_message
 
-    await asyncio.sleep(10)  # let everything initialize
+    await asyncio.sleep(10)
     engine = get_trading_engine()
 
     while True:
         if not _autotrader['enabled'] or not _autotrader['assets']:
-            await asyncio.sleep(10)
-            continue
+            _autotrader['_loop_running'] = False
+            return
 
         interval = max(10, _autotrader['interval_minutes']) * 60
         _autotrader['status'] = 'running'
@@ -543,24 +602,36 @@ async def _autotrader_loop():
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
                         continue
 
-                    # Opposite direction — check anti-whipsaw, then FLIP
+                    # Opposite direction — strict anti-whipsaw to stop flip losses
                     hold_seconds = int(time.time()) - current_pos.entry_time
                     hold_minutes = hold_seconds / 60
 
-                    # Anti-whipsaw: minimum 60 minutes before flip
-                    if hold_minutes < 60:
-                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 60min)")
+                    # Rule 1: minimum hold 90 minutes (flips cost money)
+                    if hold_minutes < 90:
+                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 90min)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon)")
                         continue
 
-                    # Profitable protection: if +2% profit, need strong signal
-                    if pnl_pct > 2.0 and confidence < 70:
-                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, keeping it)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}% protected)")
+                    # Rule 2: if profitable at all, don't flip unless very strong
+                    if pnl_pct > 0.5 and confidence < 72:
+                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, keeping)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}%)")
                         continue
 
-                    # FLIP: close old, open new below
-                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%")
+                    # Rule 3: if losing less than 1%, probably noise — hold
+                    if pnl_pct > -1.0:
+                        print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.1f}%, may recover)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
+                        continue
+
+                    # Rule 4: flip only if new signal PQS >= 5 (has real confluence)
+                    if pqs_score < 5:
+                        print(f"  {asset_name}: HOLD (flip needs PQS>=5, got {pqs_score})")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip PQS too low)")
+                        continue
+
+                    # All checks passed — justified flip (losing >1% + new PQS 5+ signal)
+                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, PQS={pqs_score}")
                     close_result = await engine.close_position(current_pos.id, price, 'flip')
                     old_pnl = close_result.get('pnl', 0)
                     _autotrader['trades_closed'] += 1
@@ -571,7 +642,7 @@ async def _autotrader_loop():
                         parent_id=cycle_id,
                     )
                     asyncio.create_task(send_message(
-                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | P&L: ${old_pnl:+.2f} | New conf: {confidence}%"
+                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | P&L: ${old_pnl:+.2f} | PQS: {pqs_score}"
                     ))
 
                 # ── Daily loss limit: only hard stop
@@ -591,13 +662,10 @@ async def _autotrader_loop():
                     tp_pct = min(stop_loss * 2, 4.0)
                     trail_pct = 1.5
 
-                # ── Intelligence-scaled sizing:
-                # High confidence + high PQS = full size
-                # Low confidence or low PQS = small size (limits risk)
-                # Tight stop on weak signals (limits downside)
+                # ── Position sizing: respect user's trade_size
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
-                    base_size = min(custom_size, engine._equity * 0.20)
+                    base_size = min(custom_size, engine._equity * 0.25)
                 else:
                     base_size = min(200, engine._equity * 0.05)
                     stats = _equity_tracker.get_stats()
@@ -613,19 +681,26 @@ async def _autotrader_loop():
                 if base_size < 10:
                     base_size = min(100, engine._equity * 0.05)
 
-                # Scale size by confidence AND PQS together
-                # conf 50% + PQS 2 = 0.25x size, conf 80% + PQS 8 = 1.0x size
-                conf_factor = max(0.3, min(1.0, (confidence - 45) / 50.0))
-                pqs_factor = max(0.4, min(1.0, pqs_score / 7.0))
-                size_scale = conf_factor * pqs_factor
-                size = round(base_size * size_scale, 2)
+                # Self-correction factor: shrink size for assets that keep losing
+                asset_factor = _get_asset_size_factor(asset_name)
+
+                # PQS-based scaling: gentle — user set a size, respect it
+                # PQS 0-3 = 0.7x, PQS 4-6 = 0.85x, PQS 7+ = 1.0x
+                if pqs_score >= 7:
+                    pqs_scale = 1.0
+                elif pqs_score >= 4:
+                    pqs_scale = 0.85
+                else:
+                    pqs_scale = 0.7
+
+                size = round(base_size * pqs_scale * asset_factor, 2)
 
                 # Weak signals get tighter stops (limits loss per trade)
-                if confidence < 58 or pqs_score < 4:
-                    sl_pct = min(sl_pct, 1.2)  # tight stop
-                    tp_pct = min(tp_pct, 2.5)   # modest target
+                if pqs_score < 4:
+                    sl_pct = min(sl_pct, 1.5)
+                    tp_pct = min(tp_pct, 3.0)
 
-                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x {size_scale:.2f} [conf={conf_factor:.2f} pqs={pqs_factor:.2f}]) SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={pqs_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
@@ -729,19 +804,21 @@ async def _trading_position_monitor():
                             pnl_pct = (cur_price - pos.entry_price) / pos.entry_price * 100
                         else:
                             pnl_pct = (pos.entry_price - cur_price) / pos.entry_price * 100
-                        # Close stale at 6h if flat (-1% to +1.5%) — frees the slot
-                        # Close stale at 10h regardless — slot must rotate
+                        # Close stale at 8h if losing — frees the slot
+                        # Close stale at 12h regardless — slot must rotate
                         should_close = False
                         reason = ''
-                        if 6 <= hold_hours < 10 and -1.0 < pnl_pct < 1.5:
+                        if 8 <= hold_hours < 12 and pnl_pct < -0.5:
                             should_close = True
-                            reason = f"flat {pnl_pct:+.2f}% after {hold_hours:.1f}h"
-                        elif hold_hours >= 10:
+                            reason = f"stale losing {pnl_pct:+.2f}% after {hold_hours:.1f}h"
+                        elif hold_hours >= 12:
                             should_close = True
                             reason = f"hard timeout {hold_hours:.1f}h ({pnl_pct:+.2f}%)"
                         if should_close:
                             close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
-                            print(f"Trading: stale timeout {pos.asset} — {reason} — P&L: {close_result.get('pnl')}")
+                            stale_pnl = close_result.get('pnl', 0)
+                            record_lesson(pos.asset, pos.direction, pos.entry_price, cur_price, stale_pnl, 'stale_timeout')
+                            print(f"Trading: stale timeout {pos.asset} — {reason} — P&L: {stale_pnl}")
                     except Exception:
                         continue
         except Exception as e:
@@ -2299,6 +2376,11 @@ async def autotrader_start(req: AutotraderStartRequest):
     valid_assets = [a for a in req.assets if a in ALL_ASSETS]
     if not valid_assets:
         return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
+    # Stop any existing loop before starting a new one
+    if _autotrader['_loop_running']:
+        _autotrader['enabled'] = False
+        await asyncio.sleep(1)
+        _autotrader['_loop_running'] = False
     _autotrader['enabled'] = True
     _autotrader['assets'] = valid_assets
     _autotrader['interval_minutes'] = max(10, req.interval_minutes)
@@ -2330,6 +2412,7 @@ async def autotrader_start(req: AutotraderStartRequest):
 async def autotrader_stop():
     _autotrader['enabled'] = False
     _autotrader['status'] = 'stopped'
+    _autotrader['_loop_running'] = False
     engine = get_trading_engine()
     open_positions = engine.get_positions('open')
     from telegram_bot import send_message
@@ -2387,6 +2470,11 @@ async def autotrader_status():
         "cycle_log": _autotrader['cycle_log'][-20:],
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "all_positions": engine.get_positions(),
+        "self_correction": {asset: {
+            'wins': a['wins'], 'losses': a['losses'], 'total': a['total'],
+            'win_rate': round(a['wins'] / a['total'] * 100, 1) if a['total'] > 0 else 0,
+            'streak': a['streak'], 'size_factor': _get_asset_size_factor(asset),
+        } for asset, a in _asset_accuracy.items()},
     }
 
 
