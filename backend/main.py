@@ -85,7 +85,7 @@ _autotrader = {
 }
 
 # Self-correction: per-asset accuracy tracker
-_asset_accuracy: Dict[str, dict] = {}
+_asset_accuracy: dict[str, dict] = {}
 
 def _update_asset_accuracy(asset: str, was_correct: bool, pnl_pct: float):
     if asset not in _asset_accuracy:
