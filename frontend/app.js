@@ -19,6 +19,9 @@ let lastResult = null;
 let _predicting = false;
 let _alertsCache = [];
 let useR1 = localStorage.getItem('um_use_r1') !== 'false'; // default ON
+let modelMode = localStorage.getItem('um_model_mode') || 'r1'; // 'r1', 'v4', 'local'
+let localUrl = localStorage.getItem('um_local_url') || 'http://localhost:11434';
+let localModel = localStorage.getItem('um_local_model') || 'qwen2.5:7b';
 let _atInterval = 30;
 let _atSelectedAssets = JSON.parse(localStorage.getItem('um_at_assets') || '["BTC","ETH","SOL"]');
 let _atRunning = false;
@@ -53,17 +56,29 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 function toggleR1() {
-  useR1 = !useR1;
+  const modes = ['r1', 'v4', 'local'];
+  const idx = modes.indexOf(modelMode);
+  modelMode = modes[(idx + 1) % modes.length];
+  useR1 = modelMode === 'r1';
+  localStorage.setItem('um_model_mode', modelMode);
   localStorage.setItem('um_use_r1', useR1 ? 'true' : 'false');
   syncR1Toggle();
-  showToast(useR1 ? 'R1 ON — Deep reasoning (slower)' : 'R1 OFF — V4 fast mode');
+  const labels = {r1: 'R1 — Deep reasoning (cloud)', v4: 'V4 — Fast mode (cloud)', local: 'LOCAL — Ollama on your PC'};
+  showToast(labels[modelMode]);
+  if (modelMode === 'local') {
+    const url = prompt('Local model URL (Ollama default):', localUrl);
+    if (url) { localUrl = url; localStorage.setItem('um_local_url', localUrl); }
+    const model = prompt('Model name:', localModel);
+    if (model) { localModel = model; localStorage.setItem('um_local_model', localModel); }
+  }
 }
 
 function syncR1Toggle() {
   const el = document.getElementById('r1-toggle');
   const lbl = document.getElementById('r1-label');
-  if (el) el.className = `r1-toggle ${useR1 ? 'on' : ''}`;
-  if (lbl) lbl.textContent = useR1 ? 'R1' : 'V4';
+  const modeClass = modelMode === 'r1' ? 'on' : modelMode === 'local' ? 'on local' : '';
+  if (el) el.className = `r1-toggle ${modeClass}`;
+  if (lbl) lbl.textContent = modelMode === 'r1' ? 'R1' : modelMode === 'v4' ? 'V4' : 'LCL';
 }
 
 async function checkBackend() {
@@ -72,7 +87,8 @@ async function checkBackend() {
     const d = await r.json();
     document.getElementById('backend-dot').className = 'backend-dot ok';
     document.getElementById('backend-txt').textContent = `Backend v${d.version} · ${backendUrl}`;
-    setDot('on', dsKey ? (useR1 ? 'READY — R1 mode' : 'READY — V4 fast') : 'READY');
+    const modeStr = modelMode === 'local' ? `READY — LOCAL (${localModel})` : (useR1 ? 'READY — R1 mode' : 'READY — V4 fast');
+    setDot('on', dsKey ? modeStr : (modelMode === 'local' ? modeStr : 'READY'));
     return true;
   } catch {
     document.getElementById('backend-dot').className = 'backend-dot err';
@@ -262,14 +278,14 @@ async function predict() {
 
   const t1 = setTimeout(() => { setAgentStep(1,'running'); document.getElementById('lstep').textContent = '📐 Quant: 30+ indicators...'; }, 1000);
   const t2 = setTimeout(() => { setAgentStep(1,'done'); setAgentStep(2,'running'); document.getElementById('lstep').textContent = '📰 News: scanning 10+ feeds...'; }, 9000);
-  const modelLabel = useR1 ? 'DeepSeek R1' : 'DeepSeek V4';
-  const t3 = setTimeout(() => { setAgentStep(2,'done'); setAgentStep(3,'running'); document.getElementById('lstep').textContent = `🧠 ${modelLabel} deciding...`; }, useR1 ? 20000 : 8000);
+  const modelLabel = modelMode === 'local' ? `Local (${localModel})` : (useR1 ? 'DeepSeek R1' : 'DeepSeek V4');
+  const t3 = setTimeout(() => { setAgentStep(2,'done'); setAgentStep(3,'running'); document.getElementById('lstep').textContent = `🧠 ${modelLabel} deciding...`; }, modelMode === 'local' ? 12000 : (useR1 ? 20000 : 8000));
 
   try {
     const r = await fetch(`${backendUrl}/predict`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null, use_r1:useR1 }),
-      signal: AbortSignal.timeout(useR1 ? 680000 : 120000)
+      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null, use_r1:useR1, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel }),
+      signal: AbortSignal.timeout(modelMode === 'local' ? 300000 : (useR1 ? 680000 : 120000))
     });
     [t1,t2,t3].forEach(clearTimeout);
 

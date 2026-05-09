@@ -25,9 +25,12 @@ async def run_decision_agent(
     ds_key: str,
     api_key: str,
     use_r1: bool = True,
-    ml_result: dict = None
+    ml_result: dict = None,
+    use_local: bool = False,
+    local_url: str = "http://localhost:11434",
+    local_model: str = "qwen2.5:7b",
 ) -> dict:
-    """Call R1 (or GPT-4o as fallback) for final decision."""
+    """Call R1, V4, GPT-4o, or LOCAL model (via Ollama) for final decision."""
 
     max_pct = mc.get('max_pct', 3 if horizon <= 4 else 8 if horizon <= 24 else 15)
     price_min = ind['cur'] * (1 - max_pct / 100)
@@ -117,8 +120,46 @@ DECISION RULES:
 Respond with ONLY this JSON:
 {{"decision":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<final 0-100>,"agent_agreement":"<agree|partial|conflict>","price_target":<realistic target>,"price_target_bull":<optimistic>,"price_target_bear":<pessimistic>,"predicted_path":[<5 prices zigzag to target>],"volatility":"<low|moderate|high>","insight":"<3-4 sentences: what quant found + what news found + historical evidence + final reasoning>","primary_reason":"<one clear sentence: the single most decisive factor>"}}"""
 
-    # Try R1 with retry — R1 is the primary decision maker
+    # Try LOCAL model first if requested (Ollama / LM Studio / any OpenAI-compatible server)
     global _last_r1_error
+    if use_local:
+        try:
+            print(f"Using LOCAL model ({local_model}) at {local_url} for {asset}...")
+            async with httpx.AsyncClient(timeout=httpx.Timeout(
+                connect=10.0, read=300.0, write=10.0, pool=10.0
+            )) as client:
+                resp = await client.post(
+                    f"{local_url}/v1/chat/completions",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": local_model,
+                        "max_tokens": 3000,
+                        "temperature": 0.3,
+                        "messages": [
+                            {"role": "system", "content": "You are an expert trading AI. Respond ONLY with valid JSON. No markdown, no explanation, just the JSON object."},
+                            {"role": "user", "content": prompt}
+                        ]
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data['choices'][0]['message'].get('content', '')
+                    result = _extract_json(text)
+                    if result:
+                        result['_model'] = f'local-{local_model}'
+                        print(f"LOCAL success for {asset}: {result.get('decision')} {result.get('confidence')}%")
+                        return result
+                    else:
+                        print(f"LOCAL: no valid JSON in response. Preview: {text[:200]}")
+                else:
+                    print(f"LOCAL HTTP {resp.status_code}: {resp.text[:200]}")
+        except httpx.ConnectError:
+            print(f"LOCAL model not running at {local_url} — is Ollama started?")
+        except Exception as e:
+            print(f"LOCAL model failed: {e}")
+        print("LOCAL failed, falling back to cloud models...")
+
+    # Try R1 with retry — R1 is the primary decision maker
     if use_r1 and ds_key:
         max_retries = 3
         for attempt in range(1, max_retries + 1):
