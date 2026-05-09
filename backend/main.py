@@ -82,6 +82,9 @@ _autotrader = {
     'force_trade': True,
     'force_size_scale': 0.5,
     '_loop_running': False,
+    'use_local': False,
+    'local_url': 'http://localhost:11434',
+    'local_model': 'qwen2.5:7b',
 }
 
 # Self-correction: per-asset accuracy tracker
@@ -546,7 +549,11 @@ async def _autotrader_loop():
                 req = PredictRequest(
                     asset=asset_name, horizon=2,
                     api_key=api_key, ds_key=ds_key,
-                    use_r1=True, bot_mode=True,
+                    use_r1=not _autotrader.get('use_local', False),
+                    bot_mode=True,
+                    use_local=_autotrader.get('use_local', False),
+                    local_url=_autotrader.get('local_url', 'http://localhost:11434'),
+                    local_model=_autotrader.get('local_model', 'qwen2.5:7b'),
                 )
 
                 start_time = time.time()
@@ -872,7 +879,24 @@ async def serve_bot():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "4.0", "ts": int(time.time())}
+    return {"status": "ok", "version": "5.0", "ts": int(time.time())}
+
+
+@app.get("/ollama/status")
+async def ollama_status(url: str = "http://localhost:11434"):
+    """Check if Ollama is running and list available models."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{url}/api/tags")
+            if resp.status_code == 200:
+                models = [m['name'] for m in resp.json().get('models', [])]
+                return {"ok": True, "models": models, "url": url}
+            return {"ok": False, "error": f"HTTP {resp.status_code}"}
+    except httpx.ConnectError:
+        return {"ok": False, "error": "Ollama not running. Start it with: ollama serve"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:100]}
 
 
 @app.post("/predict")
@@ -2376,6 +2400,9 @@ class AutotraderStartRequest(BaseModel):
     trade_size: float = 0
     starting_equity: float = 10000
     force_trade: bool = True
+    use_local: bool = False
+    local_url: str = "http://localhost:11434"
+    local_model: str = "qwen2.5:7b"
 
 
 @app.post("/autotrader/start")
@@ -2394,6 +2421,9 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['trade_size'] = max(0, req.trade_size)
     _autotrader['starting_equity'] = max(100, req.starting_equity)
     _autotrader['force_trade'] = req.force_trade
+    _autotrader['use_local'] = req.use_local
+    _autotrader['local_url'] = req.local_url
+    _autotrader['local_model'] = req.local_model
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
