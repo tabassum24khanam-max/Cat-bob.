@@ -1261,7 +1261,7 @@ async function toggleAutotrader() {
       const r = await fetch(`${backendUrl}/autotrader/start`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval }),
+        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel }),
       });
       const d = await r.json();
       if (d.ok) {

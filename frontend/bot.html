@@ -204,6 +204,9 @@ async function bToggle() {
         interval_minutes: bInterval,
         trade_size: tradeSize,
         starting_equity: startEq,
+        use_local: localStorage.getItem('um_model_mode') === 'local',
+        local_url: localStorage.getItem('um_local_url') || 'http://localhost:11434',
+        local_model: localStorage.getItem('um_local_model') || 'qwen2.5:7b',
       }),
     });
     const d = await r.json();
