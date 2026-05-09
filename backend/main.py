@@ -199,6 +199,9 @@ class PredictRequest(BaseModel):
     worker_url: Optional[str] = None
     use_r1: Optional[bool] = True
     bot_mode: Optional[bool] = False
+    use_local: Optional[bool] = False
+    local_url: Optional[str] = "http://localhost:11434"
+    local_model: Optional[str] = "qwen2.5:7b"
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -1104,14 +1107,18 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     )
     slog(f"✓ News: {news_result.get('sentiment')} ({news_result.get('sentiment_score',0):+d}) — {news_result.get('reasoning','')[:60]}")
 
-    # ── Agent 3: Decision (R1) ───────────────────────────────────────────
-    use_r1 = bool(req.ds_key) and (req.use_r1 is not False)
-    model_name = 'R1' if use_r1 else ('V4' if req.ds_key else 'GPT-4o')
+    # ── Agent 3: Decision (R1 / V4 / LOCAL) ────────────────────────────
+    use_local = bool(req.use_local)
+    use_r1 = bool(req.ds_key) and (req.use_r1 is not False) and not use_local
+    model_name = 'LOCAL' if use_local else ('R1' if use_r1 else ('V4' if req.ds_key else 'GPT-4o'))
     slog(f"🧠 Agent 3 ({model_name}) making final decision...")
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
         mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
-        ml_result=ml_result
+        ml_result=ml_result,
+        use_local=use_local,
+        local_url=req.local_url or "http://localhost:11434",
+        local_model=req.local_model or "qwen2.5:7b",
     )
     model_used = decision.get('_model', 'unknown')
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
