@@ -572,8 +572,24 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
+                # ── FIX 1: ADX Hard Gate — no trend = no edge = skip
+                adx = result.get('ind', {}).get('adx', 0)
+                adx_scale = 1.0
+                if adx < 20:
+                    print(f"  {asset_name}: SKIP — ADX {adx:.1f} < 20 (no trend, noise market)")
+                    cycle_summary.append(f"{asset_name}: SKIP (ADX {adx:.1f} < 20)")
+                    continue
+                elif adx < 25:
+                    adx_scale = 0.5
+                    print(f"  {asset_name}: ADX {adx:.1f} weak trend — half size")
+
+                # ── FIX 2: PQS Minimum Floor — no confluence = skip
+                if pqs_score < 3:
+                    print(f"  {asset_name}: SKIP — PQS {pqs_score}/10 too low (no confluence)")
+                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score}/10 < 3)")
+                    continue
+
                 # ── ALWAYS TRADE: If AI says NO_TRADE, use AI's original direction
-                # (the direction it analyzed BEFORE gates killed it)
                 if direction == 'NO_TRADE':
                     orig = result.get('original_decision')
                     quant_dir = result.get('quant', {}).get('direction', '').upper()
@@ -671,17 +687,17 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: daily loss limit (5%)")
                     continue
 
-                # ── ATR-based dynamic stop losses
+                # ── FIX 3: R:R always 3:1 — ATR-based tight stops
                 atr = result.get('ind', {}).get('atr', 0)
                 if atr and price:
                     atr_pct = (atr / price) * 100
-                    sl_pct = max(0.8, min(3.0, atr_pct * 2.0))
-                    tp_pct = max(1.5, min(6.0, atr_pct * 3.5))
-                    trail_pct = max(0.5, min(2.5, atr_pct * 1.5))
+                    sl_pct = max(0.5, min(2.0, atr_pct * 1.5))
+                    tp_pct = sl_pct * 3.0
+                    trail_pct = max(0.5, min(2.0, atr_pct * 1.0))
                 else:
-                    sl_pct = min(stop_loss, 2.0)
-                    tp_pct = min(stop_loss * 2, 4.0)
-                    trail_pct = 1.5
+                    sl_pct = min(stop_loss, 1.5)
+                    tp_pct = sl_pct * 3.0
+                    trail_pct = 1.0
 
                 # ── Position sizing: respect user's trade_size
                 custom_size = _autotrader.get('trade_size', 0)
@@ -705,21 +721,20 @@ async def _autotrader_loop():
                 # Self-correction factor: shrink size for assets that keep losing
                 asset_factor = _get_asset_size_factor(asset_name)
 
-                # PQS-based scaling: gentle — user set a size, respect it
-                # PQS 0-3 = 0.7x, PQS 4-6 = 0.85x, PQS 7+ = 1.0x
+                # PQS sizing (PQS < 3 already skipped above)
                 if pqs_score >= 7:
                     pqs_scale = 1.0
-                elif pqs_score >= 4:
-                    pqs_scale = 0.85
+                elif pqs_score >= 5:
+                    pqs_scale = 0.75
                 else:
-                    pqs_scale = 0.7
+                    pqs_scale = 0.5
 
-                size = round(base_size * pqs_scale * asset_factor, 2)
+                size = round(base_size * pqs_scale * asset_factor * adx_scale, 2)
 
-                # Weak signals get tighter stops (limits loss per trade)
-                if pqs_score < 4:
-                    sl_pct = min(sl_pct, 1.5)
-                    tp_pct = min(tp_pct, 3.0)
+                # PQS 3-4: tighter stops but maintain 3:1 ratio
+                if pqs_score < 5:
+                    sl_pct = min(sl_pct, 1.2)
+                    tp_pct = sl_pct * 3.0
 
                 print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={pqs_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
