@@ -572,22 +572,27 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # ── FIX 1: ADX Hard Gate — no trend = no edge = skip
+                # ── ADX Sizing Factor — weak/no trend = smaller position, never skip
                 adx = result.get('ind', {}).get('adx', 0)
-                adx_scale = 1.0
-                if adx < 20:
-                    print(f"  {asset_name}: SKIP — ADX {adx:.1f} < 20 (no trend, noise market)")
-                    cycle_summary.append(f"{asset_name}: SKIP (ADX {adx:.1f} < 20)")
-                    continue
-                elif adx < 25:
-                    adx_scale = 0.5
-                    print(f"  {asset_name}: ADX {adx:.1f} weak trend — half size")
+                if adx >= 25:
+                    adx_scale = 1.0
+                elif adx >= 15:
+                    adx_scale = 0.6
+                    print(f"  {asset_name}: ADX {adx:.1f} weak trend — 60% size")
+                else:
+                    adx_scale = 0.4
+                    print(f"  {asset_name}: ADX {adx:.1f} very weak — 40% size")
 
-                # ── FIX 2: PQS Minimum Floor — no confluence = skip
-                if pqs_score < 3:
-                    print(f"  {asset_name}: SKIP — PQS {pqs_score}/10 too low (no confluence)")
-                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score}/10 < 3)")
-                    continue
+                # ── PQS Sizing Factor — low quality = smaller position, never skip
+                if pqs_score >= 7:
+                    pqs_scale = 1.0
+                elif pqs_score >= 5:
+                    pqs_scale = 0.75
+                elif pqs_score >= 3:
+                    pqs_scale = 0.5
+                else:
+                    pqs_scale = 0.35
+                    print(f"  {asset_name}: PQS {pqs_score}/10 low — 35% size")
 
                 # ── ALWAYS TRADE: If AI says NO_TRADE, use AI's original direction
                 if direction == 'NO_TRADE':
@@ -721,22 +726,15 @@ async def _autotrader_loop():
                 # Self-correction factor: shrink size for assets that keep losing
                 asset_factor = _get_asset_size_factor(asset_name)
 
-                # PQS sizing (PQS < 3 already skipped above)
-                if pqs_score >= 7:
-                    pqs_scale = 1.0
-                elif pqs_score >= 5:
-                    pqs_scale = 0.75
-                else:
-                    pqs_scale = 0.5
-
+                # pqs_scale and adx_scale already computed above
                 size = round(base_size * pqs_scale * asset_factor * adx_scale, 2)
 
-                # PQS 3-4: tighter stops but maintain 3:1 ratio
+                # Low PQS: tighter stops but maintain 3:1 ratio
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
                     tp_pct = sl_pct * 3.0
 
-                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={pqs_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={pqs_scale:.2f} x adx={adx_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} ADX={adx:.0f} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
@@ -2444,13 +2442,23 @@ async def autotrader_status():
     wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
     total = len(trade_log)
     win_rate = (wins / total * 100) if total > 0 else 0
+    now = int(time.time())
+    last = _autotrader['last_cycle']
+    interval_sec = _autotrader['interval_minutes'] * 60
+    if _autotrader['enabled'] and last > 0:
+        next_at = last + interval_sec
+        secs_left = max(0, next_at - now)
+    else:
+        secs_left = 0
+
     return {
         "enabled": _autotrader['enabled'], "status": _autotrader['status'],
         "assets": _autotrader['assets'], "interval_minutes": _autotrader['interval_minutes'],
         "trade_size": _autotrader.get('trade_size', 0),
         "total_cycles": _autotrader['total_cycles'],
         "trades_opened": _autotrader['trades_opened'],
-        "last_cycle": _autotrader['last_cycle'],
+        "last_cycle": last,
+        "seconds_until_next": secs_left,
         "heartbeat": hb, "open_positions": open_positions,
         "recent_trades": trade_log, "win_rate": round(win_rate, 1),
         "cycle_log": _autotrader['cycle_log'][-20:],
