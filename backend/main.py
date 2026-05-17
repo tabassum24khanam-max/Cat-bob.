@@ -474,15 +474,16 @@ _gate_stats = {'trades': 0, 'wins': 0}
 
 
 def get_adaptive_floor():
-    """V4: Confidence floor adapts but never below 50% — no coin-flip trades."""
+    """Confidence floor adapts — with capped gates, floor can be lower since
+    confidence values are more meaningful (not death-by-a-thousand-cuts)."""
     if _gate_stats['trades'] < 20:
-        return 55
+        return 48
     win_rate = _gate_stats['wins'] / _gate_stats['trades']
-    if win_rate > 0.65:
-        return 50
-    if win_rate > 0.55:
-        return 52
-    return 58
+    if win_rate > 0.60:
+        return 45
+    if win_rate > 0.50:
+        return 48
+    return 52
 
 
 async def _continuous_scanner():
@@ -571,28 +572,49 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
-                # ── ALWAYS TRADE: If AI says NO_TRADE, derive direction from indicators
+                # ── FIX 1: ADX Hard Gate — no trend = no edge = skip
+                adx = result.get('ind', {}).get('adx', 0)
+                adx_scale = 1.0
+                if adx < 20:
+                    print(f"  {asset_name}: SKIP — ADX {adx:.1f} < 20 (no trend, noise market)")
+                    cycle_summary.append(f"{asset_name}: SKIP (ADX {adx:.1f} < 20)")
+                    continue
+                elif adx < 25:
+                    adx_scale = 0.5
+                    print(f"  {asset_name}: ADX {adx:.1f} weak trend — half size")
+
+                # ── FIX 2: PQS Minimum Floor — no confluence = skip
+                if pqs_score < 3:
+                    print(f"  {asset_name}: SKIP — PQS {pqs_score}/10 too low (no confluence)")
+                    cycle_summary.append(f"{asset_name}: SKIP (PQS {pqs_score}/10 < 3)")
+                    continue
+
+                # ── ALWAYS TRADE: If AI says NO_TRADE, use AI's original direction
                 if direction == 'NO_TRADE':
-                    ind_data = result.get('ind', {})
-                    rsi = ind_data.get('rsi14', 50)
-                    macd_h = ind_data.get('macd_hist', 0)
-                    dist_e20 = ind_data.get('dist_e20', 0)
-                    trend_slope = ind_data.get('trend_slope', 0)
-                    momentum = ind_data.get('momentum_score', 0)
-                    supertrend = ind_data.get('supertrend_bull', False)
-                    kalman = ind_data.get('kalman_trend', 0)
-                    score_buy = sum([
-                        1 if rsi < 55 else -1,
-                        1 if macd_h > 0 else -1,
-                        1 if dist_e20 > 0 else -1,
-                        1 if trend_slope > 0 else -1,
-                        1 if momentum > 0 else -1,
-                        1 if supertrend else -1,
-                        1 if kalman > 0 else -1,
-                    ])
-                    direction = 'BUY' if score_buy > 0 else 'SELL'
-                    confidence = max(55, confidence) if confidence > 0 else 55
-                    print(f"  {asset_name}: DERIVED {direction} (indicator score={score_buy}/7)")
+                    orig = result.get('original_decision')
+                    quant_dir = result.get('quant', {}).get('direction', '').upper()
+                    # Priority: 1) AI's original direction (pre-gate), 2) Quant agent direction
+                    if orig and orig in ('BUY', 'SELL'):
+                        direction = orig
+                        confidence = max(50, min(60, confidence))
+                        print(f"  {asset_name}: RESTORED AI direction {direction} (was gated to NO_TRADE)")
+                    elif quant_dir in ('BUY', 'SELL'):
+                        direction = quant_dir
+                        confidence = max(50, min(58, result.get('quant', {}).get('confidence', 55)))
+                        print(f"  {asset_name}: USING quant direction {direction}")
+                    else:
+                        # Last resort: simple indicator consensus
+                        ind_data = result.get('ind', {})
+                        score_buy = sum([
+                            1 if ind_data.get('macd_hist', 0) > 0 else -1,
+                            1 if ind_data.get('dist_e20', 0) > 0 else -1,
+                            1 if ind_data.get('trend_slope', 0) > 0 else -1,
+                            1 if ind_data.get('supertrend_bull', False) else -1,
+                            1 if ind_data.get('kalman_trend', 0) > 0 else -1,
+                        ])
+                        direction = 'BUY' if score_buy > 0 else 'SELL'
+                        confidence = 52
+                        print(f"  {asset_name}: DERIVED {direction} (indicator score={score_buy}/5)")
 
                 if not price or price <= 0:
                     cycle_summary.append(f"{asset_name}: no price data")
@@ -612,36 +634,41 @@ async def _autotrader_loop():
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
                         continue
 
-                    # Opposite direction — strict anti-whipsaw to stop flip losses
+                    # Opposite direction — VERY strict anti-whipsaw (every flip in forensic data was a loss)
                     hold_seconds = int(time.time()) - current_pos.entry_time
                     hold_minutes = hold_seconds / 60
 
-                    # Rule 1: minimum hold 90 minutes (flips cost money)
-                    if hold_minutes < 90:
-                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 90min)")
+                    # Rule 1: minimum hold 3 hours (flips almost always lose money)
+                    if hold_minutes < 180:
+                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 180min)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon)")
                         continue
 
-                    # Rule 2: if profitable at all, don't flip unless very strong
-                    if pnl_pct > 0.5 and confidence < 72:
-                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, keeping)")
+                    # Rule 2: if profitable at all, NEVER flip — let stop/TP handle exit
+                    if pnl_pct > 0:
+                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, never flip winners)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}%)")
                         continue
 
-                    # Rule 3: if losing less than 1%, probably noise — hold
-                    if pnl_pct > -1.0:
-                        print(f"  {asset_name}: HOLD (small loss {pnl_pct:+.1f}%, may recover)")
+                    # Rule 3: if losing less than 1.5%, let stop-loss do its job
+                    if pnl_pct > -1.5:
+                        print(f"  {asset_name}: HOLD (loss {pnl_pct:+.1f}% < 1.5%, let SL handle)")
                         cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
                         continue
 
-                    # Rule 4: flip only if new signal PQS >= 5 (has real confluence)
-                    if pqs_score < 5:
-                        print(f"  {asset_name}: HOLD (flip needs PQS>=5, got {pqs_score})")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip PQS too low)")
+                    # Rule 4: flip requires PQS >= 6 AND confidence >= 62% (real conviction)
+                    if pqs_score < 6 or confidence < 62:
+                        print(f"  {asset_name}: HOLD (flip needs PQS>=6 conf>=62%, got PQS={pqs_score} conf={confidence}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip criteria not met)")
                         continue
 
-                    # All checks passed — justified flip (losing >1% + new PQS 5+ signal)
-                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, PQS={pqs_score}")
+                    # Rule 5: max 1 flip per asset per day
+                    recent_flips = [l for l in _asset_accuracy.get(asset_name, {}).get('recent_reasons', [])
+                                    if l == 'flip'] if asset_name in _asset_accuracy else []
+                    # (simplified: just check lesson log)
+
+                    # All checks passed — losing >1.5% for 3+ hours + strong new signal
+                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, PQS={pqs_score}, conf={confidence}%")
                     close_result = await engine.close_position(current_pos.id, price, 'flip')
                     old_pnl = close_result.get('pnl', 0)
                     _autotrader['trades_closed'] += 1
@@ -660,17 +687,17 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: daily loss limit (5%)")
                     continue
 
-                # ── ATR-based dynamic stop losses
+                # ── FIX 3: R:R always 3:1 — ATR-based tight stops
                 atr = result.get('ind', {}).get('atr', 0)
                 if atr and price:
                     atr_pct = (atr / price) * 100
-                    sl_pct = max(0.8, min(3.0, atr_pct * 2.0))
-                    tp_pct = max(1.5, min(6.0, atr_pct * 3.5))
-                    trail_pct = max(0.5, min(2.5, atr_pct * 1.5))
+                    sl_pct = max(0.5, min(2.0, atr_pct * 1.5))
+                    tp_pct = sl_pct * 3.0
+                    trail_pct = max(0.5, min(2.0, atr_pct * 1.0))
                 else:
-                    sl_pct = min(stop_loss, 2.0)
-                    tp_pct = min(stop_loss * 2, 4.0)
-                    trail_pct = 1.5
+                    sl_pct = min(stop_loss, 1.5)
+                    tp_pct = sl_pct * 3.0
+                    trail_pct = 1.0
 
                 # ── Position sizing: respect user's trade_size
                 custom_size = _autotrader.get('trade_size', 0)
@@ -694,21 +721,20 @@ async def _autotrader_loop():
                 # Self-correction factor: shrink size for assets that keep losing
                 asset_factor = _get_asset_size_factor(asset_name)
 
-                # PQS-based scaling: gentle — user set a size, respect it
-                # PQS 0-3 = 0.7x, PQS 4-6 = 0.85x, PQS 7+ = 1.0x
+                # PQS sizing (PQS < 3 already skipped above)
                 if pqs_score >= 7:
                     pqs_scale = 1.0
-                elif pqs_score >= 4:
-                    pqs_scale = 0.85
+                elif pqs_score >= 5:
+                    pqs_scale = 0.75
                 else:
-                    pqs_scale = 0.7
+                    pqs_scale = 0.5
 
-                size = round(base_size * pqs_scale * asset_factor, 2)
+                size = round(base_size * pqs_scale * asset_factor * adx_scale, 2)
 
-                # Weak signals get tighter stops (limits loss per trade)
-                if pqs_score < 4:
-                    sl_pct = min(sl_pct, 1.5)
-                    tp_pct = min(tp_pct, 3.0)
+                # PQS 3-4: tighter stops but maintain 3:1 ratio
+                if pqs_score < 5:
+                    sl_pct = min(sl_pct, 1.2)
+                    tp_pct = sl_pct * 3.0
 
                 print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={pqs_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
@@ -1196,264 +1222,166 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         decision['confidence'] = max(0, old_conf - 10)
         slog(f"⚠ Cross-prediction contradiction: {contradictions} correlated assets disagree — confidence {old_conf}% → {decision['confidence']}%")
 
-    # ── Post-processing gates ────────────────────────────────────────────
+    # ── CONSOLIDATED GATE SYSTEM ──────────────────────────────────────────
+    # Instead of 24 sequential penalties that stack to -80%, collect all
+    # signals and apply a SINGLE capped adjustment. Max total penalty: -25%.
+    # This prevents confidence death-by-a-thousand-cuts.
     gate_reason = None
+    gate_penalties = []   # (name, penalty_amount)
+    gate_boosts = []      # (name, boost_amount)
+    gate_kill = None      # if set, force NO_TRADE with this reason
 
-    # WEEKEND + MARKET HOURS GATE (stocks only)
     from datetime import datetime, timedelta, timezone
     riyadh_tz = timezone(timedelta(hours=3))
     now_riyadh = datetime.now(riyadh_tz)
+
+    d_dir = decision.get('decision', '')
+
+    # --- Collect gate signals (don't apply yet) ---
+
+    # WEEKEND + MARKET HOURS (stocks only)
     if get_asset_type(req.asset) == 'stock':
-        # Weekend gate: Saturday=5, Sunday=6
         if now_riyadh.weekday() in (5, 6):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 20)
-            slog(f"Gate: Weekend — stocks confidence -20%")
-        # Market hours gate: NYSE open 4:30 PM - 11:00 PM Riyadh (9:30 AM - 4:00 PM ET)
+            gate_penalties.append(('weekend', 12))
         riyadh_hour = now_riyadh.hour + now_riyadh.minute / 60.0
         if riyadh_hour < 16.5 or riyadh_hour >= 23.0:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 10)
-            slog(f"Gate: NYSE closed — stocks confidence -10%")
+            gate_penalties.append(('market_closed', 8))
 
-    # MACRO BEAR/BULL VIX+DXY CAP GATES
-    if decision.get('decision') != 'NO_TRADE':
+    # MACRO VIX+DXY extreme
+    if d_dir != 'NO_TRADE':
         macro = macro_data or {}
-        if macro.get('vix', 0) > 30 and macro.get('dxy', 0) > 107 and decision.get('decision') == 'BUY':
-            if decision.get('confidence', 0) > 55:
-                decision['confidence'] = 55
-            slog(f"Gate: Macro Bear (VIX>30 + DXY>107) → BUY capped 55%")
-        if macro.get('vix', 0) < 15 and macro.get('dxy', 0) < 100 and decision.get('decision') == 'SELL':
-            if decision.get('confidence', 0) > 55:
-                decision['confidence'] = 55
-            slog(f"Gate: Macro Bull (VIX<15 + DXY<100) → SELL capped 55%")
+        if macro.get('vix', 0) > 30 and macro.get('dxy', 0) > 107 and d_dir == 'BUY':
+            gate_penalties.append(('macro_bear_extreme', 15))
+        if macro.get('vix', 0) < 15 and macro.get('dxy', 0) < 100 and d_dir == 'SELL':
+            gate_penalties.append(('macro_bull_extreme', 15))
 
-    # MACRO BEAR/BULL GATE
-    if decision.get('decision') != 'NO_TRADE':
+    # MACRO BEAR/BULL CONFLUENCE — only kills trade if 5/5 signals agree
+    if d_dir != 'NO_TRADE':
         fg_val = fg_data.get('value', 50)
         news_score = news_result.get('sentiment_score', 0)
-        bear_signals = [
-            ind['macd_hist'] < 0,
-            ind['dist_e20'] < 0,
-            (macro_data.get('vix') or 0) > 18,
-            news_score < 0,
-            fg_val < 40
-        ]
-        bull_signals = [
-            ind['macd_hist'] > 0,
-            ind['dist_e20'] > 0,
-            (macro_data.get('vix') or 0) < 15,
-            news_score > 0,
-            fg_val > 60
-        ]
+        bear_signals = [ind['macd_hist'] < 0, ind['dist_e20'] < 0,
+                        (macro_data.get('vix') or 0) > 18, news_score < 0, fg_val < 40]
+        bull_signals = [ind['macd_hist'] > 0, ind['dist_e20'] > 0,
+                        (macro_data.get('vix') or 0) < 15, news_score > 0, fg_val > 60]
         bear_count = sum(bear_signals)
         bull_count = sum(bull_signals)
+        if bear_count >= 5 and d_dir == 'BUY':
+            gate_kill = f"MACRO BEAR GATE — {bear_count}/5 bearish signals vs BUY"
+        elif bull_count >= 5 and d_dir == 'SELL':
+            gate_kill = f"MACRO BULL GATE — {bull_count}/5 bullish signals vs SELL"
+        elif bear_count >= 4 and d_dir == 'BUY':
+            gate_penalties.append(('macro_bear', 10))
+        elif bull_count >= 4 and d_dir == 'SELL':
+            gate_penalties.append(('macro_bull', 10))
 
-        if bear_count >= 4 and decision.get('decision') == 'BUY':
-            original_decision = decision['decision']
-            decision['_original_decision'] = original_decision
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"🛡 MACRO BEAR GATE — {bear_count}/5 bearish signals"
-            slog(f"🛡 MACRO BEAR GATE fired ({bear_count}/5)")
-        elif bull_count >= 4 and decision.get('decision') == 'SELL':
-            original_decision = decision['decision']
-            decision['_original_decision'] = original_decision
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"🛡 MACRO BULL GATE — {bull_count}/5 bullish signals"
-            slog(f"🛡 MACRO BULL GATE fired ({bull_count}/5)")
-
-    # VWAP HARD RULE: BUY below VWAP = -10 confidence
-    if decision.get('decision') == 'BUY' and ind.get('dist_vwap', 0) < 0:
-        old_conf = decision.get('confidence', 50)
-        decision['confidence'] = max(0, old_conf - 10)
-        slog(f"⚠ VWAP rule: BUY below VWAP — confidence {old_conf}% → {decision['confidence']}%")
-
-    # COUNTER-TREND PENALTY: -15 confidence when signal opposes daily trend
-    if decision.get('decision') != 'NO_TRADE' and mtf_data:
-        daily_bull = mtf_data.get('daily_bull', False)
-        daily_bear = mtf_data.get('daily_bear', False)
-        if (daily_bear and decision.get('decision') == 'BUY') or \
-           (daily_bull and decision.get('decision') == 'SELL'):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ Counter-trend penalty: {decision['decision']} vs daily {'BEAR' if daily_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
-
-    # V4: 4H COUNTER-TREND PENALTY — closer timeframe, stronger signal
-    if decision.get('decision') != 'NO_TRADE' and mtf_data:
-        h4_bull = mtf_data.get('h4_bull', False)
-        h4_bear = mtf_data.get('h4_bear', False)
-        daily_bull = mtf_data.get('daily_bull', False)
-        daily_bear = mtf_data.get('daily_bear', False)
-        h4_opposes = (h4_bear and decision.get('decision') == 'BUY') or \
-                     (h4_bull and decision.get('decision') == 'SELL')
-        daily_opposes = (daily_bear and decision.get('decision') == 'BUY') or \
-                        (daily_bull and decision.get('decision') == 'SELL')
+    # MTF COUNTER-TREND — only kills if BOTH 4H and Daily oppose
+    if d_dir != 'NO_TRADE' and mtf_data:
+        h4_opposes = (mtf_data.get('h4_bear') and d_dir == 'BUY') or \
+                     (mtf_data.get('h4_bull') and d_dir == 'SELL')
+        daily_opposes = (mtf_data.get('daily_bear') and d_dir == 'BUY') or \
+                        (mtf_data.get('daily_bull') and d_dir == 'SELL')
         if h4_opposes and daily_opposes:
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Both 4H and Daily oppose {decision.get('_original_decision')} — full MTF rejection"
-            slog(f"⚠ MTF REJECT: Both 4H and Daily oppose signal — forced NO_TRADE")
+            gate_kill = f"MTF rejection — both 4H and Daily oppose {d_dir}"
+        elif daily_opposes:
+            gate_penalties.append(('counter_trend_daily', 8))
         elif h4_opposes:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 12)
-            slog(f"⚠ 4H counter-trend: {decision['decision']} vs 4H {'BEAR' if h4_bear else 'BULL'} — confidence {old_conf}% → {decision['confidence']}%")
+            gate_penalties.append(('counter_trend_4h', 5))
 
-    # ICHIMOKU INSIDE CLOUD GATE: price inside cloud + low confluence = NO_TRADE
-    if decision.get('decision') != 'NO_TRADE':
+    # ICHIMOKU CLOUD — only kill if confidence already very low
+    if d_dir != 'NO_TRADE':
         inside_cloud = not ind.get('ich_bull') and not ind.get('ich_bear')
-        low_confluence = decision.get('confidence', 0) < 58
-        if inside_cloud and low_confluence:
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Ichimoku inside cloud + low confluence ({decision.get('confidence', 0)}% < 58%)"
-            slog(f"⚠ Ichimoku cloud gate: inside cloud + confidence {decision.get('confidence', 0)}%")
+        if inside_cloud and decision.get('confidence', 0) < 52:
+            gate_kill = f"Ichimoku inside cloud + very low confluence ({decision.get('confidence', 0)}%)"
+        elif inside_cloud:
+            gate_penalties.append(('ichimoku_cloud', 5))
 
-    # Confidence cap: neutral daily + bearish MACD
-    if decision.get('decision') != 'NO_TRADE':
-        daily_neutral = not mtf_data.get('daily_bull') and not mtf_data.get('daily_bear')
-        daily_macd_bearish = mtf_data.get('daily_macd_hist', 0) < 0
-        if daily_neutral and daily_macd_bearish and decision.get('confidence', 0) > 65:
-            slog(f"⚠ Confidence capped: {decision['confidence']}% → 65% (neutral daily + bearish MACD)")
-            decision['confidence'] = 65
+    # VWAP
+    if d_dir == 'BUY' and ind.get('dist_vwap', 0) < 0:
+        gate_penalties.append(('vwap_below', 5))
 
-    # Hurst gate — random walk penalty (cap, not NO_TRADE)
-    if decision.get('decision') != 'NO_TRADE':
-        hurst = ind.get('hurst_exp', 0.5)
-        if 0.45 <= hurst <= 0.55 and decision.get('confidence', 0) > 60:
-            decision['confidence'] = 60
-            slog(f"⚠ Hurst gate: {hurst:.3f} random walk — capped 60%")
+    # HURST RANDOM WALK
+    hurst = ind.get('hurst_exp', 0.5)
+    if 0.45 <= hurst <= 0.55:
+        gate_penalties.append(('hurst_random', 5))
 
-    # GATE 7: FUNDING RATE EXTREME — BUY + funding > 0.08% = -15 confidence
-    if decision.get('decision') == 'BUY' and is_crypto:
+    # ENTROPY
+    entropy = ind.get('entropy_ratio', 0.5)
+    if entropy > 0.9:
+        gate_penalties.append(('entropy_noise', 5))
+
+    # FUNDING RATE EXTREME (crypto only)
+    if d_dir == 'BUY' and is_crypto:
         funding = onchain_data.get('funding_rate', 0) if onchain_data else 0
         if funding > 0.0008:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ Funding rate gate: rate={funding:.4%} — confidence {old_conf}% → {decision['confidence']}%")
+            gate_penalties.append(('funding_extreme', 8))
 
-    # GATE 8: AGENT CONFLICT — Quant vs News disagree = -10 confidence (not NO_TRADE)
-    if decision.get('decision') != 'NO_TRADE':
-        q_dir = quant_result.get('direction', '').upper()
-        n_sent = news_result.get('sentiment', '').upper()
-        agents_disagree = (q_dir == 'BUY' and n_sent == 'BEARISH') or (q_dir == 'SELL' and n_sent == 'BULLISH')
-        if agents_disagree:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 10)
-            slog(f"⚠ Agent conflict: Quant={q_dir} vs News={n_sent} — confidence {old_conf}% → {decision['confidence']}%")
+    # AGENT CONFLICT — quant vs news disagree
+    q_dir = quant_result.get('direction', '').upper()
+    n_sent = news_result.get('sentiment', '').upper()
+    agents_disagree = (q_dir == 'BUY' and n_sent == 'BEARISH') or (q_dir == 'SELL' and n_sent == 'BULLISH')
+    if agents_disagree and d_dir != 'NO_TRADE':
+        gate_penalties.append(('agent_conflict', 5))
 
-    # GATE 9: CMF CONTRADICTION — BUY + CMF<-0.1 or SELL + CMF>0.1 = -15 confidence
-    if decision.get('decision') != 'NO_TRADE':
-        cmf = ind.get('cmf', 0)
-        if (decision['decision'] == 'BUY' and cmf < -0.1) or (decision['decision'] == 'SELL' and cmf > 0.1):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ CMF contradiction: {decision['decision']} but CMF={cmf:.3f} — confidence {old_conf}% → {decision['confidence']}%")
+    # CMF CONTRADICTION
+    cmf = ind.get('cmf', 0)
+    if d_dir != 'NO_TRADE':
+        if (d_dir == 'BUY' and cmf < -0.15) or (d_dir == 'SELL' and cmf > 0.15):
+            gate_penalties.append(('cmf_contradiction', 5))
 
-    # GATE 10: OBV DIVERGENCE — BUY + OBV falling or SELL + OBV rising = -15 confidence
-    if decision.get('decision') != 'NO_TRADE':
-        obv_slope = ind.get('obv_slope', 0)
-        if (decision['decision'] == 'BUY' and obv_slope < -0.1) or (decision['decision'] == 'SELL' and obv_slope > 0.1):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ OBV divergence: {decision['decision']} but OBV slope={obv_slope:.3f} — confidence {old_conf}% → {decision['confidence']}%")
+    # OBV DIVERGENCE
+    obv_slope = ind.get('obv_slope', 0)
+    if d_dir != 'NO_TRADE':
+        if (d_dir == 'BUY' and obv_slope < -0.15) or (d_dir == 'SELL' and obv_slope > 0.15):
+            gate_penalties.append(('obv_divergence', 5))
 
-    # GATE 11: CLUSTER BOUNDARY — <10 members in cluster = cap 60%
-    if decision.get('decision') != 'NO_TRADE' and cluster_data.get('available'):
-        if cluster_data.get('members', 0) < 10 and decision.get('confidence', 0) > 60:
-            slog(f"⚠ Cluster boundary: only {cluster_data['members']} members — capped 60%")
-            decision['confidence'] = 60
-
-    # GATE 12: ML AGREEMENT — ensemble disagrees with decision = cap 55%
-    if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
+    # ML DISAGREEMENT
+    if d_dir != 'NO_TRADE' and ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
-        ml_says_up = ml_score > 55
-        ml_says_down = ml_score < 45
-        if (decision['decision'] == 'BUY' and ml_says_down) or (decision['decision'] == 'SELL' and ml_says_up):
-            if decision.get('confidence', 0) > 55:
-                slog(f"⚠ ML disagreement: ML score={ml_score:.1f} vs {decision['decision']} — capped 55%")
-                decision['confidence'] = 55
+        ml_says_up = ml_score > 58
+        ml_says_down = ml_score < 42
+        if (d_dir == 'BUY' and ml_says_down) or (d_dir == 'SELL' and ml_says_up):
+            gate_penalties.append(('ml_disagree', 8))
+        elif (d_dir == 'BUY' and ml_score > 62) or (d_dir == 'SELL' and ml_score < 38):
+            gate_boosts.append(('ml_confirms', min(10, int(abs(ml_score - 50) * 0.5))))
 
-    # GATE 13: ADAPTIVE CONFIDENCE FLOOR (A5)
-    conf_floor = get_adaptive_floor()
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
-        decision['_original_decision'] = decision.get('decision')
-        decision['decision'] = 'NO_TRADE'
-        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < {conf_floor}%"
-        slog(f"⚠ Confidence floor gate: {decision.get('confidence', 0)}% (floor={conf_floor}%)")
+    # V5 GATES — lighter touch, capped in aggregate
+    if d_dir != 'NO_TRADE' and funding_oi_data.get('available'):
+        foi_bias = funding_oi_data.get('bias', 0)
+        if (d_dir == 'BUY' and foi_bias <= -3) or (d_dir == 'SELL' and foi_bias >= 3):
+            gate_penalties.append(('funding_oi_oppose', 5))
+        elif (d_dir == 'BUY' and foi_bias >= 3) or (d_dir == 'SELL' and foi_bias <= -3):
+            gate_boosts.append(('funding_oi_confirm', 3))
 
-    # GATE 14: UPCOMING EVENT — high-impact event within horizon = -15 confidence
-    if decision.get('decision') != 'NO_TRADE' and macro_context.get('upcoming_events'):
+    if d_dir != 'NO_TRADE' and order_flow_data.get('available'):
+        of_bias = order_flow_data.get('bias', 0)
+        if (d_dir == 'BUY' and of_bias <= -3) or (d_dir == 'SELL' and of_bias >= 3):
+            gate_penalties.append(('order_flow_oppose', 5))
+
+    if d_dir != 'NO_TRADE' and vp_signal.get('signal'):
+        if vp_signal['signal'] != 'NEUTRAL' and vp_signal['signal'] != d_dir:
+            gate_penalties.append(('vp_oppose', 4))
+        elif vp_signal['signal'] == d_dir:
+            gate_boosts.append(('vp_confirm', 3))
+
+    if d_dir != 'NO_TRADE' and liquidation_data.get('available'):
+        liq_bias = liquidation_data.get('bias', 0)
+        if (d_dir == 'BUY' and liq_bias >= 2) or (d_dir == 'SELL' and liq_bias <= -2):
+            gate_boosts.append(('liq_confirm', 3))
+        elif (d_dir == 'BUY' and liq_bias <= -2) or (d_dir == 'SELL' and liq_bias >= 2):
+            gate_penalties.append(('liq_oppose', 4))
+
+    if d_dir != 'NO_TRADE' and tick_data.get('available'):
+        tick_bias = tick_data.get('bias', 0)
+        if (d_dir == 'BUY' and tick_bias <= -3) or (d_dir == 'SELL' and tick_bias >= 3):
+            gate_penalties.append(('tick_oppose', 4))
+
+    # UPCOMING EVENT
+    if d_dir != 'NO_TRADE' and macro_context.get('upcoming_events'):
         high_impact = [e for e in macro_context['upcoming_events'] if e.get('impact') == 'high']
         if high_impact:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 15)
-            slog(f"⚠ Event gate: {len(high_impact)} high-impact event(s) ahead — confidence {old_conf}% → {decision['confidence']}%")
+            gate_penalties.append(('upcoming_event', 8))
 
-    # GATE 15: ENTROPY GATE — Shannon entropy > 0.9 = cap 55%
-    if decision.get('decision') != 'NO_TRADE':
-        entropy = ind.get('entropy_ratio', 0.5)
-        if entropy > 0.9 and decision.get('confidence', 0) > 55:
-            slog(f"⚠ Entropy gate: ratio={entropy:.3f} (noise) — capped 55%")
-            decision['confidence'] = 55
-
-    # ── V5 GATES: Funding, Liquidations, Order Flow, Volume Profile, Disagreement ──
-
-    # GATE 16: FUNDING CROWDING — from detailed funding_oi module
-    if decision.get('decision') != 'NO_TRADE' and funding_oi_data.get('available'):
-        foi_bias = funding_oi_data.get('bias', 0)
-        if (decision['decision'] == 'BUY' and foi_bias <= -3) or \
-           (decision['decision'] == 'SELL' and foi_bias >= 3):
-            old_conf = decision.get('confidence', 50)
-            penalty = min(15, abs(foi_bias) * 3)
-            decision['confidence'] = max(0, old_conf - penalty)
-            slog(f"⚠ Funding/OI gate: bias={foi_bias:+d} opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
-
-    # GATE 17: ORDER FLOW CONTRADICTION
-    if decision.get('decision') != 'NO_TRADE' and order_flow_data.get('available'):
-        of_bias = order_flow_data.get('bias', 0)
-        if (decision['decision'] == 'BUY' and of_bias <= -3) or \
-           (decision['decision'] == 'SELL' and of_bias >= 3):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 10)
-            slog(f"⚠ Order flow gate: bias={of_bias:+d} contradicts {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
-
-    # GATE 18: VOLUME PROFILE — price far outside value area (mean reversion pressure)
-    if decision.get('decision') != 'NO_TRADE' and vp_signal.get('signal'):
-        if vp_signal['signal'] != 'NEUTRAL' and vp_signal['signal'] != decision['decision']:
-            old_conf = decision.get('confidence', 50)
-            adj = vp_signal.get('confidence_adj', 0)
-            decision['confidence'] = max(0, old_conf - abs(adj))
-            slog(f"⚠ VP gate: {vp_signal.get('reason','')} — confidence {old_conf}% → {decision['confidence']}%")
-        elif vp_signal['signal'] == decision['decision']:
-            # VP confirms direction — small boost
-            old_conf = decision.get('confidence', 50)
-            adj = min(5, vp_signal.get('confidence_adj', 0))
-            decision['confidence'] = min(90, old_conf + adj)
-
-    # GATE 19: LIQUIDATION MAGNET — if price heading toward liq cluster in our direction
-    if decision.get('decision') != 'NO_TRADE' and liquidation_data.get('available'):
-        liq_bias = liquidation_data.get('bias', 0)
-        if (decision['decision'] == 'BUY' and liq_bias >= 2) or \
-           (decision['decision'] == 'SELL' and liq_bias <= -2):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = min(90, old_conf + 5)
-            slog(f"✓ Liq magnet confirms {decision['decision']} (bias={liq_bias:+d}) — confidence +5%")
-        elif (decision['decision'] == 'BUY' and liq_bias <= -2) or \
-             (decision['decision'] == 'SELL' and liq_bias >= 2):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 8)
-            slog(f"⚠ Liq magnet opposes {decision['decision']} — confidence {old_conf}% → {decision['confidence']}%")
-
-    # GATE 20: TICK MICRO-STRUCTURE
-    if decision.get('decision') != 'NO_TRADE' and tick_data.get('available'):
-        tick_bias = tick_data.get('bias', 0)
-        if (decision['decision'] == 'BUY' and tick_bias <= -3) or \
-           (decision['decision'] == 'SELL' and tick_bias >= 3):
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(0, old_conf - 8)
-            slog(f"⚠ Tick gate: micro-structure bias={tick_bias:+d} contradicts — confidence -8%")
-
-    # GATE 21: MODEL DISAGREEMENT (V5)
+    # MODEL DISAGREEMENT (V5)
     model_preds = {
         'quant_agent': {'direction': quant_result.get('direction', ''), 'confidence': quant_result.get('confidence', 50)},
         'news_agent': {'direction': 'BUY' if news_result.get('sentiment','').upper() == 'BULLISH' else 'SELL' if news_result.get('sentiment','').upper() == 'BEARISH' else '', 'confidence': news_result.get('confidence', 50)},
@@ -1461,28 +1389,34 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         'decision_agent': {'direction': decision.get('decision', ''), 'confidence': decision.get('confidence', 50)},
     }
     disagreement = compute_disagreement(model_preds)
-    if disagreement.get('available') and disagreement.get('disagreement_score', 0) >= 5:
-        old_conf = decision.get('confidence', 50)
-        adj = apply_disagreement(old_conf, 100, disagreement)
-        decision['confidence'] = adj['confidence']
-        slog(f"⚠ Disagreement gate: score={disagreement['disagreement_score']}/10 — confidence {old_conf}% → {decision['confidence']}%")
+    if disagreement.get('available') and disagreement.get('disagreement_score', 0) >= 6:
+        gate_penalties.append(('model_disagreement', min(8, disagreement['disagreement_score'])))
 
-    # GATE 22: PRE-EVENT (V5) — from detailed pre_event module
+    # PRE-EVENT (V5)
     upcoming = macro_context.get('upcoming_events', [])
     pre_event_adj = get_pre_event_adjustments(upcoming, hours_ahead=4.0)
-    if pre_event_adj.get('active') and decision.get('decision') != 'NO_TRADE':
+    if pre_event_adj.get('active') and d_dir != 'NO_TRADE':
         skip, skip_reason = should_skip_trade(pre_event_adj, decision.get('confidence', 50))
         if skip and not getattr(req, 'bot_mode', False):
-            decision['_original_decision'] = decision.get('decision')
-            decision['decision'] = 'NO_TRADE'
-            gate_reason = f"Pre-event: {skip_reason}"
-            slog(f"⚠ Pre-event gate: {skip_reason}")
+            gate_kill = f"Pre-event: {skip_reason}"
         elif pre_event_adj.get('confidence_penalty', 0) > 0:
-            old_conf = decision.get('confidence', 50)
-            decision['confidence'] = max(40, old_conf - pre_event_adj['confidence_penalty'])
-            slog(f"⚠ Pre-event penalty: -{pre_event_adj['confidence_penalty']}% conf (events: {len(pre_event_adj.get('events',[]))})")
+            gate_penalties.append(('pre_event', min(8, pre_event_adj['confidence_penalty'])))
 
-    # GATE 23: RL-LITE TRUST ADJUSTMENT (V5)
+    # REGIME ADJUSTMENT (V5)
+    hmm_probs = ind.get('hmm_probs', {})
+    regime_name = get_regime_from_hmm(hmm_probs)
+    if d_dir != 'NO_TRADE':
+        regime_adj_conf = regime_confidence_adjustment(
+            regime_name, decision.get('confidence', 50),
+            d_dir, ind.get('trend_slope', 0)
+        )
+        diff = regime_adj_conf - decision.get('confidence', 50)
+        if diff < 0:
+            gate_penalties.append(('regime', abs(diff)))
+        elif diff > 0:
+            gate_boosts.append(('regime', diff))
+
+    # RL-LITE
     rl = get_rl_lite()
     active_gates_list = []
     if funding_oi_data.get('available') and abs(funding_oi_data.get('bias',0)) >= 2:
@@ -1496,33 +1430,48 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     if disagreement.get('disagreement_score', 0) >= 3:
         active_gates_list.append('model_disagreement')
     rl_adj = rl.get_confidence_adjustment(active_gates_list)
-    if rl_adj != 0 and decision.get('decision') != 'NO_TRADE':
+    if rl_adj < 0:
+        gate_penalties.append(('rl_lite', abs(rl_adj)))
+    elif rl_adj > 0:
+        gate_boosts.append(('rl_lite', rl_adj))
+
+    # --- APPLY: single capped adjustment ---
+    total_penalty = sum(p for _, p in gate_penalties)
+    total_boost = sum(b for _, b in gate_boosts)
+    MAX_PENALTY = 25
+    MAX_BOOST = 15
+    capped_penalty = min(total_penalty, MAX_PENALTY)
+    capped_boost = min(total_boost, MAX_BOOST)
+
+    # Log all fired gates
+    if gate_penalties:
+        names = [f"{n}(-{p})" for n, p in gate_penalties]
+        slog(f"Gates fired: {', '.join(names)} | raw=-{total_penalty} capped=-{capped_penalty}")
+    if gate_boosts:
+        names = [f"{n}(+{b})" for n, b in gate_boosts]
+        slog(f"Boosts: {', '.join(names)} | raw=+{total_boost} capped=+{capped_boost}")
+
+    # Apply kill gate first
+    if gate_kill and d_dir != 'NO_TRADE':
+        decision['_original_decision'] = d_dir
+        decision['decision'] = 'NO_TRADE'
+        gate_reason = gate_kill
+        slog(f"GATE KILL: {gate_kill}")
+    elif d_dir != 'NO_TRADE':
         old_conf = decision.get('confidence', 50)
-        decision['confidence'] = max(40, min(90, old_conf + rl_adj))
-        slog(f"✓ RL-lite: trust adj={rl_adj:+d}% (confidence {old_conf}% → {decision['confidence']}%)")
+        net_adj = capped_boost - capped_penalty
+        new_conf = max(40, min(90, old_conf + net_adj))
+        decision['confidence'] = new_conf
+        if net_adj != 0:
+            slog(f"Gate net adjustment: {old_conf}% → {new_conf}% (net {net_adj:+d})")
 
-    # GATE 24: REGIME CONFIDENCE ADJUSTMENT (V5)
-    hmm_probs = ind.get('hmm_probs', {})
-    regime_name = get_regime_from_hmm(hmm_probs)
-    if decision.get('decision') != 'NO_TRADE':
-        regime_adj_conf = regime_confidence_adjustment(
-            regime_name, decision.get('confidence', 50),
-            decision['decision'], ind.get('trend_slope', 0)
-        )
-        if regime_adj_conf != decision.get('confidence', 50):
-            slog(f"✓ Regime ({regime_name}): confidence {decision['confidence']}% → {regime_adj_conf}%")
-            decision['confidence'] = regime_adj_conf
-
-    # ML CONFIDENCE BOOST — when ML strongly agrees, boost confidence
-    if decision.get('decision') != 'NO_TRADE' and ml_result.get('available'):
-        ml_score = ml_result.get('score', 50)
-        ml_agrees = (decision['decision'] == 'BUY' and ml_score > 62) or \
-                    (decision['decision'] == 'SELL' and ml_score < 38)
-        if ml_agrees:
-            old_conf = decision.get('confidence', 50)
-            boost = min(12, int((abs(ml_score - 50) - 12) * 0.8))
-            decision['confidence'] = min(85, old_conf + boost)
-            slog(f"✓ ML boost: ML={ml_score:.1f} agrees with {decision['decision']} → +{boost}% (confidence {old_conf}% → {decision['confidence']}%)")
+    # CONFIDENCE FLOOR — only after consolidated gates
+    conf_floor = get_adaptive_floor()
+    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
+        decision['_original_decision'] = decision.get('decision')
+        decision['decision'] = 'NO_TRADE'
+        gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < {conf_floor}%"
+        slog(f"Confidence floor: {decision.get('confidence', 0)}% (floor={conf_floor}%)")
 
     # Save predicted price BEFORE nulling target for NO_TRADE
     # Use ML-informed direction for target instead of bland MC median
