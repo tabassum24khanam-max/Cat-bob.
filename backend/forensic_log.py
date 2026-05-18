@@ -1,5 +1,5 @@
 """
-Forensic Log — captures every detail of every decision the bot makes.
+Forensic Log -- captures every detail of every decision the bot makes.
 
 Designed to produce a "big fat file" that can be pasted into an LLM
 (Anthropic, OpenAI) for post-mortem analysis. Every event is structured
@@ -29,7 +29,7 @@ import json
 from typing import Dict, List, Any, Optional
 from collections import deque
 
-# In-memory ring buffer — capped to avoid OOM on Railway
+# In-memory ring buffer -- capped to avoid OOM on Railway
 _MAX_EVENTS = 10000
 _events: deque = deque(maxlen=_MAX_EVENTS)
 
@@ -148,7 +148,7 @@ def log_trade_flip(asset: str, old_direction: str, new_direction: str,
         "flip_at_price": exit_price,
         "closed_pnl": old_pnl,
         "new_position_size": new_size,
-        "lesson": f"{old_direction} {'WAS WRONG' if old_pnl < 0 else 'profitable'} — flipped to {new_direction}",
+        "lesson": f"{old_direction} {'WAS WRONG' if old_pnl < 0 else 'profitable'} -- flipped to {new_direction}",
     }, parent_id=parent_id)
 
 
@@ -165,7 +165,7 @@ def log_trade_close(asset: str, direction: str, entry: float, exit_price: float,
         "exit_reason": reason,
         "hold_seconds": hold_seconds,
         "was_correct": was_correct,
-        "lesson": f"{direction} was {'CORRECT' if pnl > 0 else 'WRONG'} ({pnl_pct:+.2f}%) — exit via {reason}",
+        "lesson": f"{direction} was {'CORRECT' if pnl > 0 else 'WRONG'} ({pnl_pct:+.2f}%) -- exit via {reason}",
     }, parent_id=parent_id)
 
 
@@ -211,9 +211,9 @@ def export_text(asset_filter: Optional[str] = None, since_ts: Optional[int] = No
 
     for ev in events:
         lines.append("")
-        lines.append("─" * 80)
+        lines.append("-" * 80)
         lines.append(f"[{ev['ts_iso']}]  {ev['type'].upper()}  ({ev['asset']})")
-        lines.append("─" * 80)
+        lines.append("-" * 80)
         lines.extend(_render_event(ev))
 
     lines.append("")
@@ -242,42 +242,42 @@ def _render_event(ev: Dict) -> List[str]:
         out.append(f"  Per-asset summary: {' | '.join(d.get('summaries', []))}")
 
     elif et == "prediction":
-        out.append(f"  ┌─ REQUEST ─")
+        out.append(f"  [ REQUEST -")
         req = d.get("request", {})
-        out.append(f"  │  Horizon: {req.get('horizon')}h")
-        out.append(f"  │  Bot mode: {req.get('bot_mode', False)}")
-        out.append(f"  │  Models: quant={req.get('quant_model','?')} decision={req.get('decision_model','?')}")
-        out.append(f"  │  Price: ${d.get('price_at_decision', 0):,.4f}")
+        out.append(f"  |  Horizon: {req.get('horizon')}h")
+        out.append(f"  |  Bot mode: {req.get('bot_mode', False)}")
+        out.append(f"  |  Models: quant={req.get('quant_model','?')} decision={req.get('decision_model','?')}")
+        out.append(f"  |  Price: ${d.get('price_at_decision', 0):,.4f}")
         out.append(f"  ")
-        out.append(f"  ┌─ INDICATORS (all values at decision time) ─")
+        out.append(f"  [ INDICATORS (all values at decision time) -")
         ind = d.get("indicators", {})
         for k in sorted(ind.keys()):
             v = ind[k]
             if isinstance(v, (int, float)):
-                out.append(f"  │  {k}: {v}")
+                out.append(f"  |  {k}: {v}")
             elif isinstance(v, dict):
-                out.append(f"  │  {k}: {json.dumps(v)[:200]}")
+                out.append(f"  |  {k}: {json.dumps(v)[:200]}")
             elif isinstance(v, list):
-                out.append(f"  │  {k}: [{len(v)} items]")
+                out.append(f"  |  {k}: [{len(v)} items]")
             else:
-                out.append(f"  │  {k}: {str(v)[:200]}")
+                out.append(f"  |  {k}: {str(v)[:200]}")
         out.append(f"  ")
 
         mc = d.get("monte_carlo", {})
         if mc:
-            out.append(f"  ┌─ MONTE CARLO (1000 paths) ─")
+            out.append(f"  [ MONTE CARLO (1000 paths) -")
             for k, v in mc.items():
-                out.append(f"  │  {k}: {v}")
+                out.append(f"  |  {k}: {v}")
             out.append(f"  ")
 
         news = d.get("news", {})
         if news.get("article_count"):
-            out.append(f"  ┌─ NEWS ({news['article_count']} articles, sentiment={news.get('sentiment_score')}) ─")
+            out.append(f"  [ NEWS ({news['article_count']} articles, sentiment={news.get('sentiment_score')}) -")
             for h in news.get("headlines", [])[:15]:
                 src = h.get("source", "?")
                 title = h.get("title", "")[:120]
                 sent = h.get("sentiment", "")
-                out.append(f"  │  [{src}] {title}  → {sent}")
+                out.append(f"  |  [{src}] {title}  -> {sent}")
             out.append(f"  ")
 
         for section_key, label in [
@@ -294,63 +294,63 @@ def _render_event(ev: Dict) -> List[str]:
         ]:
             sd = d.get(section_key, {}) or {}
             if sd:
-                out.append(f"  ┌─ {label} ─")
+                out.append(f"  [ {label} -")
                 for k, v in sd.items():
                     if isinstance(v, (dict, list)):
-                        out.append(f"  │  {k}: {json.dumps(v)[:300]}")
+                        out.append(f"  |  {k}: {json.dumps(v)[:300]}")
                     else:
-                        out.append(f"  │  {k}: {v}")
+                        out.append(f"  |  {k}: {v}")
                 out.append(f"  ")
 
         agents = d.get("agents", {})
         for agent_key, label in [("quant", "QUANT AGENT"), ("news", "NEWS AGENT"), ("decision_r1", "DECISION AGENT (R1)")]:
             ag = agents.get(agent_key, {}) or {}
             if ag:
-                out.append(f"  ┌─ {label} (model={ag.get('model','?')}, latency={ag.get('latency_ms','?')}ms) ─")
+                out.append(f"  [ {label} (model={ag.get('model','?')}, latency={ag.get('latency_ms','?')}ms) -")
                 if ag.get("prompt"):
-                    out.append(f"  │  PROMPT:")
+                    out.append(f"  |  PROMPT:")
                     for line in str(ag.get("prompt", ""))[:3000].split("\n"):
-                        out.append(f"  │    {line}")
+                        out.append(f"  |    {line}")
                 if ag.get("response"):
-                    out.append(f"  │  RESPONSE:")
+                    out.append(f"  |  RESPONSE:")
                     if isinstance(ag["response"], dict):
-                        out.append(f"  │    {json.dumps(ag['response'], indent=2)[:2000]}")
+                        out.append(f"  |    {json.dumps(ag['response'], indent=2)[:2000]}")
                     else:
-                        out.append(f"  │    {str(ag['response'])[:2000]}")
+                        out.append(f"  |    {str(ag['response'])[:2000]}")
                 out.append(f"  ")
 
         gates = d.get("gates_triggered", [])
         if gates:
-            out.append(f"  ┌─ GATES TRIGGERED ({len(gates)}) ─")
+            out.append(f"  [ GATES TRIGGERED ({len(gates)}) -")
             for g in gates:
-                out.append(f"  │  Gate: {g.get('gate')}  Action: {g.get('action')}  Conf: {g.get('conf_before')}% → {g.get('conf_after')}%  Reason: {g.get('reason')}")
+                out.append(f"  |  Gate: {g.get('gate')}  Action: {g.get('action')}  Conf: {g.get('conf_before')}% -> {g.get('conf_after')}%  Reason: {g.get('reason')}")
             out.append(f"  ")
 
         cb = d.get("confidence_blend", {})
         if cb:
-            out.append(f"  ┌─ CONFIDENCE BLEND ─")
-            out.append(f"  │  AI raw: {cb.get('ai_raw')}%")
-            out.append(f"  │  Bayesian: {cb.get('bayes')}%")
-            out.append(f"  │  ML calibrated: {cb.get('ml')}%")
-            out.append(f"  │  Cluster: {cb.get('cluster')}%")
-            out.append(f"  │  Weights: {cb.get('weights')}")
-            out.append(f"  │  → BLENDED: {cb.get('final')}%")
+            out.append(f"  [ CONFIDENCE BLEND -")
+            out.append(f"  |  AI raw: {cb.get('ai_raw')}%")
+            out.append(f"  |  Bayesian: {cb.get('bayes')}%")
+            out.append(f"  |  ML calibrated: {cb.get('ml')}%")
+            out.append(f"  |  Cluster: {cb.get('cluster')}%")
+            out.append(f"  |  Weights: {cb.get('weights')}")
+            out.append(f"  |  -> BLENDED: {cb.get('final')}%")
             out.append(f"  ")
 
         pqs = d.get("pqs", {})
         if pqs:
-            out.append(f"  ┌─ PQS (Prediction Quality Score) ─")
-            out.append(f"  │  Score: {pqs.get('score')}/10")
-            out.append(f"  │  Breakdown: {pqs.get('reasons', [])}")
+            out.append(f"  [ PQS (Prediction Quality Score) -")
+            out.append(f"  |  Score: {pqs.get('score')}/10")
+            out.append(f"  |  Breakdown: {pqs.get('reasons', [])}")
             out.append(f"  ")
 
         fd = d.get("final_decision", {})
         if fd:
-            out.append(f"  ┌─ FINAL DECISION ─")
-            out.append(f"  │  Direction: {fd.get('direction')}")
-            out.append(f"  │  Confidence: {fd.get('confidence')}%")
-            out.append(f"  │  Reasoning: {fd.get('reasoning', '')[:400]}")
-            out.append(f"  │  Counter-argument: {fd.get('counter_argument', '')[:300]}")
+            out.append(f"  [ FINAL DECISION -")
+            out.append(f"  |  Direction: {fd.get('direction')}")
+            out.append(f"  |  Confidence: {fd.get('confidence')}%")
+            out.append(f"  |  Reasoning: {fd.get('reasoning', '')[:400]}")
+            out.append(f"  |  Counter-argument: {fd.get('counter_argument', '')[:300]}")
             out.append(f"  ")
         out.append(f"  Total time: {d.get('timing_ms', 0)}ms")
 
@@ -362,14 +362,14 @@ def _render_event(ev: Dict) -> List[str]:
         out.append(f"  Confidence: {d.get('confidence')}%  PQS: {d.get('pqs_score')}/10")
 
     elif et == "trade_flip":
-        out.append(f"  FLIP {d.get('old_direction')} → {d.get('new_direction')}")
+        out.append(f"  FLIP {d.get('old_direction')} -> {d.get('new_direction')}")
         out.append(f"  Old entry: ${d.get('old_entry', 0):,.4f}  Flip at: ${d.get('flip_at_price', 0):,.4f}")
         out.append(f"  Closed P&L: ${d.get('closed_pnl', 0):+.2f}")
         out.append(f"  New size: ${d.get('new_position_size', 0):.2f}")
         out.append(f"  Lesson: {d.get('lesson')}")
 
     elif et == "trade_close":
-        was = "✓ CORRECT" if d.get("was_correct") else "✗ WRONG"
+        was = "CORRECT" if d.get("was_correct") else "WRONG"
         out.append(f"  CLOSED {d.get('direction')} ({was})")
         out.append(f"  Entry: ${d.get('entry_price', 0):,.4f}  Exit: ${d.get('exit_price', 0):,.4f}")
         out.append(f"  P&L: ${d.get('pnl_usd', 0):+.2f}  ({d.get('pnl_pct', 0):+.2f}%)")

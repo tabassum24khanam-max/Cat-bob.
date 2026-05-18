@@ -692,17 +692,17 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: daily loss limit (5%)")
                     continue
 
-                # ── FIX 3: R:R always 3:1 — ATR-based tight stops
+                # ── R:R always 3:1 -- ATR-based stops with realistic floors
                 atr = result.get('ind', {}).get('atr', 0)
                 if atr and price:
                     atr_pct = (atr / price) * 100
-                    sl_pct = max(0.5, min(2.0, atr_pct * 1.5))
+                    sl_pct = max(1.0, min(3.0, atr_pct * 1.5))
                     tp_pct = sl_pct * 3.0
-                    trail_pct = max(0.5, min(2.0, atr_pct * 1.0))
+                    trail_pct = max(0.8, min(2.5, atr_pct * 1.2))
                 else:
-                    sl_pct = min(stop_loss, 1.5)
+                    sl_pct = 1.5
                     tp_pct = sl_pct * 3.0
-                    trail_pct = 1.0
+                    trail_pct = 1.2
 
                 # ── Position sizing: respect user's trade_size
                 custom_size = _autotrader.get('trade_size', 0)
