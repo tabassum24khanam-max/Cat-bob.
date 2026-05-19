@@ -116,8 +116,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
                style="width:90px;background:#0a0a0a;color:var(--cyan);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
                onchange="localStorage.setItem('um_at_size', this.value)">
       </label>
+      <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
+        HARD STOP (%):
+        <input id="b-hardstop-input" type="number" min="1" max="10" step="0.5" value="5"
+               style="width:60px;background:#0a0a0a;color:var(--red);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
+               onchange="localStorage.setItem('um_at_hardstop', this.value)">
+      </label>
       <span style="font-size:6px;color:var(--muted);font-style:italic">
-        0 = Kelly auto-sizing • Custom = fixed $ per trade (capped at 25% of equity)
+        Cash-out cycles: profit → close + reopen | loss → hold until recovery | hard stop = emergency exit
       </span>
     </div>
   </div>
@@ -197,6 +203,7 @@ async function bToggle() {
     if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
     const startEq = parseFloat(document.getElementById('b-equity-input').value) || 10000;
     const tradeSize = parseFloat(document.getElementById('b-size-input').value) || 0;
+    const hardStop = parseFloat(document.getElementById('b-hardstop-input').value) || 5.0;
     const r = await fetch(`${backendUrl}/autotrader/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -204,6 +211,7 @@ async function bToggle() {
         interval_minutes: bInterval,
         trade_size: tradeSize,
         starting_equity: startEq,
+        hard_stop_pct: hardStop,
         use_local: localStorage.getItem('um_model_mode') === 'local',
         local_url: localStorage.getItem('um_local_url') || 'http://localhost:11434',
         local_model: localStorage.getItem('um_local_model') || 'qwen2.5:7b',
@@ -477,6 +485,8 @@ const _savedEq = localStorage.getItem('um_at_equity');
 if (_savedEq) document.getElementById('b-equity-input').value = _savedEq;
 const _savedSize = localStorage.getItem('um_at_size');
 if (_savedSize) document.getElementById('b-size-input').value = _savedSize;
+const _savedHardStop = localStorage.getItem('um_at_hardstop');
+if (_savedHardStop) document.getElementById('b-hardstop-input').value = _savedHardStop;
 bRefresh();
 bLoadChart(bChartAsset);
 setInterval(bRefresh, 10000);

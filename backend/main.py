@@ -85,6 +85,7 @@ _autotrader = {
     'use_local': False,
     'local_url': 'http://localhost:11434',
     'local_model': 'qwen2.5:7b',
+    'hard_stop_pct': 5.0,  # emergency close if loss exceeds this %
 }
 
 # Self-correction: per-asset accuracy tracker
@@ -625,67 +626,58 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: no price data")
                     continue
 
-                # ── Check if already holding this asset
+                # ── Cash-out Cycles: profitable → cash out + reopen; loss → hold
                 open_for_asset = [p for p in engine.positions.values()
                                   if p.status == 'open' and p.asset == asset_name]
 
                 if open_for_asset:
                     current_pos = open_for_asset[0]
-                    pnl_pct = ((price - current_pos.entry_price) / current_pos.entry_price * 100) if current_pos.direction == 'BUY' else ((current_pos.entry_price - price) / current_pos.entry_price * 100)
+                    if current_pos.direction == 'BUY':
+                        pnl_pct = (price - current_pos.entry_price) / current_pos.entry_price * 100
+                    else:
+                        pnl_pct = (current_pos.entry_price - price) / current_pos.entry_price * 100
 
-                    # Same direction — HOLD
-                    if current_pos.direction == direction:
-                        print(f"  {asset_name}: HOLD {current_pos.direction} (P&L: {pnl_pct:+.2f}%)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}%)")
-                        continue
+                    hard_stop_pct = _autotrader.get('hard_stop_pct', 5.0)
 
-                    # Opposite direction — VERY strict anti-whipsaw (every flip in forensic data was a loss)
-                    hold_seconds = int(time.time()) - current_pos.entry_time
-                    hold_minutes = hold_seconds / 60
-
-                    # Rule 1: minimum hold 3 hours (flips almost always lose money)
-                    if hold_minutes < 180:
-                        print(f"  {asset_name}: HOLD (anti-whipsaw: {hold_minutes:.0f}min < 180min)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (too soon)")
-                        continue
-
-                    # Rule 2: if profitable at all, NEVER flip — let stop/TP handle exit
                     if pnl_pct > 0:
-                        print(f"  {asset_name}: HOLD (profitable +{pnl_pct:.1f}%, never flip winners)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (+{pnl_pct:.1f}%)")
+                        # Profitable → cash out, lock in gains, reopen fresh position below
+                        print(f"  {asset_name}: CASHOUT {current_pos.direction} +{pnl_pct:.2f}% profit, reopening {direction}")
+                        close_result = await engine.close_position(current_pos.id, price, 'cycle_cashout')
+                        cashed_pnl = close_result.get('pnl', 0)
+                        _autotrader['trades_closed'] += 1
+                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, cashed_pnl, 'cycle_cashout')
+                        forensic_log.log_trade_flip(
+                            asset_name, current_pos.direction, direction,
+                            current_pos.entry_price, price, cashed_pnl, 0,
+                            parent_id=cycle_id,
+                        )
+                        asyncio.create_task(send_message(
+                            f"💰 CASHOUT {asset_name}: {current_pos.direction} +{pnl_pct:.2f}% | +${cashed_pnl:.2f} | Reopening {direction}"
+                        ))
+                        cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
+
+                    elif pnl_pct > -hard_stop_pct:
+                        # In loss but within safety margin → hold, let it recover
+                        print(f"  {asset_name}: HOLD {current_pos.direction} {pnl_pct:+.2f}% (waiting for recovery, hard stop at -{hard_stop_pct:.1f}%)")
+                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}% loss)")
                         continue
 
-                    # Rule 3: if losing less than 1.5%, let stop-loss do its job
-                    if pnl_pct > -1.5:
-                        print(f"  {asset_name}: HOLD (loss {pnl_pct:+.1f}% < 1.5%, let SL handle)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (small loss, hold)")
-                        continue
-
-                    # Rule 4: flip requires PQS >= 6 AND confidence >= 62% (real conviction)
-                    if pqs_score < 6 or confidence < 62:
-                        print(f"  {asset_name}: HOLD (flip needs PQS>=6 conf>=62%, got PQS={pqs_score} conf={confidence}%)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} (flip criteria not met)")
-                        continue
-
-                    # Rule 5: max 1 flip per asset per day
-                    recent_flips = [l for l in _asset_accuracy.get(asset_name, {}).get('recent_reasons', [])
-                                    if l == 'flip'] if asset_name in _asset_accuracy else []
-                    # (simplified: just check lesson log)
-
-                    # All checks passed — losing >1.5% for 3+ hours + strong new signal
-                    print(f"  {asset_name}: FLIP {current_pos.direction}→{direction} after {hold_minutes:.0f}min, P&L={pnl_pct:+.2f}%, PQS={pqs_score}, conf={confidence}%")
-                    close_result = await engine.close_position(current_pos.id, price, 'flip')
-                    old_pnl = close_result.get('pnl', 0)
-                    _autotrader['trades_closed'] += 1
-                    record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, old_pnl, 'flip')
-                    forensic_log.log_trade_flip(
-                        asset_name, current_pos.direction, direction,
-                        current_pos.entry_price, price, old_pnl, 0,
-                        parent_id=cycle_id,
-                    )
-                    asyncio.create_task(send_message(
-                        f"🔄 FLIP {asset_name}: {current_pos.direction}→{direction} | P&L: ${old_pnl:+.2f} | PQS: {pqs_score}"
-                    ))
+                    else:
+                        # Loss exceeded hard stop → emergency close, accept the loss
+                        print(f"  {asset_name}: HARD STOP {current_pos.direction} {pnl_pct:+.2f}% exceeds -{hard_stop_pct:.1f}% limit")
+                        close_result = await engine.close_position(current_pos.id, price, 'hard_stop')
+                        hard_pnl = close_result.get('pnl', 0)
+                        _autotrader['trades_closed'] += 1
+                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, hard_pnl, 'hard_stop')
+                        forensic_log.log_trade_flip(
+                            asset_name, current_pos.direction, direction,
+                            current_pos.entry_price, price, hard_pnl, 0,
+                            parent_id=cycle_id,
+                        )
+                        asyncio.create_task(send_message(
+                            f"🛑 HARD STOP {asset_name}: {pnl_pct:+.2f}% loss | -${abs(hard_pnl):.2f} | Reopening {direction}"
+                        ))
+                        cycle_summary.append(f"{asset_name}: HARD STOP {pnl_pct:+.1f}% → {direction}")
 
                 # ── Daily loss limit: only hard stop
                 if engine.daily_pnl <= -(engine._equity * 0.05):
@@ -2350,6 +2342,7 @@ class AutotraderStartRequest(BaseModel):
     use_local: bool = False
     local_url: str = "http://localhost:11434"
     local_model: str = "qwen2.5:7b"
+    hard_stop_pct: float = 5.0
 
 
 @app.post("/autotrader/start")
@@ -2371,6 +2364,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['use_local'] = req.use_local
     _autotrader['local_url'] = req.local_url
     _autotrader['local_model'] = req.local_model
+    _autotrader['hard_stop_pct'] = max(1.0, min(10.0, req.hard_stop_pct))
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
