@@ -696,16 +696,11 @@ async def _autotrader_loop():
                     tp_pct = sl_pct * 3.0
                     trail_pct = 1.2
 
-                # ── Position sizing: V1/V2 levels — respect user's trade_size with gentle scaling
+                # ── Position sizing
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
-                    # User set explicit size — respect it (cap at 25% of equity)
-                    base_size = min(custom_size, engine._equity * 0.25)
-                    # Gentle scaling only: floor PQS/ADX so we don't crush user's intended size
-                    eff_pqs_scale = max(0.85, pqs_scale)
-                    eff_adx_scale = max(0.90, adx_scale)
+                    size = round(min(custom_size, engine._equity * 0.25), 2)
                 else:
-                    # Auto-sizing: 2% of equity (was capped at $200 — bug)
                     base_size = max(min(engine._equity * 0.02, 50000), 500)
                     stats = _equity_tracker.get_stats()
                     if stats.get('n_trades', 0) >= 10:
@@ -718,27 +713,16 @@ async def _autotrader_loop():
                         kelly = engine.kelly_size(win_rate, 2.0, 1.0, engine._equity)
                         if kelly > 100:
                             base_size = kelly
-                    # Auto mode: full scaling (no floor)
-                    eff_pqs_scale = pqs_scale
-                    eff_adx_scale = adx_scale
+                    if base_size < 10:
+                        base_size = max(engine._equity * 0.02, 500)
+                    asset_factor = _get_asset_size_factor(asset_name)
+                    size = round(base_size * pqs_scale * asset_factor * adx_scale, 2)
 
-                if base_size < 10:
-                    base_size = max(engine._equity * 0.02, 500)
-
-                # Self-correction factor: shrink size for assets that keep losing
-                asset_factor = _get_asset_size_factor(asset_name)
-                # If user set custom_size, soften the asset factor too
-                if custom_size > 0:
-                    asset_factor = max(0.80, min(1.20, asset_factor))
-
-                size = round(base_size * eff_pqs_scale * asset_factor * eff_adx_scale, 2)
-
-                # Low PQS: tighter stops but maintain 3:1 ratio
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
                     tp_pct = sl_pct * 3.0
 
-                print(f"  {asset_name}: size=${size:.0f} (base=${base_size:.0f} x pqs={eff_pqs_scale:.2f} x adx={eff_adx_scale:.2f} x asset={asset_factor:.2f}) PQS={pqs_score} ADX={adx:.0f} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                print(f"  {asset_name}: size=${size:.0f} PQS={pqs_score} ADX={adx:.0f} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
 
                 # Open the trade
                 trade_result = await engine.open_position(
