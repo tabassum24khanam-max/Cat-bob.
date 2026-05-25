@@ -545,11 +545,10 @@ async def _autotrader_loop():
                     print(f"  {asset_name}: SKIP — no API keys")
                     continue
 
-                # Bot mode: AI's thinking shifts from "predict 4h ahead" to
-                # "what's the right side to be on RIGHT NOW to maintain profit?"
-                # V4: 2h horizon — validated better than 1h (more candles, less noise)
+                interval_min = _autotrader.get('interval_minutes', 30)
+                bot_horizon = max(1, round(interval_min * 1.5 / 60))
                 req = PredictRequest(
-                    asset=asset_name, horizon=2,
+                    asset=asset_name, horizon=bot_horizon,
                     api_key=api_key, ds_key=ds_key,
                     use_r1=not _autotrader.get('use_local', False),
                     bot_mode=True,
@@ -1056,11 +1055,12 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         db_sentiment = {'hours': len(db_news), 'avg_24h': avg_24h, 'trend': trend}
         slog(f"✓ Sentiment memory: {len(db_news)}h history, avg={avg_24h:+.2f}, trend={trend:+.3f}")
 
-    # ── MTF: 4H + Daily context ─────────────────────────────────────────
-    slog("📅 Fetching MTF trend context (4H + Daily)...")
-    daily_candles, h4_candles = await asyncio.gather(
+    # ── MTF: 1H + 4H + Daily context ──────────────────────────────────
+    slog("📅 Fetching MTF trend context (1H + 4H + Daily)...")
+    daily_candles, h4_candles, h1_candles = await asyncio.gather(
         fetch_candles(req.asset, '1d', 32),
         fetch_candles(req.asset, '4h', 60),
+        fetch_candles(req.asset, '1h', 60),
     )
     mtf_data = {}
     if daily_candles and len(daily_candles) >= 20:
@@ -1084,6 +1084,16 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             mtf_data['h4_bear'] = h4_ind['dist_e20'] < -0.5 and h4_ind['macd_hist'] < 0
             mtf_data['h4_rsi'] = h4_ind['rsi14']
             slog(f"✓ 4H: {'BULL' if mtf_data['h4_bull'] else 'BEAR' if mtf_data['h4_bear'] else 'NEUTRAL'} RSI={h4_ind['rsi14']:.1f}")
+    if h1_candles and len(h1_candles) >= 20:
+        h1c = h1_candles[:-1]
+        h1_ind = compute_indicators(h1c)
+        if h1_ind:
+            mtf_data['h1_macd_hist'] = h1_ind['macd_hist']
+            mtf_data['h1_dist_e20'] = h1_ind['dist_e20']
+            mtf_data['h1_bull'] = h1_ind['dist_e20'] > 0.3 and h1_ind['macd_hist'] > 0
+            mtf_data['h1_bear'] = h1_ind['dist_e20'] < -0.3 and h1_ind['macd_hist'] < 0
+            mtf_data['h1_rsi'] = h1_ind['rsi14']
+            slog(f"✓ 1H: {'BULL' if mtf_data['h1_bull'] else 'BEAR' if mtf_data['h1_bear'] else 'NEUTRAL'} RSI={h1_ind['rsi14']:.1f}")
 
     # ── ML Ensemble ──────────────────────────────────────────────────────
     ml_result = {'confidence': 50, 'available': False}
@@ -1260,18 +1270,23 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         elif bull_count >= 4 and d_dir == 'SELL':
             gate_penalties.append(('macro_bull', 10))
 
-    # MTF COUNTER-TREND — only kills if BOTH 4H and Daily oppose
+    # MTF COUNTER-TREND — 1H + 4H + Daily alignment check
     if d_dir != 'NO_TRADE' and mtf_data:
+        h1_opposes = (mtf_data.get('h1_bear') and d_dir == 'BUY') or \
+                     (mtf_data.get('h1_bull') and d_dir == 'SELL')
         h4_opposes = (mtf_data.get('h4_bear') and d_dir == 'BUY') or \
                      (mtf_data.get('h4_bull') and d_dir == 'SELL')
         daily_opposes = (mtf_data.get('daily_bear') and d_dir == 'BUY') or \
                         (mtf_data.get('daily_bull') and d_dir == 'SELL')
-        if h4_opposes and daily_opposes:
-            gate_kill = f"MTF rejection — both 4H and Daily oppose {d_dir}"
+        oppose_count = sum([h1_opposes, h4_opposes, daily_opposes])
+        if oppose_count >= 2:
+            gate_kill = f"MTF rejection — {oppose_count}/3 timeframes (1H+4H+Daily) oppose {d_dir}"
         elif daily_opposes:
             gate_penalties.append(('counter_trend_daily', 8))
         elif h4_opposes:
             gate_penalties.append(('counter_trend_4h', 5))
+        elif h1_opposes:
+            gate_penalties.append(('counter_trend_1h', 3))
 
     # ICHIMOKU CLOUD — only kill if confidence already very low
     if d_dir != 'NO_TRADE':
