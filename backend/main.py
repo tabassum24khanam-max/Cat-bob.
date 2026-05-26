@@ -118,6 +118,35 @@ def _get_asset_size_factor(asset: str) -> float:
         return 0.6
     return 0.35
 
+# ─── Feature Registry ──────────────────────────────────────────────────────
+# Single source of truth for toggleable features. Frontend fetches this list
+# via GET /api/features, persists user choices in localStorage, and sends them
+# back with every /predict call. Server applies exactly what was sent, echoes
+# back which features actually ran. No drift possible.
+FEATURES_REGISTRY = {
+    "trade_history": {
+        "default": True,
+        "label": "Trade history in AI prompt",
+        "description": "Inject recent W/L track record per asset into the Decision agent prompt so it can see its own performance. Risk: confirmation bias on streaks — toggle off to A/B test.",
+    },
+    "volume_confirm": {
+        "default": True,
+        "label": "Volume confirmation gate",
+        "description": "Penalise confidence when OBV slope or volume z-score disagrees with the trade direction. Risk: hoax-driven volume can look like real conviction — toggle off if news-driven moves are being filtered out.",
+    },
+}
+
+def feature_enabled(req_features, name: str) -> bool:
+    """Returns True if the feature is enabled for this request.
+    Falls back to the registry default if the request didn't send a flag
+    (forward-compatible with old clients)."""
+    if req_features is None:
+        return FEATURES_REGISTRY.get(name, {}).get("default", True)
+    if name in req_features:
+        return bool(req_features[name])
+    return FEATURES_REGISTRY.get(name, {}).get("default", True)
+
+
 # ─── Learning Memory ────────────────────────────────────────────────────────
 from typing import Dict
 _trade_lessons: Dict[str, list] = {}
@@ -206,6 +235,7 @@ class PredictRequest(BaseModel):
     use_local: Optional[bool] = False
     local_url: Optional[str] = "http://localhost:11434"
     local_model: Optional[str] = "qwen2.5:7b"
+    features: Optional[dict] = None
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -555,6 +585,7 @@ async def _autotrader_loop():
                     use_local=_autotrader.get('use_local', False),
                     local_url=_autotrader.get('local_url', 'http://localhost:11434'),
                     local_model=_autotrader.get('local_model', 'qwen2.5:7b'),
+                    features=_autotrader.get('features'),
                 )
 
                 start_time = time.time()
@@ -893,6 +924,13 @@ async def health():
     return {"status": "ok", "version": "5.0", "ts": int(time.time())}
 
 
+@app.get("/api/features")
+async def get_features():
+    """Returns the feature registry so the frontend can render toggles.
+    Single source of truth — frontend never hardcodes feature names."""
+    return {"features": FEATURES_REGISTRY}
+
+
 @app.get("/ollama/status")
 async def ollama_status(url: str = "http://localhost:11434"):
     """Check if Ollama is running and list available models."""
@@ -1158,6 +1196,35 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     use_r1 = bool(req.ds_key) and (req.use_r1 is not False) and not use_local
     model_name = 'LOCAL' if use_local else ('R1' if use_r1 else ('V4' if req.ds_key else 'GPT-4o'))
     slog(f"🧠 Agent 3 ({model_name}) making final decision...")
+
+    # Feature: trade_history — inject recent W/L track record into AI prompt
+    features_applied = []
+    features_skipped = []
+    recent_trades_ctx = ""
+    if feature_enabled(req.features, 'trade_history'):
+        lessons = _trade_lessons.get(req.asset, [])
+        if lessons:
+            recent = lessons[-5:]
+            wins = sum(1 for l in recent if l['was_correct'])
+            losses = len(recent) - wins
+            lines = []
+            for l in recent:
+                ago = int((time.time() - l['ts']) / 60)
+                status = "WIN" if l['was_correct'] else "LOSS"
+                lines.append(f"  {l['direction']} {ago}min ago → {status} ({l['pnl_pct']:+.2f}%) closed via {l['reason']}")
+            recent_trades_ctx = f"""
+YOUR RECENT TRACK RECORD ON {req.asset} (last {len(recent)} trades):
+Record: {wins}W {losses}L
+{chr(10).join(lines)}
+NOTE: This is factual history. Do NOT blindly repeat your last direction — evaluate the CURRENT signals independently. If your last 3 calls were all BUY but indicators now say SELL, follow the indicators."""
+            slog(f"📜 [trade_history] Loaded {len(recent)} lessons for {req.asset} ({wins}W {losses}L)")
+        else:
+            slog(f"📜 [trade_history] No lessons yet for {req.asset}")
+        features_applied.append('trade_history')
+    else:
+        slog("⏭ [trade_history] Skipped (disabled)")
+        features_skipped.append('trade_history')
+
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
         mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
@@ -1165,6 +1232,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         use_local=use_local,
         local_url=req.local_url or "http://localhost:11434",
         local_model=req.local_model or "qwen2.5:7b",
+        recent_trades_ctx=recent_trades_ctx,
     )
     model_used = decision.get('_model', 'unknown')
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
@@ -1334,6 +1402,32 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     if d_dir != 'NO_TRADE':
         if (d_dir == 'BUY' and obv_slope < -0.15) or (d_dir == 'SELL' and obv_slope > 0.15):
             gate_penalties.append(('obv_divergence', 5))
+
+    # VOLUME CONFIRMATION (feature-gated)
+    if feature_enabled(req.features, 'volume_confirm'):
+        if d_dir != 'NO_TRADE':
+            vol_z = ind.get('vol_zscore', 0)
+            vol_pct = ind.get('vol_percentile', 50)
+            obv_s = ind.get('obv_slope', 0)
+            vol_problems = []
+            if vol_pct < 25:
+                vol_problems.append('low_volume')
+            if (d_dir == 'BUY' and obv_s < -0.05) or (d_dir == 'SELL' and obv_s > 0.05):
+                vol_problems.append('obv_opposes')
+            if vol_z < -0.5:
+                vol_problems.append('below_avg')
+            if len(vol_problems) >= 2:
+                gate_penalties.append(('volume_unconfirmed', 7))
+                slog(f"📉 [volume_confirm] Volume does NOT confirm {d_dir}: {', '.join(vol_problems)} → -7 penalty")
+            elif vol_problems:
+                gate_penalties.append(('volume_weak', 3))
+                slog(f"📉 [volume_confirm] Weak volume for {d_dir}: {', '.join(vol_problems)} → -3 penalty")
+            else:
+                slog(f"📈 [volume_confirm] Volume confirms {d_dir}: z={vol_z:.1f} pct={vol_pct:.0f} obv={obv_s:+.2f}")
+        features_applied.append('volume_confirm')
+    else:
+        slog("⏭ [volume_confirm] Skipped (disabled)")
+        features_skipped.append('volume_confirm')
 
     # ML DISAGREEMENT
     if d_dir != 'NO_TRADE' and ml_result.get('available'):
@@ -1600,6 +1694,8 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         "recent_prices": recent_prices,
         "logs": logs,
         "duration_ms": total_ms,
+        "features_applied": features_applied,
+        "features_skipped": features_skipped,
     }
 
     # Calibration (E3)
@@ -2354,6 +2450,7 @@ class AutotraderStartRequest(BaseModel):
     local_url: str = "http://localhost:11434"
     local_model: str = "qwen2.5:7b"
     hard_stop_pct: float = 5.0
+    features: Optional[dict] = None
 
 
 @app.post("/autotrader/start")
@@ -2376,6 +2473,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['local_url'] = req.local_url
     _autotrader['local_model'] = req.local_model
     _autotrader['hard_stop_pct'] = max(1.0, min(10.0, req.hard_stop_pct))
+    _autotrader['features'] = req.features
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']

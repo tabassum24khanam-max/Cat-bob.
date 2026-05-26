@@ -51,6 +51,7 @@ window.addEventListener('DOMContentLoaded', () => {
   retroactivelyScoreHistory();
   fetchAlerts();
   pushSettingsToBackend();
+  loadFeaturesRegistry();
   initAutotrader();
   setInterval(refreshAutotraderStatus, 15000);
 });
@@ -284,7 +285,7 @@ async function predict() {
   try {
     const r = await fetch(`${backendUrl}/predict`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null, use_r1:useR1, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel }),
+      body: JSON.stringify({ asset, horizon, api_key:apiKey, ds_key:dsKey||null, use_r1:useR1, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel, features: getFeatureFlags() }),
       signal: AbortSignal.timeout(modelMode === 'local' ? 300000 : (useR1 ? 680000 : 120000))
     });
     [t1,t2,t3].forEach(clearTimeout);
@@ -311,6 +312,7 @@ async function predict() {
 }
 
 function displayResult(r) {
+  updateFeaturesEcho(r);
   const dec = r.decision || 'NO_TRADE';
   const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
   const setH = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
@@ -1261,7 +1263,7 @@ async function toggleAutotrader() {
       const r = await fetch(`${backendUrl}/autotrader/start`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel }),
+        body: JSON.stringify({ assets: _atSelectedAssets, interval_minutes: _atInterval, use_local: modelMode === 'local', local_url: localUrl, local_model: localModel, features: getFeatureFlags() }),
       });
       const d = await r.json();
       if (d.ok) {
@@ -1390,5 +1392,109 @@ async function refreshAutotraderStatus() {
 
   } catch(e) {
     // Backend not reachable — ignore
+  }
+}
+
+
+// ─── Feature Panel ──────────────────────────────────────────────────────────
+// Single source of truth flow:
+//   1. Backend owns the registry (GET /api/features) — names, defaults, descriptions
+//   2. Frontend persists user toggles in localStorage (um_features)
+//   3. Every /predict request carries the feature flags in the body
+//   4. Backend echoes features_applied/features_skipped in response
+//   5. UI shows the echo status, NOT the local state, to verify no drift
+let _featuresRegistry = {};
+let _featuresState = JSON.parse(localStorage.getItem('um_features') || '{}');
+let _lastFeaturesEcho = {};
+
+async function loadFeaturesRegistry() {
+  try {
+    const r = await fetch(`${backendUrl}/api/features`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    _featuresRegistry = d.features || {};
+    for (const [name, info] of Object.entries(_featuresRegistry)) {
+      if (!(name in _featuresState)) {
+        _featuresState[name] = info.default;
+      }
+    }
+    localStorage.setItem('um_features', JSON.stringify(_featuresState));
+  } catch(e) {
+    console.warn('Failed to load features registry:', e);
+  }
+}
+
+function getFeatureFlags() {
+  const flags = {};
+  for (const name of Object.keys(_featuresRegistry)) {
+    flags[name] = _featuresState[name] !== undefined ? _featuresState[name] : _featuresRegistry[name].default;
+  }
+  return flags;
+}
+
+function openFeatures() {
+  const panel = document.getElementById('feature-panel');
+  if (panel) { panel.classList.add('on'); renderFeaturesPanel(); }
+}
+function closeFeatures() {
+  const panel = document.getElementById('feature-panel');
+  if (panel) panel.classList.remove('on');
+}
+
+function renderFeaturesPanel() {
+  const body = document.getElementById('fp-body');
+  if (!body) return;
+  const names = Object.keys(_featuresRegistry);
+  if (names.length === 0) {
+    body.innerHTML = '<div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">No features loaded. Check backend connection.</div>';
+    return;
+  }
+  let html = '';
+  for (const name of names) {
+    const info = _featuresRegistry[name];
+    const checked = _featuresState[name] !== false;
+    const echo = _lastFeaturesEcho[name] || 'idle';
+    const statusLabel = echo === 'applied' ? 'APPLIED in last run' : echo === 'skipped' ? 'SKIPPED in last run' : 'Not yet tested';
+    html += `<div class="fp-item">
+      <div class="fp-item-top">
+        <div class="fp-item-label">${info.label}</div>
+        <label class="toggle">
+          <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleFeature('${name}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="fp-item-desc">${info.description}</div>
+      <div class="fp-item-status ${echo}">${statusLabel}</div>
+    </div>`;
+  }
+  html += '<button class="fp-reset" onclick="resetFeatures()">RESET TO DEFAULTS</button>';
+  body.innerHTML = html;
+}
+
+function toggleFeature(name, enabled) {
+  _featuresState[name] = enabled;
+  localStorage.setItem('um_features', JSON.stringify(_featuresState));
+  showToast(`${_featuresRegistry[name]?.label || name}: ${enabled ? 'ON' : 'OFF'}`);
+}
+
+function resetFeatures() {
+  for (const [name, info] of Object.entries(_featuresRegistry)) {
+    _featuresState[name] = info.default;
+  }
+  localStorage.setItem('um_features', JSON.stringify(_featuresState));
+  renderFeaturesPanel();
+  showToast('Features reset to defaults');
+}
+
+function updateFeaturesEcho(result) {
+  _lastFeaturesEcho = {};
+  if (result.features_applied) {
+    for (const name of result.features_applied) _lastFeaturesEcho[name] = 'applied';
+  }
+  if (result.features_skipped) {
+    for (const name of result.features_skipped) _lastFeaturesEcho[name] = 'skipped';
+  }
+  if (document.getElementById('feature-panel')?.classList.contains('on')) {
+    renderFeaturesPanel();
   }
 }

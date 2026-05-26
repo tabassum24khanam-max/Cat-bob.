@@ -29,6 +29,7 @@ async def run_decision_agent(
     use_local: bool = False,
     local_url: str = "http://localhost:11434",
     local_model: str = "qwen2.5:7b",
+    recent_trades_ctx: str = "",
 ) -> dict:
     """Call R1, V4, GPT-4o, or LOCAL model (via Ollama) for final decision."""
 
@@ -107,6 +108,7 @@ MONTE CARLO (1000 simulations):
 Median: {mc['median']:.4f} | Bull(80th): {mc['bull']:.4f} | Bear(20th): {mc['bear']:.4f}
 Probability up: {mc['prob_up']*100:.0f}%
 {sim_ctx}
+{recent_trades_ctx}
 
 DECISION RULES:
 1. ML ENSEMBLE IS THE PRIMARY SIGNAL. Output the SAME direction as ML unless you have specific breaking news that contradicts it.

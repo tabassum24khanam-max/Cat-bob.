@@ -174,6 +174,31 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .backend-dot.ok { background: var(--green); }
 .backend-dot.err { background: var(--red); animation: blink 1s infinite; }
 
+/* Feature Panel */
+.feature-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; max-width: 90vw; background: var(--bg); border-left: 1px solid var(--border); z-index: 250; display: none; flex-direction: column; transform: translateX(100%); transition: transform .25s ease; }
+.feature-panel.on { display: flex; transform: translateX(0); }
+.fp-hdr { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 10px; }
+.fp-title { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 2px; color: var(--cyan); }
+.fp-close { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+.fp-body { flex: 1; overflow-y: auto; padding: 12px; }
+.fp-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.fp-item-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.fp-item-label { font-size: 10px; color: var(--text); font-weight: 700; flex: 1; }
+.fp-item-desc { font-size: 8px; color: var(--muted); line-height: 1.5; }
+.fp-item-status { font-size: 7px; margin-top: 6px; padding: 2px 6px; border-radius: 3px; display: inline-block; }
+.fp-item-status.applied { background: rgba(0,230,118,.1); color: var(--green); }
+.fp-item-status.skipped { background: rgba(255,23,68,.1); color: var(--red); }
+.fp-item-status.idle { background: rgba(45,77,110,.2); color: var(--muted); }
+.fp-reset { width: 100%; margin-top: 8px; padding: 8px; background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'Space Mono'; font-size: 8px; border-radius: 4px; cursor: pointer; }
+.fp-reset:hover { border-color: var(--cyan); color: var(--cyan); }
+/* Toggle switch */
+.toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--dim); border-radius: 20px; transition: .2s; }
+.toggle .slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: var(--muted); border-radius: 50%; transition: .2s; }
+.toggle input:checked + .slider { background: rgba(0,229,255,.25); }
+.toggle input:checked + .slider:before { transform: translateX(16px); background: var(--cyan); }
+
 /* Toast */
 .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,229,255,.15); border: 1px solid var(--cyan); color: var(--cyan); font-size: 9px; padding: 8px 16px; border-radius: 6px; z-index: 400; display: none; white-space: nowrap; }
 .toast.on { display: block; }
@@ -189,6 +214,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <button class="key-btn" onclick="openHistory()">HISTORY</button>
     <button class="key-btn" onclick="openAlerts()" id="alerts-btn">ALERTS</button>
     <button class="key-btn" onclick="exportForensic()" style="color:var(--cyan);border-color:var(--cyan)">📥 LOG</button>
+    <button class="key-btn" onclick="openFeatures()" id="features-btn" style="color:#ab47bc;border-color:#ab47bc">FEATURES</button>
     <a href="/bot" class="key-btn" id="bot-btn" style="color:var(--yellow);border-color:var(--yellow);text-decoration:none">BOT</a>
     <button class="key-btn" onclick="openModal()">⚙ KEYS</button>
   </div>
@@ -424,6 +450,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div style="padding:6px 12px">
     <div style="font-size:7px;color:var(--muted);margin-bottom:4px">TRADE LOG</div>
     <div id="at-trade-log" style="max-height:200px;overflow-y:auto;font-size:8px;color:var(--muted)">No trades yet</div>
+  </div>
+</div>
+
+<!-- Feature Panel -->
+<div class="feature-panel" id="feature-panel">
+  <div class="fp-hdr">
+    <div class="fp-title">FEATURES</div>
+    <div style="font-size:7px;color:var(--muted)">Toggle ON/OFF to A/B test</div>
+    <button class="fp-close" onclick="closeFeatures()">&#10005;</button>
+  </div>
+  <div class="fp-body" id="fp-body">
+    <div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">Loading features...</div>
   </div>
 </div>
 
