@@ -63,6 +63,30 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .tab-btn.active { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
 
 .rec-box { padding: 10px 14px; font-size: 10px; border-bottom: 1px solid var(--border); }
+
+/* Feature Panel */
+.feature-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; max-width: 90vw; background: var(--bg); border-left: 1px solid var(--border); z-index: 250; display: none; flex-direction: column; transform: translateX(100%); transition: transform .25s ease; }
+.feature-panel.on { display: flex; transform: translateX(0); }
+.fp-hdr { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 10px; }
+.fp-title { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 2px; color: var(--cyan); }
+.fp-close { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+.fp-body { flex: 1; overflow-y: auto; padding: 12px; }
+.fp-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
+.fp-item-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.fp-item-label { font-size: 10px; color: var(--text); font-weight: 700; flex: 1; }
+.fp-item-desc { font-size: 8px; color: var(--muted); line-height: 1.5; }
+.fp-item-status { font-size: 7px; margin-top: 6px; padding: 2px 6px; border-radius: 3px; display: inline-block; }
+.fp-item-status.applied { background: rgba(0,230,118,.1); color: var(--green); }
+.fp-item-status.skipped { background: rgba(255,23,68,.1); color: var(--red); }
+.fp-item-status.idle { background: rgba(45,77,110,.2); color: var(--muted); }
+.fp-reset { width: 100%; margin-top: 8px; padding: 8px; background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'Space Mono'; font-size: 8px; border-radius: 4px; cursor: pointer; }
+.fp-reset:hover { border-color: var(--cyan); color: var(--cyan); }
+.toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--dim); border-radius: 20px; transition: .2s; }
+.toggle .slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: var(--muted); border-radius: 50%; transition: .2s; }
+.toggle input:checked + .slider { background: rgba(0,229,255,.25); }
+.toggle input:checked + .slider:before { transform: translateX(16px); background: var(--cyan); }
 </style>
 </head>
 <body>
@@ -71,6 +95,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="hdr">
     <div class="logo">ULTRAMAX BOT</div>
     <a href="/" class="nav-btn">PREDICT MODE</a>
+    <button class="nav-btn" onclick="openFeatures()" style="color:#ab47bc;border-color:#ab47bc">FEATURES</button>
     <div class="status-badge" id="b-badge" style="background:var(--dim);color:var(--muted)">STOPPED</div>
   </div>
 
@@ -151,6 +176,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   </div>
   <div id="bt-syslog" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
     <div id="b-syslog-list" style="color:var(--muted);font-size:8px">Waiting for bot to start...</div>
+  </div>
+</div>
+
+<!-- Feature Panel -->
+<div class="feature-panel" id="feature-panel">
+  <div class="fp-hdr">
+    <div class="fp-title">FEATURES</div>
+    <div style="font-size:7px;color:var(--muted)">Toggle ON/OFF to A/B test</div>
+    <button class="fp-close" onclick="closeFeatures()">&#10005;</button>
+  </div>
+  <div class="fp-body" id="fp-body">
+    <div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">Loading features...</div>
   </div>
 </div>
 
@@ -480,7 +517,77 @@ function bUpdateMarkers(asset) {
   try { bMainSeries.setMarkers(markers); } catch(e) {}
 }
 
+// ── Feature Panel ─────────────────────────────────────────────────────
+let _featuresRegistry = {};
+let _featuresState = JSON.parse(localStorage.getItem('um_features') || '{}');
+
+async function loadFeaturesRegistry() {
+  try {
+    const r = await fetch(`${backendUrl}/api/features`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    _featuresRegistry = d.features || {};
+    for (const [name, info] of Object.entries(_featuresRegistry)) {
+      if (!(name in _featuresState)) {
+        _featuresState[name] = info.default;
+      }
+    }
+    localStorage.setItem('um_features', JSON.stringify(_featuresState));
+  } catch(e) { console.warn('Failed to load features:', e); }
+}
+
+function openFeatures() {
+  const panel = document.getElementById('feature-panel');
+  if (panel) { panel.classList.add('on'); renderFeaturesPanel(); }
+}
+function closeFeatures() {
+  const panel = document.getElementById('feature-panel');
+  if (panel) panel.classList.remove('on');
+}
+
+function renderFeaturesPanel() {
+  const body = document.getElementById('fp-body');
+  if (!body) return;
+  const names = Object.keys(_featuresRegistry);
+  if (names.length === 0) {
+    body.innerHTML = '<div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">No features loaded. Check backend connection.</div>';
+    return;
+  }
+  let html = '';
+  for (const name of names) {
+    const info = _featuresRegistry[name];
+    const checked = _featuresState[name] !== false;
+    html += `<div class="fp-item">
+      <div class="fp-item-top">
+        <div class="fp-item-label">${info.label}</div>
+        <label class="toggle">
+          <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleFeature('${name}', this.checked)">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="fp-item-desc">${info.description}</div>
+      <div class="fp-item-status idle">Feature flags sent when bot starts</div>
+    </div>`;
+  }
+  html += '<button class="fp-reset" onclick="resetFeatures()">RESET TO DEFAULTS</button>';
+  body.innerHTML = html;
+}
+
+function toggleFeature(name, enabled) {
+  _featuresState[name] = enabled;
+  localStorage.setItem('um_features', JSON.stringify(_featuresState));
+}
+
+function resetFeatures() {
+  for (const [name, info] of Object.entries(_featuresRegistry)) {
+    _featuresState[name] = info.default;
+  }
+  localStorage.setItem('um_features', JSON.stringify(_featuresState));
+  renderFeaturesPanel();
+}
+
 // Init
+loadFeaturesRegistry();
 bRenderAssets();
 const _savedEq = localStorage.getItem('um_at_equity');
 if (_savedEq) document.getElementById('b-equity-input').value = _savedEq;
