@@ -1290,6 +1290,18 @@ async function cashoutAutotrader() {
   } catch(e) { showToast('Error: '+e.message); }
 }
 
+async function resetAutotrader() {
+  if (!confirm('FULL RESET — This will wipe ALL trades, P&L, win rate, AI learning, and forensic logs. Everything goes back to zero. Are you sure?')) return;
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/reset`, {method:'POST'});
+    const d = await r.json();
+    _atRunning = false;
+    localStorage.removeItem('um_history_v3');
+    showToast(d.message || 'Reset complete');
+    refreshAutotraderStatus();
+  } catch(e) { showToast('Error: '+e.message); }
+}
+
 async function refreshAutotraderStatus() {
   try {
     const r = await fetch(`${backendUrl}/autotrader/status`, { signal: AbortSignal.timeout(10000) });

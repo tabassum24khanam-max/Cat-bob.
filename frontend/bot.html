@@ -126,6 +126,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <div style="flex:1"></div>
       <button class="big-btn start-btn" id="b-toggle" onclick="bToggle()">START BOT</button>
       <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
+      <button class="cash-btn" style="border-color:#ff5252;color:#ff5252" onclick="bReset()">RESET ALL</button>
       <button class="cash-btn" style="border-color:#00e5ff;color:#00e5ff" onclick="bExport()">📥 EXPORT LOG</button>
     </div>
     <div class="ctrl-row" style="margin-top:8px;gap:12px">
@@ -270,6 +271,18 @@ async function bCashout() {
   bRunning = false;
   alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
   bRefresh();
+}
+
+async function bReset() {
+  if (!confirm('FULL RESET — This will wipe ALL trades, P&L, win rate, AI learning, and forensic logs. Everything goes back to zero. Are you sure?')) return;
+  try {
+    const r = await fetch(`${backendUrl}/autotrader/reset`, {method:'POST'});
+    const d = await r.json();
+    bRunning = false;
+    localStorage.removeItem('um_history_v3');
+    alert(d.message || 'Reset complete');
+    bRefresh();
+  } catch(e) { alert('Error: '+e.message); }
 }
 
 async function bExport() {

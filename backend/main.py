@@ -2610,6 +2610,41 @@ async def forensic_clear():
     return {"ok": True}
 
 
+@app.post("/autotrader/reset")
+async def autotrader_reset():
+    """Full factory reset — wipes all state back to zero."""
+    global _trade_lessons, _asset_accuracy, _session_predictions, _ml_cache, _gate_stats
+
+    _autotrader['enabled'] = False
+    _autotrader['status'] = 'stopped'
+    _autotrader['_loop_running'] = False
+    _autotrader['last_cycle'] = 0
+    _autotrader['total_cycles'] = 0
+    _autotrader['trades_opened'] = 0
+    _autotrader['trades_closed'] = 0
+    _autotrader['cycle_log'] = []
+
+    engine = get_trading_engine()
+    engine.positions.clear()
+    engine.daily_pnl = 0.0
+    engine.daily_trades = 0
+    engine._equity = _autotrader.get('starting_equity', 10000)
+    engine._trade_log.clear()
+
+    _trade_lessons.clear()
+    _asset_accuracy.clear()
+    _session_predictions.clear()
+    _ml_cache.clear()
+    _gate_stats['trades'] = 0
+    _gate_stats['wins'] = 0
+
+    _equity_tracker._curve.clear()
+
+    forensic_log.clear()
+
+    return {"ok": True, "message": "Full reset complete — all history, trades, and AI learning wiped"}
+
+
 # ─── Portfolio Scanner ───────────────────────────────────────────────────
 
 @app.get("/portfolio/scan")
