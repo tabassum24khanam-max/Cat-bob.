@@ -687,10 +687,29 @@ async def _autotrader_loop():
                         cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
 
                     elif pnl_pct > -hard_stop_pct:
-                        # In loss but within safety margin → hold, let it recover
-                        print(f"  {asset_name}: HOLD {current_pos.direction} {pnl_pct:+.2f}% (waiting for recovery, hard stop at -{hard_stop_pct:.1f}%)")
-                        cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}% loss)")
-                        continue
+                        # Time-decay: force-close losers held longer than 6 hours
+                        age_seconds = int(time.time()) - current_pos.entry_time
+                        max_hold_seconds = 6 * 3600
+                        if pnl_pct < 0 and age_seconds > max_hold_seconds:
+                            age_hrs = round(age_seconds / 3600, 1)
+                            print(f"  {asset_name}: TIME DECAY {current_pos.direction} {pnl_pct:+.2f}% held {age_hrs}h > 6h limit → force close")
+                            close_result = await engine.close_position(current_pos.id, price, 'time_decay')
+                            decay_pnl = close_result.get('pnl', 0)
+                            _autotrader['trades_closed'] += 1
+                            record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, decay_pnl, 'time_decay')
+                            forensic_log.log_trade_flip(
+                                asset_name, current_pos.direction, direction,
+                                current_pos.entry_price, price, decay_pnl, 0,
+                                parent_id=cycle_id,
+                            )
+                            asyncio.create_task(send_message(
+                                f"⏰ TIME DECAY {asset_name}: {pnl_pct:+.2f}% after {age_hrs}h | ${decay_pnl:+.2f} | Reopening {direction}"
+                            ))
+                            cycle_summary.append(f"{asset_name}: TIME DECAY {pnl_pct:+.1f}% ({age_hrs}h) → {direction}")
+                        else:
+                            print(f"  {asset_name}: HOLD {current_pos.direction} {pnl_pct:+.2f}% (waiting for recovery, hard stop at -{hard_stop_pct:.1f}%)")
+                            cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}% loss)")
+                            continue
 
                     else:
                         # Loss exceeded hard stop → emergency close, accept the loss
@@ -2554,6 +2573,53 @@ async def autotrader_status():
     else:
         secs_left = 0
 
+    # ── Mark-to-market: compute unrealized P&L for every open position
+    unrealized_total = 0.0
+    open_winners = 0
+    open_losers = 0
+    position_health = []
+    for pos_data in open_positions:
+        try:
+            result = await fetch_current_price(pos_data['asset'])
+            price = result.get('price', 0)
+        except Exception:
+            price = 0
+        if price and pos_data.get('entry_price'):
+            if pos_data['direction'] == 'BUY':
+                pnl_pct = (price - pos_data['entry_price']) / pos_data['entry_price'] * 100
+            else:
+                pnl_pct = (pos_data['entry_price'] - price) / pos_data['entry_price'] * 100
+            pnl_usd = pnl_pct / 100 * pos_data.get('size', 0)
+            unrealized_total += pnl_usd
+            if pnl_pct >= 0:
+                open_winners += 1
+            else:
+                open_losers += 1
+            age_min = round((now - pos_data.get('entry_time', now)) / 60)
+            sl_dist = abs(price - pos_data.get('stop_loss', price)) / price * 100 if price else 0
+            tp_dist = abs(pos_data.get('take_profit', price) - price) / price * 100 if price else 0
+            position_health.append({
+                'asset': pos_data['asset'],
+                'direction': pos_data['direction'],
+                'entry_price': pos_data['entry_price'],
+                'current_price': round(price, 4),
+                'unrealized_pnl_pct': round(pnl_pct, 2),
+                'unrealized_pnl_usd': round(pnl_usd, 2),
+                'if_closed_now': round(pnl_usd, 2),
+                'age_minutes': age_min,
+                'sl_distance_pct': round(sl_dist, 2),
+                'tp_distance_pct': round(tp_dist, 2),
+                'entry_confidence': pos_data.get('entry_confidence', 0),
+                'status': 'winning' if pnl_pct >= 0 else 'losing',
+            })
+
+    mtm_equity = round(engine._equity + unrealized_total, 2)
+    all_recent = trade_log + [{'pnl': h['unrealized_pnl_usd']} for h in position_health]
+    true_wins = sum(1 for t in all_recent if t.get('pnl', 0) > 0)
+    true_total = len(all_recent)
+    true_win_rate = round((true_wins / true_total * 100) if true_total > 0 else 0, 1)
+    cashout_impact = round(unrealized_total, 2)
+
     return {
         "enabled": _autotrader['enabled'], "status": _autotrader['status'],
         "assets": _autotrader['assets'], "interval_minutes": _autotrader['interval_minutes'],
@@ -2564,6 +2630,13 @@ async def autotrader_status():
         "seconds_until_next": secs_left,
         "heartbeat": hb, "open_positions": open_positions,
         "recent_trades": trade_log, "win_rate": round(win_rate, 1),
+        "true_win_rate": true_win_rate,
+        "mtm_equity": mtm_equity,
+        "unrealized_pnl": round(unrealized_total, 2),
+        "cashout_impact": cashout_impact,
+        "open_winners": open_winners,
+        "open_losers": open_losers,
+        "position_health": position_health,
         "cycle_log": _autotrader['cycle_log'][-20:],
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "all_positions": engine.get_positions(),

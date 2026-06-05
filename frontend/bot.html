@@ -99,13 +99,21 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="status-badge" id="b-badge" style="background:var(--dim);color:var(--muted)">STOPPED</div>
   </div>
 
-  <!-- Stats -->
+  <!-- Stats Row 1: Core -->
   <div class="stats-bar">
     <div class="stat"><div class="stat-lbl">EQUITY</div><div class="stat-val" id="b-equity" style="color:var(--cyan)">$10,000</div></div>
     <div class="stat"><div class="stat-lbl">DAY P&L</div><div class="stat-val" id="b-pnl">$0</div></div>
     <div class="stat"><div class="stat-lbl">POSITIONS</div><div class="stat-val" id="b-pos">0</div></div>
     <div class="stat"><div class="stat-lbl">WIN RATE</div><div class="stat-val" id="b-wr">—</div></div>
     <div class="stat"><div class="stat-lbl">CYCLES</div><div class="stat-val" id="b-cycles" style="color:var(--text)">0</div></div>
+  </div>
+  <!-- Stats Row 2: Mark-to-Market (the REAL numbers) -->
+  <div class="stats-bar" style="border-top:1px solid rgba(255,214,0,.15)">
+    <div class="stat"><div class="stat-lbl" style="color:#ffd600">REAL EQUITY</div><div class="stat-val" id="b-mtm-equity" style="color:#ffd600">—</div></div>
+    <div class="stat"><div class="stat-lbl" style="color:#ffd600">UNREALIZED</div><div class="stat-val" id="b-unrealized">—</div></div>
+    <div class="stat"><div class="stat-lbl" style="color:#ffd600">IF CASHOUT</div><div class="stat-val" id="b-cashout-impact">—</div></div>
+    <div class="stat"><div class="stat-lbl" style="color:#ffd600">TRUE WIN%</div><div class="stat-val" id="b-true-wr">—</div></div>
+    <div class="stat"><div class="stat-lbl" style="color:#ffd600">W / L OPEN</div><div class="stat-val" id="b-wl-open" style="color:var(--text)">—</div></div>
   </div>
 
   <!-- Recommendation -->
@@ -351,7 +359,7 @@ async function bRefresh() {
     btn.textContent = bRunning ? 'STOP BOT' : 'START BOT';
     btn.className = bRunning ? 'big-btn stop-btn' : 'big-btn start-btn';
 
-    // Stats
+    // Stats — Row 1 (realized)
     const hb = d.heartbeat || {};
     document.getElementById('b-equity').textContent = '$' + (hb.equity||10000).toLocaleString('en',{maximumFractionDigits:2});
     const pnlEl = document.getElementById('b-pnl');
@@ -363,25 +371,58 @@ async function bRefresh() {
     wrEl.style.color = (d.win_rate||0) >= 50 ? '#00e676' : '#ff1744';
     document.getElementById('b-cycles').textContent = d.total_cycles || 0;
 
+    // Stats — Row 2 (mark-to-market / the REAL numbers)
+    const mtmEl = document.getElementById('b-mtm-equity');
+    if (d.mtm_equity !== undefined) {
+      mtmEl.textContent = '$' + d.mtm_equity.toLocaleString('en',{maximumFractionDigits:2});
+      mtmEl.style.color = d.mtm_equity >= (hb.equity||0) ? '#ffd600' : '#ff1744';
+    }
+    const unrEl = document.getElementById('b-unrealized');
+    if (d.unrealized_pnl !== undefined) {
+      unrEl.textContent = (d.unrealized_pnl>=0?'+':'') + '$' + d.unrealized_pnl.toFixed(2);
+      unrEl.style.color = d.unrealized_pnl >= 0 ? '#00e676' : '#ff1744';
+    }
+    const ciEl = document.getElementById('b-cashout-impact');
+    if (d.cashout_impact !== undefined) {
+      ciEl.textContent = (d.cashout_impact>=0?'+':'') + '$' + d.cashout_impact.toFixed(2);
+      ciEl.style.color = d.cashout_impact >= 0 ? '#00e676' : '#ff1744';
+    }
+    const twrEl = document.getElementById('b-true-wr');
+    if (d.true_win_rate !== undefined) {
+      twrEl.textContent = d.true_win_rate + '%';
+      twrEl.style.color = d.true_win_rate >= 50 ? '#00e676' : '#ff1744';
+    }
+    const wlEl = document.getElementById('b-wl-open');
+    if (d.open_winners !== undefined) {
+      wlEl.innerHTML = `<span style="color:#00e676">${d.open_winners}W</span> / <span style="color:#ff1744">${d.open_losers}L</span>`;
+    }
+
     // Recommendation
     document.getElementById('b-rec').textContent = d.recommendation || '';
 
-    // Positions
+    // Positions — enhanced with mark-to-market health data
     const posEl = document.getElementById('b-positions-list');
     const positions = d.open_positions || [];
+    const health = d.position_health || [];
     if (!positions.length) {
       posEl.innerHTML = '<div style="color:var(--muted)">No open positions</div>';
     } else {
       posEl.innerHTML = positions.map(p => {
-        const pnl_pct = p.direction==='BUY'
-          ? ((p.highest_price||p.entry_price)-p.entry_price)/p.entry_price*100
-          : (p.entry_price-(p.lowest_price||p.entry_price))/p.entry_price*100;
+        const h = health.find(x => x.asset === p.asset) || {};
+        const pnl_pct = h.unrealized_pnl_pct || 0;
+        const pnl_usd = h.unrealized_pnl_usd || 0;
         const c = pnl_pct >= 0 ? '#00e676' : '#ff1744';
-        const age = Math.round((Date.now()/1000 - p.entry_time)/60);
-        return `<div class="pos-card">
+        const age = h.age_minutes || Math.round((Date.now()/1000 - p.entry_time)/60);
+        const ageStr = age >= 60 ? (age/60).toFixed(1)+'h' : age+'m';
+        const conf = h.entry_confidence || p.entry_confidence || 0;
+        const slDist = h.sl_distance_pct ? h.sl_distance_pct.toFixed(1)+'%' : '—';
+        const tpDist = h.tp_distance_pct ? h.tp_distance_pct.toFixed(1)+'%' : '—';
+        const curPrice = h.current_price ? '$'+h.current_price.toLocaleString('en',{maximumFractionDigits:2}) : '—';
+        return `<div class="pos-card" style="flex-wrap:wrap;gap:4px">
           <span><b style="color:${p.direction==='BUY'?'#00e676':'#ff1744'}">${p.direction}</b> ${p.asset} @ $${p.entry_price.toFixed(2)} ($${p.size.toFixed(0)})</span>
-          <span>SL: $${p.stop_loss.toFixed(2)} | TP: $${p.take_profit.toFixed(2)}</span>
-          <span style="color:${c}">${pnl_pct>=0?'+':''}${pnl_pct.toFixed(2)}% (${age}min)</span>
+          <span>Now: ${curPrice}</span>
+          <span style="color:${c};font-weight:700">${pnl_pct>=0?'+':''}${pnl_pct.toFixed(2)}% | $${pnl_usd>=0?'+':''}${pnl_usd.toFixed(2)}</span>
+          <span style="color:var(--muted)">Age: ${ageStr} | SL: ${slDist} away | TP: ${tpDist} away | Conf: ${conf}%</span>
         </div>`;
       }).join('');
     }
