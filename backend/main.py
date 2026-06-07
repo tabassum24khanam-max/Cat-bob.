@@ -2555,6 +2555,48 @@ async def autotrader_cashout():
             "final_equity": round(engine._equity, 2)}
 
 
+@app.post("/autotrader/cashout-winners")
+async def autotrader_cashout_winners():
+    """Close only positions currently in profit; leave losers open to recover.
+    Does NOT stop the bot — losers keep being managed by the loop."""
+    from telegram_bot import send_message
+    engine = get_trading_engine()
+    closed = []
+    held = []
+    total_pnl = 0.0
+    for pos in list(engine.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if not price:
+                continue
+            if pos.direction == 'BUY':
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+            else:
+                pnl_pct = (pos.entry_price - price) / pos.entry_price * 100
+            if pnl_pct > 0:
+                close_result = await engine.close_position(pos.id, price, 'cashout_winners')
+                pnl = close_result.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({'asset': pos.asset, 'direction': pos.direction,
+                               'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
+            else:
+                held.append({'asset': pos.asset, 'direction': pos.direction,
+                             'entry': pos.entry_price, 'pnl_pct': round(pnl_pct, 2)})
+        except Exception:
+            continue
+    asyncio.create_task(send_message(
+        f"💰 CASHOUT WINNERS: closed {len(closed)} winning positions for "
+        f"${total_pnl:+,.2f} | {len(held)} losers held open"
+    ))
+    return {"ok": True, "closed": closed, "held": held,
+            "total_pnl": round(total_pnl, 2),
+            "winners_closed": len(closed), "losers_held": len(held),
+            "final_equity": round(engine._equity, 2)}
+
+
 @app.get("/autotrader/status")
 async def autotrader_status():
     engine = get_trading_engine()

@@ -136,6 +136,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div class="ctrl-row" style="margin-top:6px">
       <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
+      <button class="cash-btn" style="border-color:#00e676;color:#00e676;font-weight:700" onclick="bCashoutWinners()">CASHOUT WINNERS</button>
       <button class="cash-btn" style="border-color:#ff5252;color:#ff5252" onclick="bReset()">RESET ALL</button>
       <button class="cash-btn" style="border-color:#00e5ff;color:#00e5ff" onclick="bExport()">📥 EXPORT LOG</button>
     </div>
@@ -280,6 +281,14 @@ async function bCashout() {
   const d = await r.json();
   bRunning = false;
   alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
+  bRefresh();
+}
+
+async function bCashoutWinners() {
+  if (!confirm('Close all WINNING positions and bank the profits?\n\nLosing positions stay open so they can recover. Bot keeps running.')) return;
+  const r = await fetch(`${backendUrl}/autotrader/cashout-winners`, {method:'POST'});
+  const d = await r.json();
+  alert(`Banked ${d.winners_closed||0} winners for $${(d.total_pnl||0).toFixed(2)}\n${d.losers_held||0} losers held open to recover.\n\nEquity: $${(d.final_equity||0).toFixed(2)}`);
   bRefresh();
 }
 
