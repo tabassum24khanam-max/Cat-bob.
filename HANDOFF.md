@@ -61,6 +61,8 @@ More discoveries (all verified against code 2026-07-03):
 - **News agent** = Google News/CoinDesk/CoinTelegraph/WSJ RSS once per cycle. A market-moving headline can be up to a full interval late. No insider/politician/defense feeds reach it.
 - **No market-hours awareness:** stock positions open at midnight, freeze at 0.00% for hours, distort all metrics.
 - **Interval finding** from earlier testing (screenshots, before/after CASHOUT ALL): **30m interval is the winner** (~85% win rate post-cashout vs 2h collapsing to ~20%). Judge intervals ONLY on post-cashout equity, never the headline win rate.
+- **Metrics are windowed to the LAST 20 CLOSED TRADES** (verified 2026-07-03): `/autotrader/status` computes both WIN RATE and TRUE WIN% from `engine.get_trade_log(20)` (`main.py` ~2605-2608, 2659-2662). Nothing on the dashboard is all-time. Explains why screenshots taken at different times show different percentages for "the same" run.
+- **Forensic log root cause found (2026-07-03):** the log is an IN-MEMORY ring buffer capped at 10,000 events (`forensic_log.py:33-34`). Consequences: (a) every Railway restart/redeploy wipes it to zero; (b) past 10k events the OLDEST silently fall off. With ~9-18 assets logging full predictions every 30m, a multi-day export is guaranteed to be missing its beginning. This is why the owner's mid-period screenshots showed data the 35MB export didn't contain — the export wasn't wrong, it was amputated. Fix is in Phase 3.
 
 ---
 
@@ -87,10 +89,9 @@ Every interval, per asset: re-run the full AI, then act — the AI's fresh predi
 1. **Small loss + AI still says same direction → HOLD, don't realize.** Hold until recovery or the −5% hard stop. Cash-out-and-reopen-same is for profitable positions only.
 2. **Major catalyst mid-interval → flip IMMEDIATELY, but VERIFIED.** The cheap 3-min headline poller (no LLM) never trades on its own — a high-impact hit triggers an immediate full 3-agent cycle for that asset, and the flip only executes if the full pipeline confirms the reversal with high conviction (whipsaw guard applies; in-loss flips need the stricter bar). No verification → the catalyst becomes evidence for the next scheduled cycle instead.
 3. **Finnhub key → owner will create one (it IS free).** Free tier at finnhub.io (60 calls/min) is plenty. Owner signs up, adds `FINNHUB_API_KEY` to Railway Variables. Design the smart-money wiring to degrade gracefully if the key is absent (politicians + defense feeds still work; insiders become a bonus).
-
-### ⚠ NEW OPEN QUESTION (surfaced 2026-07-03, ask the owner)
-
-- **6h time-decay vs. "hold until −5%":** the currently deployed 6h rule force-closes a small loser (e.g., −1.2%) after 6 hours, which contradicts decision #1. Options: (a) remove the 6h rule in Phase 4 so losers are held until −5% / a verified thesis-flip, or (b) keep 6h as a staleness exception. Assistant leans (a) once the thesis-flip exit exists — the AI opposing the position is a better exit trigger than a clock.
+4. **Time-decay rule → KEEP it, extend 6h → 7-8h (default 7, configurable).** Owner's rationale: some losers hover at −1% forever and never reach −5%; the clock clears stale positions. Final loser rule: close at −5% OR after ~7-8h, whichever comes first.
+5. **AI weight over ML → re-confirmed explicitly (2026-07-03).** History: earlier the blend deliberately leaned ML because the AI side wasn't tuned yet. Owner now says AI should outweigh ML in the blend. That reasoning is part of Phase 1.
+6. **End goal stated: commercial product.** Sequence the owner wants: fix the bot → prove it on paper → owner tests with own real money (small) → productize for others. Currently zero real money at risk.
 
 ---
 
@@ -114,7 +115,9 @@ Every interval, per asset: re-run the full AI, then act — the AI's fresh predi
 - Market hours awareness incl. pre-market (4:00–9:30 ET) and after-hours (16:00–20:00 ET) — owner explicitly wants extended hours traded; skip only the dead zone and weekends; crypto 24/7. Skip predict entirely for closed markets (saves tokens). Frozen positions counted as FLAT, excluded from win metrics.
 - Prediction autopsy logging: per prediction, log the chain (AI said X% → blend → evidence → final → fallback?) so exports show WHY, not just what.
 - Rebuild the forensic export (owner: "way too confusing and I don't think this is actually correct"): summary header (totals, per-asset W/L/net P&L) + compact per-event lines + autopsy lines. `forensic_log.py::export_text`.
-- One metric standard: win = pnl > 0, flat = 0, loss < 0, same everywhere; "—" not red 0% when the log is empty.
+- **Persist forensic events to SQLite** (DB layer already exists in `database.py`) so restarts stop erasing history and the 10k cap stops amputating exports; keep the RAM buffer for the live UI only. Note: full durability across Railway REDEPLOYS additionally needs a Railway volume mounted (one setting in their dashboard) — flag to owner.
+- **Per-cycle dashboard snapshot (owner-requested 2026-07-03):** every cycle, save the exact `/autotrader/status` JSON (equity, win rates, every position with live P&L) as a forensic event — the UI is just a rendering of that JSON, so this IS a "screenshot" of what the dashboard would have shown, capturable even when no browser is open. Export includes per-cycle snapshot lines so the owner's real screenshots can be cross-referenced number-for-number by timestamp. (A literal PNG screenshot would require running a headless browser in the container every cycle — heavy, fragile, adds nothing the JSON lacks; optionally render snapshots back into a visual HTML report instead.)
+- One metric standard: win = pnl > 0, flat = 0, loss < 0, same everywhere; "—" not red 0% when the log is empty. **Add all-time counters** alongside the current last-20-trades window — dashboard shows both.
 
 **Phase 4 — New cash-out matrix (§4) + exits:** prediction-driven flip logic with whipsaw guard; breakeven stop at +0.3% (SL→entry, losers become scratches); partial cashout at +0.5%; thesis-flip exit (holding loser + AI now opposes at ≥60% → close). Resolve the 6h time-decay question here.
 
@@ -159,7 +162,8 @@ Dockerfile / railway.json  Railway builds Dockerfile from main, uvicorn :8000
 7. Answered "why don't hedge funds just use ChatGPT" (selection bias — the owner picks high-signal moments to ask; funds DO use LLMs for news synthesis; their edge is sizing/execution). Verified the 3-agent architecture against the owner's original tree vision. Designed the full rebuild (§5). Owner approved: market hours WITH extended hours, autopsy logging, export rebuild, insider wiring, exit intelligence. Rejected: trend filter, persistence.
 8. Owner said GO; assistant began editing; owner immediately retracted ("we are just discussing") → reverted, tree clean. Then the trading philosophy was refined to the final matrix in §4 (profit ratchet + prediction-driven flips + whipsaw guard + catalyst override). Session ended with open questions unanswered.
 9. (2026-07) Owner returned after a month; handoff v2 written.
-10. (2026-07-03) New session verified the entire diagnosis against the code (all line pointers confirmed). **Owner answered the 3 open questions** — recorded in §4 DECISIONS. One new open question surfaced (6h time-decay vs hold-until-−5%). Still awaiting GO for Phase 1. No build code written; working tree clean apart from this document.
+10. (2026-07-03) New session verified the entire diagnosis against the code (all line pointers confirmed). **Owner answered the 3 open questions** — recorded in §4 DECISIONS.
+11. (2026-07-04) Owner re-explained the trading philosophy in their own words (matches §4 matrix: slice a long trade into interval-sized re-decisions; full re-analysis each interval; stay→cash out+reopen same, reversal→flip; prediction credibility decays with horizon). Resolved the time-decay question (keep, extend to 7-8h), re-confirmed AI>ML weighting, stated the commercial-product end goal (§4 decisions 4-6). Reported the forensic-export-vs-screenshot mismatch → root cause found and verified (in-memory 10k ring buffer + restart wipe + last-20-trade metric window; see §3). Requested the per-cycle dashboard snapshot feature → agreed, JSON-snapshot design added to Phase 3. Also asked for the "realized vs actual realized" logic explanation → it's WIN RATE (last 20 closed only) vs TRUE WIN% (closed + open marked-to-market), built in session 4. Still awaiting GO; no build code written.
 
 ---
 
