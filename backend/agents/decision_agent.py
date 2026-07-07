@@ -30,6 +30,9 @@ async def run_decision_agent(
     local_url: str = "http://localhost:11434",
     local_model: str = "qwen2.5:7b",
     recent_trades_ctx: str = "",
+    risk_evidence: list = None,
+    bot_mode: bool = False,
+    version: int = 2,
 ) -> dict:
     """Call R1, V4, GPT-4o, or LOCAL model (via Ollama) for final decision."""
 
@@ -121,6 +124,65 @@ DECISION RULES:
 
 Respond with ONLY this JSON:
 {{"decision":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<final 0-100>,"agent_agreement":"<agree|partial|conflict>","price_target":<realistic target>,"price_target_bull":<optimistic>,"price_target_bear":<pessimistic>,"predicted_path":[<5 prices zigzag to target>],"volatility":"<low|moderate|high>","insight":"<3-4 sentences: what quant found + what news found + historical evidence + final reasoning>","primary_reason":"<one clear sentence: the single most decisive factor>"}}"""
+
+    # ── V3 pipeline: the judge with real authority ─────────────────────────
+    if version >= 3:
+        ml_witness = "STATISTICAL MODEL: not available this cycle."
+        if ml_result and ml_result.get('available'):
+            ml_score = ml_result.get('score', 50)
+            ml_dir = 'BUY' if ml_score > 55 else 'SELL' if ml_score < 45 else 'NEUTRAL'
+            ml_witness = (f"STATISTICAL MODEL (one witness among several — pattern-matcher trained on "
+                          f"{ml_result.get('n_train', 0):,} historical samples; its accuracy varies by market regime; "
+                          f"weigh it, do not obey it): {ml_dir} | prob up {ml_score:.1f}% | "
+                          f"XGB {ml_result.get('xgb_score', 50):.1f}% / RF {ml_result.get('rf_score', 50):.1f}% / "
+                          f"GB {ml_result.get('gb_score', 50):.1f}% | models agree: {'YES' if ml_result.get('agreement') else 'NO'}")
+
+        risk_notes = "\n".join(f"  - {e}" for e in (risk_evidence or [])) or "  - nothing unusual flagged"
+        catalyst_flag = news.get('catalyst_override', False)
+        daily_line = ""
+        if mtf_data:
+            daily_line = (f"TIMEFRAMES: Daily {'BULL' if mtf_data.get('daily_bull') else 'BEAR' if mtf_data.get('daily_bear') else 'NEUTRAL'}"
+                          f" | 4H {'BULL' if mtf_data.get('h4_bull') else 'BEAR' if mtf_data.get('h4_bear') else 'NEUTRAL'}"
+                          f" | 1H {'BULL' if mtf_data.get('h1_bull') else 'BEAR' if mtf_data.get('h1_bear') else 'NEUTRAL'}")
+
+        if bot_mode:
+            must_rule = """4. The desk trades every cycle: you MUST output BUY or SELL — NO_TRADE is not available to you.
+   Your confidence is where your honesty lives: strong case = high, weak case = low (a forced weak call is a 55, not a costume). NEVER inflate."""
+            dir_schema = "<BUY|SELL>"
+        else:
+            must_rule = """4. Output BUY or SELL on the weight of arguments. NO_TRADE only when the case is genuinely undecidable.
+   Your confidence is where your honesty lives. NEVER inflate."""
+            dir_schema = "<BUY|SELL|NO_TRADE>"
+
+        prompt = f"""You are the Head of an autonomous trading desk. Two analysts and one statistical model report to you. You make the final call on {asset} and yours is the only name on the trade.
+
+ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon}h
+VALID PRICE RANGE: {price_min:.4f} to {price_max:.4f} (max {max_pct}% move) | ATR: {ind['atr']:.4f}
+
+THE REPORTS:
+CHIEF MARKET ANALYST (math): {quant['direction']} at {quant['confidence']}% — "{quant.get('reasoning', 'N/A')}"
+  His own argument against himself: "{quant.get('counter_argument', 'none given')}"
+INTELLIGENCE CHIEF (news): {news['sentiment']} ({news['sentiment_score']:+d}/100), regime {news['market_regime']}
+  Catalysts: {', '.join(news.get('key_catalysts', ['none'])[:3])} | priced in: {news.get('priced_in', 'unknown')} | CATALYST OVERRIDE FLAGGED: {'YES — ' + str(news.get('reasoning', '')) if catalyst_flag else 'no'}
+  Reasoning: "{news.get('reasoning', 'N/A')}"
+{ml_witness}
+{daily_line}
+MONTE CARLO (1000 sims): median {mc['median']:.4f} | prob up {mc['prob_up']*100:.0f}%
+{sim_ctx}
+{recent_trades_ctx}
+RISK OFFICER'S NOTES (facts for your consideration, not orders):
+{risk_notes}
+
+RULES OF THE DESK:
+1. Weigh ARGUMENTS, not job titles. Anyone in this room can be wrong today.
+2. A genuine major catalyst outranks the math. If the Intelligence Chief flagged an override and you agree, rule with the news and say so in "primary_reason".
+3. If you overrule an analyst or the model, state why in one sentence inside "insight".
+{must_rule}
+5. If the analysts conflict, resolve it with evidence (historical record, risk notes) — never by splitting the difference.
+6. prob_up + prob_down MUST equal 100. Price targets MUST be within {price_min:.4f} to {price_max:.4f}: ABOVE current price for BUY, BELOW for SELL. Use ATR for realistic targets.
+
+Respond with ONLY this JSON:
+{{"decision":"{dir_schema}","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<your honest 0-100>,"agent_agreement":"<agree|partial|conflict>","price_target":<realistic target>,"price_target_bull":<optimistic>,"price_target_bear":<pessimistic>,"predicted_path":[<5 prices zigzag to target>],"volatility":"<low|moderate|high>","insight":"<3-4 sentences: how you weighed the witnesses, any overrule + why, final reasoning>","primary_reason":"<one clear sentence: the single most decisive factor>","flip_trigger":"<1 sentence: what would make you flip this call before the next cycle>"}}"""
 
     # Try LOCAL model first if requested (Ollama / LM Studio / any OpenAI-compatible server)
     global _last_r1_error

@@ -140,6 +140,16 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <button class="cash-btn" style="border-color:#ff5252;color:#ff5252" onclick="bReset()">RESET ALL</button>
       <button class="cash-btn" style="border-color:#00e5ff;color:#00e5ff" onclick="bExport()">📥 EXPORT LOG</button>
     </div>
+    <div class="ctrl-row" style="margin-top:6px;gap:10px">
+      <span style="font-size:7px;color:var(--muted)">BRAIN:</span>
+      <button class="int-btn active" id="b-v3-btn" onclick="bSetVersion(3,this)">V3 NEW BRAIN</button>
+      <button class="int-btn" id="b-v2-btn" onclick="bSetVersion(2,this)">V2.4 CLASSIC</button>
+      <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px;margin-left:8px">
+        <input type="checkbox" id="b-compare-chk" onchange="localStorage.setItem('um_compare', this.checked?'1':'0')">
+        COMPARE MODE <span style="font-size:6px;font-style:italic">(runs both brains — 2× API cost)</span>
+      </label>
+      <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
+    </div>
     <div class="ctrl-row" style="margin-top:8px;gap:12px">
       <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
         STARTING EQUITY ($):
@@ -229,9 +239,24 @@ function bToggleAsset(a) {
 
 function bSetInt(m, btn) {
   bInterval = m;
-  document.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
+  btn.parentElement.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
 }
+
+let bVersion = parseInt(localStorage.getItem('um_pipeline_version') || '3');
+function bSetVersion(v, btn) {
+  bVersion = v;
+  localStorage.setItem('um_pipeline_version', String(v));
+  btn.parentElement.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+}
+// Restore saved brain + compare choice on load
+document.addEventListener('DOMContentLoaded', () => {
+  const v3b = document.getElementById('b-v3-btn'), v2b = document.getElementById('b-v2-btn');
+  if (v3b && v2b) { v3b.classList.toggle('active', bVersion === 3); v2b.classList.toggle('active', bVersion !== 3); }
+  const chk = document.getElementById('b-compare-chk');
+  if (chk) chk.checked = localStorage.getItem('um_compare') === '1';
+});
 
 function bShowTab(tab, btn) {
   ['positions','trades','learning','syslog'].forEach(t => {
@@ -265,6 +290,8 @@ async function bToggle() {
         local_url: localStorage.getItem('um_local_url') || 'http://localhost:11434',
         local_model: localStorage.getItem('um_local_model') || 'qwen2.5:7b',
         features: JSON.parse(localStorage.getItem('um_features') || '{}'),
+        pipeline_version: bVersion,
+        compare_mode: document.getElementById('b-compare-chk')?.checked || false,
       }),
     });
     const d = await r.json();
@@ -404,6 +431,18 @@ async function bRefresh() {
     const wlEl = document.getElementById('b-wl-open');
     if (d.open_winners !== undefined) {
       wlEl.innerHTML = `<span style="color:#00e676">${d.open_winners}W</span> / <span style="color:#ff1744">${d.open_losers}L</span>`;
+    }
+
+    // Brain version + V3-vs-V2 comparison scoreboard
+    const vsEl = document.getElementById('b-vscore');
+    if (vsEl && d.pipeline_version !== undefined) {
+      let txt = `ACTIVE: V${d.pipeline_version}`;
+      const sb = d.version_scoreboard;
+      if (sb && (sb.v3.resolved > 0 || sb.v2.resolved > 0)) {
+        const f = s => `${s.win_rate}% (${s.wins}W/${s.losses}L, avg ${s.avg_return_pct >= 0 ? '+' : ''}${s.avg_return_pct}%)`;
+        txt += ` | V3: ${sb.v3.resolved ? f(sb.v3) : '—'} vs V2: ${sb.v2.resolved ? f(sb.v2) : '—'}`;
+      }
+      vsEl.textContent = txt;
     }
 
     // Recommendation

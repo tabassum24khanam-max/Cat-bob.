@@ -204,9 +204,9 @@ async def fetch_asset_news(asset: str, asset_name: str, asset_type: str) -> list
 
 
 async def filter_headlines_ai(articles: list, asset: str, asset_name: str,
-                               api_key: str, ds_key: str = None) -> list:
-    """Use AI to filter to 8 most impactful headlines."""
-    if len(articles) <= 8:
+                               api_key: str, ds_key: str = None, keep: int = 8) -> list:
+    """Use AI to filter to the `keep` most impactful headlines."""
+    if len(articles) <= keep:
         return articles
 
     headlines_text = "\n".join(
@@ -215,7 +215,7 @@ async def filter_headlines_ai(articles: list, asset: str, asset_name: str,
     )
 
     prompt = f"""Asset: {asset} ({asset_name}).
-Filter to 8 most market-moving headlines for price prediction.
+Filter to {keep} most market-moving headlines for price prediction.
 Tiers: 1.0=Fed/SEC official, 0.8=Reuters/WSJ, 0.7=specialist, 0.6=media, 0.3=social.
 Keep: earnings surprises, regulatory action, insider buying, Fed statements, supply shocks, analyst calls.
 Drop: minor commentary, duplicates, unrelated.
@@ -243,25 +243,27 @@ Headlines:
                 m = re.search(r'\[[\d,\s]+\]', text)
                 if m:
                     indices = json.loads(m.group())
-                    return [articles[i] for i in indices if i < len(articles)][:8]
+                    return [articles[i] for i in indices if i < len(articles)][:keep]
     except:
         pass
 
-    # Fallback: top 8 by tier * impact
-    return articles[:8]
+    # Fallback: top N by tier * impact
+    return articles[:keep]
 
 
 async def run_news_agent(asset: str, asset_name: str, asset_type: str,
                           articles: list, macro_data: dict, onchain_data: dict,
                           fg_data: dict, fr_data: dict, horizon: int,
                           api_key: str, ds_key: str = None,
-                          db_sentiment: dict = None) -> dict:
+                          db_sentiment: dict = None,
+                          quant_brief: str = '', version: int = 2) -> dict:
     """Call DeepSeek V3 News Agent with full context."""
 
     # Aggregate article metrics
     avg_sentiment = sum(a['sentiment'] for a in articles) / len(articles) if articles else 0
     avg_impact = sum(a['impact'] for a in articles) / len(articles) if articles else 0
-    headlines_str = "\n".join(f"- [{a['source']}] {a['headline']}" for a in articles[:8])
+    max_headlines = 20 if version >= 3 else 8
+    headlines_str = "\n".join(f"- [{a['source']}] {a['headline']}" for a in articles[:max_headlines])
 
     # Build sentiment history context from database
     db_ctx = ""
@@ -295,7 +297,29 @@ Funding Rate: {onchain_data.get('funding_rate', 0):.4f}% {'⚠ CROWDED LONGS' if
 Long/Short Ratio: {onchain_data.get('long_short_ratio', 1):.2f}
 """
 
-    prompt = f"""You are a professional financial news analyst with expertise in geopolitics, macro economics, and market microstructure. Respond ONLY with valid JSON.
+    if version >= 3:
+        prompt = f"""You are the Intelligence Chief of a trading desk. Your job is not to read headlines — it is to find out what is REALLY happening around {asset} ({asset_name}) and what it means for price over the next {horizon}h.
+
+YOUR RAW INTELLIGENCE:
+HEADLINES ({min(len(articles), max_headlines)}, tier-weighted, most impactful first):
+{headlines_str}
+
+Average headline sentiment: {avg_sentiment:+.2f} | Average impact: {avg_impact:.2f}
+{db_ctx}{macro_ctx}{onchain_ctx}
+WHAT THE MATH DESK SEES: {quant_brief or 'no quant brief available'}
+
+THINK IN CHAINS, NOT LABELS. Never stop at "positive/negative". Trace consequences: tariff → container volumes fall → shipping names down, domestic steel up. An insider sold big and no news coverage yet? The news is COMING — that is a signal. Second-order effects are where the money is.
+
+RULES:
+- Tier 1.0 sources (Fed/SEC) dominate if present. Social only matters at extreme velocity.
+- A genuine market-mover (regulation, Fed surprise, contract award, hack, earnings shock) OUTRANKS technical analysis: set "catalyst_override" true and say why in "reasoning".
+- Neutral news = no adjustment. Do NOT force sentiment from noise.
+- Your honesty lives in the numbers: strong evidence = strong score, weak evidence = weak score.
+
+Respond ONLY with this JSON:
+{{"sentiment":"<bullish|neutral|bearish>","sentiment_score":<-100 to 100>,"confidence":<0-100>,"market_regime":"<risk_on|risk_off|neutral>","key_catalysts":["<event1>","<event2>"],"time_bias":"<positive|negative|neutral>","reasoning":"<2 sentences: the causal chain that matters most>","macro_warning":"<high-impact upcoming event or null>","event_impact_score":<0-1>,"catalyst_override":<true|false>,"priced_in":"<yes|no|partially>","flip_trigger":"<1 sentence: what news would flip your view>"}}"""
+    else:
+        prompt = f"""You are a professional financial news analyst with expertise in geopolitics, macro economics, and market microstructure. Respond ONLY with valid JSON.
 
 ASSET: {asset} ({asset_name}) | HORIZON: {horizon}h
 {db_ctx}

@@ -178,3 +178,68 @@ DEVIL'S ADVOCATE: Before finalizing, consider the strongest argument AGAINST you
 
 Respond ONLY with this JSON:
 {{"direction":"<BUY|SELL|NO_TRADE>","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2 sentences: regime + primary signal>","counter_argument":"<1 sentence: strongest argument against your direction>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""
+
+
+def build_quant_prompt_v3(asset: str, ind: dict, sim: dict, horizon: int,
+                           cluster_data: dict = None, correlation_data: dict = None,
+                           bot_mode: bool = False, news_brief: str = '',
+                           hist_stats: dict = None) -> str:
+    """V3 pipeline: analyst-first prompt. The model forms its own view, then
+    weighs categorized evidence. In bot mode it must always pick a direction."""
+    mc = sim if sim else {}
+
+    cluster_ctx = ""
+    if cluster_data and cluster_data.get('available'):
+        cluster_ctx = (f"Cluster family #{cluster_data['cluster_id']}: {cluster_data['n_members']} similar past moments, "
+                       f"avg 4h move {cluster_data.get('avg_fwd_4h', 0):+.2f}%, {cluster_data.get('win_rate_4h', 50):.0f}% went up.")
+    corr_ctx = ""
+    if correlation_data and correlation_data.get('available'):
+        corr_ctx = (f"Correlations — BTC: {correlation_data.get('btc_corr', 0):.2f} | SPY: {correlation_data.get('spy_corr', 0):.2f} "
+                    f"| Gold: {correlation_data.get('gold_corr', 0):.2f}. {correlation_data.get('risk_note', '')}")
+
+    if bot_mode:
+        verdict_rule = """STEP 4 — VERDICT. The desk trades every cycle: you MUST choose BUY or SELL — NO_TRADE is not available to you.
+Your honesty lives in the confidence number: 85 = strong conviction, 55 = barely leaning. NEVER inflate a weak call."""
+        dir_schema = "<BUY|SELL>"
+    else:
+        verdict_rule = """STEP 4 — VERDICT. Choose BUY or SELL on the weight of evidence. NO_TRADE only if the evidence is genuinely contradictory.
+Your honesty lives in the confidence number: 85 = strong conviction, 55 = barely leaning. NEVER inflate a weak call."""
+        dir_schema = "<BUY|SELL|NO_TRADE>"
+
+    horizon_label = "the next trading interval" if bot_mode else f"{horizon}h"
+
+    candle_bits = " ".join(x for x in [
+        ('ENGULFING(' + ('bull' if ind.get('engulfing', 0) > 0 else 'bear') + ')') if ind.get('engulfing') else '',
+        'DOJI' if ind.get('doji') else '', 'HAMMER' if ind.get('hammer') else '',
+        'SHOOTING_STAR' if ind.get('shooting_star') else '', 'MORNING_STAR' if ind.get('morning_star') else '',
+        'EVENING_STAR' if ind.get('evening_star') else '',
+        'THREE_WHITE_SOLDIERS' if ind.get('three_white_soldiers') else '',
+        'THREE_BLACK_CROWS' if ind.get('three_black_crows') else ''] if x) or 'none'
+    divergence = ('BULLISH RSI divergence (reversal signal)' if ind.get('rsi_div_bull')
+                  else 'BEARISH RSI divergence (reversal signal)' if ind.get('rsi_div_bear') else 'none')
+
+    return f"""You are the Chief Market Analyst of an autonomous trading desk. You are paid for YOUR judgment — not for reading numbers aloud; a clerk could recite this data. Your job is to understand it.
+
+ASSET: {asset} | PRICE: {ind['cur']:.4f} | HORIZON: {horizon_label}
+
+STEP 1 — YOUR OWN VIEW FIRST. Before studying the details below, form your own honest read of {asset} right now from the market picture: regime is {ind['regime']} (HMM: TREND={ind['hmm_probs'].get('TRENDING',0):.0%} RANGE={ind['hmm_probs'].get('RANGING',0):.0%} VOL={ind['hmm_probs'].get('VOLATILE',0):.0%}), Kalman trend {ind['kalman_trend']:+.3f}%. State your initial lean in one sentence at the start of "reasoning".
+
+STEP 2 — THE EVIDENCE, organized by category:
+TREND: EMA stack {ind['ema_align_bull']}/4 bull vs {ind['ema_align_bear']}/4 bear | Supertrend {'BULL' if ind['supertrend_bull'] else 'BEAR'} | Ichimoku {'ABOVE cloud' if ind['ich_bull'] else 'BELOW cloud' if ind['ich_bear'] else 'INSIDE cloud'} | Hurst {ind['hurst_exp']:.3f} ({'trending' if ind['hurst_exp'] > 0.55 else 'mean-reverting' if ind['hurst_exp'] < 0.45 else 'random walk'})
+MOMENTUM: RSI(14) {ind['rsi14']:.1f} | MACD hist {ind['macd_hist']:+.4f} | Stoch K {ind['stoch_k']:.1f} | Williams %R {ind['will_r14']:.1f} | Autocorr {ind['autocorr']:+.3f} | Divergence: {divergence}
+VOLUME/FLOW: CMF {ind['cmf']:+.3f} ({'money IN' if ind['cmf'] > 0.1 else 'money OUT' if ind['cmf'] < -0.1 else 'neutral'}) | OBV slope {'RISING' if ind['obv_slope'] > 0 else 'FALLING'}
+VOLATILITY: BB position {ind['bb_pos']:.2f}, width {ind['bb_width']:.4f}{' COMPRESSION' if ind.get('compression') else ''} | Entropy {ind['entropy_ratio']:.3f} ({'predictable' if ind['entropy_ratio'] < 0.4 else 'noisy' if ind['entropy_ratio'] > 0.87 else 'normal'}) | Z-score {ind['price_zscore']:+.2f}
+STRUCTURE: VWAP dist {ind['dist_vwap']:+.2f}% | POC dist {ind['dist_poc']:+.2f}% | Pivots R1 {ind['pivot_r1']:.4f} / P {ind['pivot_p']:.4f} / S1 {ind['pivot_s1']:.4f} | Candles: {candle_bits}
+SIMULATION: Monte Carlo 1000 paths — median {mc.get('median', ind['cur']):.4f}, prob up {mc.get('prob_up', 0.5)*100:.0f}%
+HISTORY: {cluster_ctx or 'no cluster data'} {corr_ctx}
+{f"YOUR TRACK RECORD (last {hist_stats['n']} trades): win rate {hist_stats['win_rate']:.0f}%, avg return {hist_stats['avg_return']:.2f}%" if hist_stats else ""}
+WHAT THE INTELLIGENCE DESK SEES (raw, pre-analysis): {news_brief or 'no news brief available'}
+
+STEP 3 — CONTRAST. Where does the evidence AGREE with your Step-1 view? Where does it FIGHT you? If the evidence changes your mind, change it — and say exactly why in "reasoning".
+
+{verdict_rule}
+
+Also give: your single strongest reason, the strongest argument AGAINST you, a recommended stop-loss %, and key levels.
+
+Respond ONLY with this JSON:
+{{"direction":"{dir_schema}","prob_up":<0-100>,"prob_down":<0-100>,"confidence":<0-100>,"reasoning":"<2-3 sentences: initial view, what the evidence did to it, final call>","counter_argument":"<1 sentence: strongest argument against your direction>","stop_loss_pct":<recommended %>,"mtf_alignment":"<aligned|counter-trend|neutral>","key_levels":{{"support1":<price>,"resistance1":<price>}}}}"""

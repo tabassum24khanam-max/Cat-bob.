@@ -23,7 +23,7 @@ from database import (init_db, get_predictions, save_prediction, update_predicti
 from data_fetcher import fetch_candles, fetch_candles_before, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
 from indicators import compute_indicators, monte_carlo
 from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
-from agents.quant_agent import run_quant_agent, build_quant_prompt
+from agents.quant_agent import run_quant_agent, build_quant_prompt, build_quant_prompt_v3
 from agents.news_agent import fetch_asset_news, filter_headlines_ai, run_news_agent
 from agents.decision_agent import run_decision_agent
 from sentiment import get_sentiment_snapshot
@@ -86,7 +86,66 @@ _autotrader = {
     'local_url': 'http://localhost:11434',
     'local_model': 'qwen2.5:7b',
     'hard_stop_pct': 5.0,  # emergency close if loss exceeds this %
+    'pipeline_version': 3,   # 3 = ungagged-judge pipeline, 2 = classic (pre-2026-07)
+    'compare_mode': False,   # run BOTH pipelines each cycle; trade active one, score the other as shadow
+    'time_decay_hours': 7.0, # force-close losers held longer than this
 }
+
+# V3 vs V2 comparison scoreboard — each side tracks its own calls, resolved
+# against actual price movement one cycle later.
+_version_scoreboard = {
+    'v3': {'decisions': 0, 'resolved': 0, 'wins': 0, 'losses': 0, 'sum_ret': 0.0, 'open': {}},
+    'v2': {'decisions': 0, 'resolved': 0, 'wins': 0, 'losses': 0, 'sum_ret': 0.0, 'open': {}},
+}
+
+
+def _scoreboard_record(vkey: str, asset: str, direction: str, confidence: float, price: float):
+    """Resolve this asset's previous call for `vkey` against the current price,
+    then store the new call. Direction-correctness at next-cycle price."""
+    sb = _version_scoreboard.get(vkey)
+    if sb is None or not price or direction not in ('BUY', 'SELL'):
+        return
+    prev = sb['open'].get(asset)
+    if prev and prev.get('price'):
+        ret = (price - prev['price']) / prev['price'] * 100
+        if prev['direction'] == 'SELL':
+            ret = -ret
+        sb['resolved'] += 1
+        sb['sum_ret'] += ret
+        if ret > 0:
+            sb['wins'] += 1
+        elif ret < 0:
+            sb['losses'] += 1
+    sb['decisions'] += 1
+    sb['open'][asset] = {'direction': direction, 'price': price, 'ts': int(time.time()), 'confidence': confidence}
+
+
+def _bot_direction_from_result(result: dict) -> tuple:
+    """Resolve the tradeable direction+confidence from a prediction result,
+    mirroring the bot's always-trade chain: decision → original → quant → indicators."""
+    direction = result.get('decision', 'NO_TRADE')
+    confidence = result.get('confidence', 0)
+    if direction == 'NO_TRADE':
+        orig = result.get('original_decision')
+        quant_dir = (result.get('quant', {}).get('direction') or '').upper()
+        if orig and orig in ('BUY', 'SELL'):
+            direction = orig
+            confidence = max(50, min(60, confidence))
+        elif quant_dir in ('BUY', 'SELL'):
+            direction = quant_dir
+            confidence = max(50, min(58, result.get('quant', {}).get('confidence', 55) or 55))
+        else:
+            ind_data = result.get('ind', {})
+            score_buy = sum([
+                1 if ind_data.get('macd_hist', 0) > 0 else -1,
+                1 if ind_data.get('dist_e20', 0) > 0 else -1,
+                1 if ind_data.get('trend_slope', 0) > 0 else -1,
+                1 if ind_data.get('supertrend_bull', False) else -1,
+                1 if ind_data.get('kalman_trend', 0) > 0 else -1,
+            ])
+            direction = 'BUY' if score_buy > 0 else 'SELL'
+            confidence = 52
+    return direction, confidence
 
 # Self-correction: per-asset accuracy tracker
 _asset_accuracy: dict[str, dict] = {}
@@ -236,6 +295,8 @@ class PredictRequest(BaseModel):
     local_url: Optional[str] = "http://localhost:11434"
     local_model: Optional[str] = "qwen2.5:7b"
     features: Optional[dict] = None
+    pipeline_version: Optional[int] = 2  # 2 = classic, 3 = ungagged-judge pipeline
+    shadow: Optional[bool] = False       # compare-mode shadow run: no telegram, no session memory
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -577,15 +638,18 @@ async def _autotrader_loop():
 
                 interval_min = _autotrader.get('interval_minutes', 30)
                 bot_horizon = max(1, round(interval_min * 1.5 / 60))
+                pipe_version = int(_autotrader.get('pipeline_version', 3) or 3)
                 req = PredictRequest(
                     asset=asset_name, horizon=bot_horizon,
                     api_key=api_key, ds_key=ds_key,
-                    use_r1=not _autotrader.get('use_local', False),
+                    # V3 thinks with V4 (fast). Classic V2 keeps R1 for authentic comparison.
+                    use_r1=(pipe_version < 3) and not _autotrader.get('use_local', False),
                     bot_mode=True,
                     use_local=_autotrader.get('use_local', False),
                     local_url=_autotrader.get('local_url', 'http://localhost:11434'),
                     local_model=_autotrader.get('local_model', 'qwen2.5:7b'),
                     features=_autotrader.get('features'),
+                    pipeline_version=pipe_version,
                 )
 
                 start_time = time.time()
@@ -593,7 +657,35 @@ async def _autotrader_loop():
                 def slog(msg):
                     logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
 
-                result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
+                if _autotrader.get('compare_mode'):
+                    # COMPARE MODE: run both brains — trade the active one, shadow-score the other
+                    other_v = 2 if pipe_version >= 3 else 3
+                    shadow_req = req.copy(update={
+                        'pipeline_version': other_v,
+                        'use_r1': (other_v < 3) and not _autotrader.get('use_local', False),
+                        'shadow': True,
+                    })
+                    shadow_logs = []
+                    def shadow_slog(msg):
+                        shadow_logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
+                    result, shadow_result = await asyncio.gather(
+                        _run_prediction(req, WORKER_URL, start_time, logs, slog),
+                        _run_prediction(shadow_req, WORKER_URL, start_time, shadow_logs, shadow_slog),
+                        return_exceptions=True,
+                    )
+                    if isinstance(result, Exception):
+                        raise result
+                    if not isinstance(shadow_result, Exception):
+                        s_dir, s_conf = _bot_direction_from_result(shadow_result)
+                        s_price = shadow_result.get('ind', {}).get('cur', 0)
+                        _scoreboard_record(f'v{other_v}', asset_name, s_dir, s_conf, s_price)
+                        forensic_log.log_event_simple(
+                            'shadow_decision', asset_name,
+                            f"V{other_v} (shadow) says {s_dir} {s_conf}% — active V{pipe_version} trades, shadow only scored",
+                            direction=s_dir, confidence=s_conf, version=other_v, price=s_price,
+                        )
+                else:
+                    result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
 
                 direction = result.get('decision', 'NO_TRADE')
                 confidence = result.get('confidence', 0)
@@ -656,6 +748,9 @@ async def _autotrader_loop():
                     cycle_summary.append(f"{asset_name}: no price data")
                     continue
 
+                # Record the active version's call on the comparison scoreboard
+                _scoreboard_record(f'v{pipe_version}', asset_name, direction, confidence, price)
+
                 # ── Cash-out Cycles: profitable → cash out + reopen; loss → hold
                 open_for_asset = [p for p in engine.positions.values()
                                   if p.status == 'open' and p.asset == asset_name]
@@ -687,12 +782,12 @@ async def _autotrader_loop():
                         cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
 
                     elif pnl_pct > -hard_stop_pct:
-                        # Time-decay: force-close losers held longer than 6 hours
+                        # Time-decay: force-close losers held longer than the configured limit (default 7h)
                         age_seconds = int(time.time()) - current_pos.entry_time
-                        max_hold_seconds = 6 * 3600
+                        max_hold_seconds = int(float(_autotrader.get('time_decay_hours', 7.0)) * 3600)
                         if pnl_pct < 0 and age_seconds > max_hold_seconds:
                             age_hrs = round(age_seconds / 3600, 1)
-                            print(f"  {asset_name}: TIME DECAY {current_pos.direction} {pnl_pct:+.2f}% held {age_hrs}h > 6h limit → force close")
+                            print(f"  {asset_name}: TIME DECAY {current_pos.direction} {pnl_pct:+.2f}% held {age_hrs}h > {max_hold_seconds/3600:.0f}h limit → force close")
                             close_result = await engine.close_position(current_pos.id, price, 'time_decay')
                             decay_pnl = close_result.get('pnl', 0)
                             _autotrader['trades_closed'] += 1
@@ -997,10 +1092,83 @@ async def predict(req: PredictRequest):
         raise HTTPException(500, f"Prediction failed after {total_ms}ms: {str(e)[:200]}")
 
 
+def build_risk_evidence(asset: str, ind: dict, mtf_data: dict, macro_data: dict,
+                        fg_data: dict, onchain_data: dict, macro_context: dict,
+                        is_crypto: bool) -> list:
+    """V3: the Risk Officer's notes — direction-free FACTS handed to the judge
+    BEFORE it rules. These replace the old confidence-subtracting gates."""
+    ev = []
+    try:
+        from datetime import datetime, timedelta, timezone as _tz
+        riyadh = datetime.now(_tz(timedelta(hours=3)))
+        if get_asset_type(asset) == 'stock':
+            if riyadh.weekday() in (5, 6):
+                ev.append("US stock market is CLOSED (weekend) — any position will freeze until open")
+            else:
+                rh = riyadh.hour + riyadh.minute / 60.0
+                if rh < 16.5 or rh >= 23.0:
+                    ev.append("US regular market hours are CLOSED right now — thinner/no liquidity")
+        macro = macro_data or {}
+        vix = macro.get('vix', 0) or 0
+        dxy = macro.get('dxy', 0) or 0
+        if vix > 30:
+            ev.append(f"VIX {vix:.1f} — high fear regime")
+        elif vix > 0 and vix < 15:
+            ev.append(f"VIX {vix:.1f} — complacent/calm regime")
+        if dxy > 107:
+            ev.append(f"DXY {dxy:.1f} — very strong dollar (risk-asset headwind)")
+        fg_val = (fg_data or {}).get('value', 50)
+        if fg_val < 25:
+            ev.append(f"Fear&Greed {fg_val}/100 — extreme fear")
+        elif fg_val > 75:
+            ev.append(f"Fear&Greed {fg_val}/100 — extreme greed")
+        if mtf_data:
+            d = 'BULL' if mtf_data.get('daily_bull') else 'BEAR' if mtf_data.get('daily_bear') else 'NEUTRAL'
+            h4 = 'BULL' if mtf_data.get('h4_bull') else 'BEAR' if mtf_data.get('h4_bear') else 'NEUTRAL'
+            h1 = 'BULL' if mtf_data.get('h1_bull') else 'BEAR' if mtf_data.get('h1_bear') else 'NEUTRAL'
+            ev.append(f"Higher timeframes: Daily {d}, 4H {h4}, 1H {h1} — trading against 2+ of these has historically failed")
+        if not ind.get('ich_bull') and not ind.get('ich_bear'):
+            ev.append("Price INSIDE the Ichimoku cloud — structurally indecisive zone")
+        hurst = ind.get('hurst_exp', 0.5)
+        entropy = ind.get('entropy_ratio', 0.5)
+        if entropy > 0.87 and 0.45 <= hurst <= 0.55:
+            ev.append(f"Hurst {hurst:.2f} + entropy {entropy:.2f} — market statistically indistinguishable from noise right now")
+        cmf = ind.get('cmf', 0)
+        if abs(cmf) > 0.15:
+            ev.append(f"CMF {cmf:+.2f} — strong money {'inflow' if cmf > 0 else 'outflow'}")
+        obv = ind.get('obv_slope', 0)
+        if abs(obv) > 0.15:
+            ev.append(f"OBV slope {'rising' if obv > 0 else 'falling'} strongly")
+        if is_crypto and onchain_data:
+            funding = onchain_data.get('funding_rate', 0) or 0
+            if funding > 0.0008:
+                ev.append(f"Funding rate {funding:.4f}% — longs are crowded (squeeze risk on BUY)")
+            elif funding < -0.0008:
+                ev.append(f"Funding rate {funding:.4f}% — shorts are crowded (squeeze risk on SELL)")
+        upcoming = (macro_context or {}).get('upcoming_events', [])
+        high_impact = [e for e in upcoming if e.get('impact') == 'high']
+        if high_impact:
+            names = ', '.join(str(e.get('name', 'event')) for e in high_impact[:2])
+            ev.append(f"HIGH-IMPACT event ahead: {names} — volatility spike likely")
+        # Correlated assets' recent calls this session
+        rel_map = {'BTC': ['ETH', 'SOL'], 'ETH': ['BTC', 'SOL'], 'SOL': ['BTC', 'ETH'],
+                   'AAPL': ['MSFT', 'SPY'], 'MSFT': ['AAPL', 'SPY'], 'NVDA': ['SPY', 'MSFT'],
+                   'GOOGL': ['MSFT', 'SPY'], 'SPY': ['AAPL', 'MSFT', 'NVDA']}
+        for rel in rel_map.get(asset, []):
+            sess = _session_predictions.get(rel, [])
+            if sess and (time.time() - sess[-1]['ts']) < 7200 and sess[-1]['direction'] in ('BUY', 'SELL'):
+                ago = int((time.time() - sess[-1]['ts']) / 60)
+                ev.append(f"Correlated asset {rel} was called {sess[-1]['direction']} {ago}min ago")
+    except Exception as e:
+        ev.append(f"(risk evidence partially unavailable: {str(e)[:60]})")
+    return ev
+
+
 async def _run_prediction(req, worker, start_time, logs, slog):
     """Internal prediction logic — separated so top-level can catch errors."""
 
-    slog(f"🚀 PREDICT {req.asset} {req.horizon}H")
+    version = int(getattr(req, 'pipeline_version', 2) or 2)
+    slog(f"🚀 PREDICT {req.asset} {req.horizon}H [pipeline V{version}]")
 
     # ── Fetch candles ────────────────────────────────────────────────────
     iv = '15m' if req.horizon <= 1 else '1h' if req.horizon <= 8 else '4h' if req.horizon <= 72 else '1d'
@@ -1094,11 +1262,20 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     articles = await fetch_asset_news(req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type)
     slog(f"✓ {len(articles)} headlines collected")
 
-    if len(articles) > 8:
+    headline_keep = 20 if version >= 3 else 8
+    if len(articles) > headline_keep:
         slog("🤖 AI filtering headlines...")
         articles = await filter_headlines_ai(articles, req.asset, ASSET_NAMES.get(req.asset, req.asset),
-                                              req.api_key, req.ds_key)
+                                              req.api_key, req.ds_key, keep=headline_keep)
     slog(f"✓ {len(articles)} headlines after AI filter")
+
+    # V3: raw news brief for the quant analyst (cross-visibility, pre-analysis)
+    news_brief = ""
+    if version >= 3 and articles:
+        top = articles[:5]
+        avg_sent = sum(a.get('sentiment', 0) for a in articles) / len(articles)
+        news_brief = (f"avg sentiment {avg_sent:+.2f} across {len(articles)} headlines; top: "
+                      + " | ".join(a['headline'][:80] for a in top))
 
     # Get DB sentiment memory
     db_news = await get_news_history(req.asset, 24)
@@ -1164,9 +1341,15 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
     slog(f"📐 Agent 1 (Quant/{quant_model_label}) analyzing...")
-    quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
-                                       cluster_data=cluster_data, correlation_data=correlation_data,
-                                       bot_mode=getattr(req, 'bot_mode', False))
+    if version >= 3:
+        quant_prompt = build_quant_prompt_v3(req.asset, ind, mc, req.horizon,
+                                              cluster_data=cluster_data, correlation_data=correlation_data,
+                                              bot_mode=getattr(req, 'bot_mode', False),
+                                              news_brief=news_brief)
+    else:
+        quant_prompt = build_quant_prompt(req.asset, ind, mc, req.horizon,
+                                           cluster_data=cluster_data, correlation_data=correlation_data,
+                                           bot_mode=getattr(req, 'bot_mode', False))
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
 
@@ -1188,25 +1371,35 @@ async def _run_prediction(req, worker, start_time, logs, slog):
     elif regime == 'HIGH_VOLATILITY':
         regime_ml_boost = -0.05
 
-    if ml_conf is not None and cluster_conf is not None:
-        ml_w = 0.45 + regime_ml_boost
-        blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * ml_w + cluster_conf * (0.20 - regime_ml_boost)
-    elif ml_conf is not None:
-        ml_w = 0.55 + regime_ml_boost
-        blended_conf = raw_ai_conf * (0.20 - regime_ml_boost) + bayes_conf * 0.25 + ml_conf * ml_w
-    elif cluster_conf is not None:
-        blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
+    if version >= 3:
+        # V3: the analyst's own confidence goes UNTOUCHED to the judge.
+        # The numbers (ML/cluster/Bayes) join AFTER the ruling — 50% judge, 50% numbers.
+        slog(f"✓ V3: quant keeps raw {raw_ai_conf}% (Bayes={bayes_conf:.0f} ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} join after the ruling)")
     else:
-        blended_conf = raw_ai_conf * 0.55 + bayes_conf * 0.45
-    quant_result['confidence'] = round(blended_conf)
-    slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
+        if ml_conf is not None and cluster_conf is not None:
+            ml_w = 0.45 + regime_ml_boost
+            blended_conf = raw_ai_conf * 0.15 + bayes_conf * 0.20 + ml_conf * ml_w + cluster_conf * (0.20 - regime_ml_boost)
+        elif ml_conf is not None:
+            ml_w = 0.55 + regime_ml_boost
+            blended_conf = raw_ai_conf * (0.20 - regime_ml_boost) + bayes_conf * 0.25 + ml_conf * ml_w
+        elif cluster_conf is not None:
+            blended_conf = raw_ai_conf * 0.35 + bayes_conf * 0.35 + cluster_conf * 0.30
+        else:
+            blended_conf = raw_ai_conf * 0.55 + bayes_conf * 0.45
+        quant_result['confidence'] = round(blended_conf)
+        slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
 
     # ── Agent 2: News ────────────────────────────────────────────────────
     slog(f"📰 Agent 2 (News/{'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
+    quant_brief = ""
+    if version >= 3:
+        quant_brief = (f"{quant_result.get('direction')} at {quant_result.get('confidence')}% — "
+                       f"{(quant_result.get('reasoning') or '')[:160]}")
     news_result = await run_news_agent(
         req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type,
         articles, macro_data, onchain_data, fg_data, {},
-        req.horizon, req.api_key, req.ds_key, db_sentiment
+        req.horizon, req.api_key, req.ds_key, db_sentiment,
+        quant_brief=quant_brief, version=version,
     )
     slog(f"✓ News: {news_result.get('sentiment')} ({news_result.get('sentiment_score',0):+d}) — {news_result.get('reasoning','')[:60]}")
 
@@ -1244,6 +1437,14 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         slog("⏭ [trade_history] Skipped (disabled)")
         features_skipped.append('trade_history')
 
+    # V3: the Risk Officer's notes — facts handed to the judge BEFORE it rules
+    risk_evidence = None
+    if version >= 3:
+        risk_evidence = build_risk_evidence(req.asset, ind, mtf_data, macro_data,
+                                            fg_data, onchain_data, macro_context,
+                                            is_crypto)
+        slog(f"📋 Risk Officer's notes: {len(risk_evidence)} facts for the judge")
+
     decision = await run_decision_agent(
         req.asset, ind, req.horizon, quant_result, news_result,
         mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
@@ -1252,6 +1453,9 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         local_url=req.local_url or "http://localhost:11434",
         local_model=req.local_model or "qwen2.5:7b",
         recent_trades_ctx=recent_trades_ctx,
+        risk_evidence=risk_evidence,
+        bot_mode=getattr(req, 'bot_mode', False),
+        version=version,
     )
     model_used = decision.get('_model', 'unknown')
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
@@ -1259,7 +1463,8 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
 
     # ── V4 ML OVERRIDE: Only when ML is VERY confident ──────────────────
-    if ml_result.get('available'):
+    # (V3 pipeline: the judge's ruling is FINAL — ML is a witness, never an override)
+    if version < 3 and ml_result.get('available'):
         ml_score = ml_result.get('score', 50)
         ml_dir = 'BUY' if ml_score > 62 else 'SELL' if ml_score < 38 else None
         ai_dir = decision.get('decision')
@@ -1301,9 +1506,12 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             if (rel_dir == 'BUY' and cur_dir == 'SELL') or (rel_dir == 'SELL' and cur_dir == 'BUY'):
                 contradictions += 1
     if contradictions >= 2 and decision.get('decision') != 'NO_TRADE':
-        old_conf = decision.get('confidence', 50)
-        decision['confidence'] = max(0, old_conf - 10)
-        slog(f"⚠ Cross-prediction contradiction: {contradictions} correlated assets disagree — confidence {old_conf}% → {decision['confidence']}%")
+        if version >= 3:
+            slog(f"⚠ Cross-prediction contradiction noted: {contradictions} correlated assets disagree (V3: fact only, judge already saw correlations)")
+        else:
+            old_conf = decision.get('confidence', 50)
+            decision['confidence'] = max(0, old_conf - 10)
+            slog(f"⚠ Cross-prediction contradiction: {contradictions} correlated assets disagree — confidence {old_conf}% → {decision['confidence']}%")
 
     # ── CONSOLIDATED GATE SYSTEM ──────────────────────────────────────────
     # Instead of 24 sequential penalties that stack to -80%, collect all
@@ -1566,11 +1774,21 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         slog(f"Boosts: {', '.join(names)} | raw=+{total_boost} capped=+{capped_boost}")
 
     # Apply kill gate first
-    if gate_kill and d_dir != 'NO_TRADE':
+    # V3: gates NEVER veto — they were already handed to the judge as the Risk
+    # Officer's notes. The only V3 kill that survives is the pre-event blackout
+    # in predict mode. Everything else is logged as post-decision critique.
+    v3_kill_allowed = version >= 3 and gate_kill and gate_kill.startswith('Pre-event')
+    if gate_kill and d_dir != 'NO_TRADE' and (version < 3 or v3_kill_allowed):
         decision['_original_decision'] = d_dir
         decision['decision'] = 'NO_TRADE'
         gate_reason = gate_kill
         slog(f"GATE KILL: {gate_kill}")
+    elif version >= 3 and d_dir != 'NO_TRADE':
+        # V3: pure critique — record what the old gates WOULD have done, touch nothing
+        if gate_kill:
+            slog(f"📋 V3 critique: old pipeline would have KILLED this trade ({gate_kill}) — judge already weighed the facts")
+        if gate_penalties or gate_boosts:
+            slog(f"📋 V3 critique: old gates would have adjusted {capped_boost - capped_penalty:+d} — not applied, judge's ruling stands")
     elif d_dir != 'NO_TRADE':
         old_conf = decision.get('confidence', 50)
         net_adj = capped_boost - capped_penalty
@@ -1579,13 +1797,37 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         if net_adj != 0:
             slog(f"Gate net adjustment: {old_conf}% → {new_conf}% (net {net_adj:+d})")
 
-    # CONFIDENCE FLOOR — only after consolidated gates
+    # CONFIDENCE FLOOR — only after consolidated gates (V2 only; V3 has no floor kill)
     conf_floor = get_adaptive_floor()
-    if decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
+    if version < 3 and decision.get('decision') != 'NO_TRADE' and decision.get('confidence', 0) < conf_floor:
         decision['_original_decision'] = decision.get('decision')
         decision['decision'] = 'NO_TRADE'
         gate_reason = f"Confidence floor: {decision.get('confidence', 0)}% < {conf_floor}%"
         slog(f"Confidence floor: {decision.get('confidence', 0)}% (floor={conf_floor}%)")
+
+    # ── V3 FINAL: guarantee a direction in bot mode, then blend judge + numbers ──
+    if version >= 3:
+        if getattr(req, 'bot_mode', False) and decision.get('decision') not in ('BUY', 'SELL'):
+            q_dir_v3 = (quant_result.get('direction') or '').upper()
+            if q_dir_v3 in ('BUY', 'SELL'):
+                decision['_original_decision'] = decision.get('decision')
+                decision['decision'] = q_dir_v3
+                decision['confidence'] = max(45, min(60, int(quant_result.get('confidence', 55) or 55)))
+                slog(f"V3 bot mode: judge gave no direction — using analyst's {q_dir_v3} at {decision['confidence']}%")
+        if decision.get('decision') in ('BUY', 'SELL'):
+            judge_conf = float(decision.get('confidence', 55) or 55)
+            d3 = decision['decision']
+            parts = [(judge_conf, 0.50)]
+            if ml_conf is not None:
+                parts.append((ml_conf if d3 == 'BUY' else 100 - ml_conf, 0.25))
+            if cluster_conf is not None:
+                parts.append((cluster_conf if d3 == 'BUY' else 100 - cluster_conf, 0.15))
+            parts.append((bayes_conf, 0.10))
+            total_w = sum(w for _, w in parts)
+            final_conf = sum(v * w for v, w in parts) / total_w if total_w else judge_conf
+            decision['_judge_confidence'] = round(judge_conf)
+            decision['confidence'] = int(round(max(40, min(95, final_conf))))
+            slog(f"✓ V3 final: judge {judge_conf:.0f}% (50%) + ML/cluster/Bayes numbers (50%) → {decision['confidence']}%")
 
     # Save predicted price BEFORE nulling target for NO_TRADE
     # Use ML-informed direction for target instead of bland MC median
@@ -1635,6 +1877,11 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         "agent_model": decision.get('_model', 'gpt-4o'),
         "original_decision": decision.get('_original_decision'),
         "gate_reason": gate_reason,
+        "pipeline_version": version,
+        "risk_evidence": risk_evidence,
+        "judge_confidence": decision.get('_judge_confidence'),
+        "flip_trigger": decision.get('flip_trigger'),
+        "catalyst_override": news_result.get('catalyst_override', False),
         "agent_agreement": decision.get('agent_agreement', 'partial'),
         "volatility": decision.get('volatility', 'moderate'),
         # Agent details
@@ -1725,18 +1972,19 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
     except Exception:
         response['calibration'] = None
 
-    # A6: Record session prediction
-    if req.asset not in _session_predictions:
-        _session_predictions[req.asset] = []
-    _session_predictions[req.asset].append({
-        'ts': int(time.time()),
-        'direction': response['decision'],
-        'confidence': response['confidence'],
-    })
-    _session_predictions[req.asset] = _session_predictions[req.asset][-10:]
+    # A6: Record session prediction (skip for compare-mode shadow runs)
+    if not getattr(req, 'shadow', False):
+        if req.asset not in _session_predictions:
+            _session_predictions[req.asset] = []
+        _session_predictions[req.asset].append({
+            'ts': int(time.time()),
+            'direction': response['decision'],
+            'confidence': response['confidence'],
+        })
+        _session_predictions[req.asset] = _session_predictions[req.asset][-10:]
 
-    # Send Telegram notification (non-blocking)
-    asyncio.create_task(send_prediction(response, req.asset, req.horizon))
+        # Send Telegram notification (non-blocking)
+        asyncio.create_task(send_prediction(response, req.asset, req.horizon))
 
     return response
 
@@ -2470,6 +2718,9 @@ class AutotraderStartRequest(BaseModel):
     local_model: str = "qwen2.5:7b"
     hard_stop_pct: float = 5.0
     features: Optional[dict] = None
+    pipeline_version: int = 3    # 3 = new brain (ungagged judge), 2 = classic
+    compare_mode: bool = False   # run both brains, shadow-score the inactive one
+    time_decay_hours: float = 7.0
 
 
 @app.post("/autotrader/start")
@@ -2493,6 +2744,9 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['local_model'] = req.local_model
     _autotrader['hard_stop_pct'] = max(1.0, min(10.0, req.hard_stop_pct))
     _autotrader['features'] = req.features
+    _autotrader['pipeline_version'] = 3 if req.pipeline_version >= 3 else 2
+    _autotrader['compare_mode'] = bool(req.compare_mode)
+    _autotrader['time_decay_hours'] = max(1.0, min(24.0, req.time_decay_hours))
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
@@ -2511,6 +2765,8 @@ async def autotrader_start(req: AutotraderStartRequest):
         "trade_size": _autotrader['trade_size'],
         "starting_equity": _autotrader['starting_equity'],
         "mode": "paper" if engine.paper_mode else "live",
+        "pipeline_version": _autotrader['pipeline_version'],
+        "compare_mode": _autotrader['compare_mode'],
     }
 
 
@@ -2679,6 +2935,16 @@ async def autotrader_status():
         "open_winners": open_winners,
         "open_losers": open_losers,
         "position_health": position_health,
+        "pipeline_version": _autotrader.get('pipeline_version', 3),
+        "compare_mode": _autotrader.get('compare_mode', False),
+        "version_scoreboard": {
+            vkey: {
+                'decisions': sb['decisions'], 'resolved': sb['resolved'],
+                'wins': sb['wins'], 'losses': sb['losses'],
+                'win_rate': round(sb['wins'] / sb['resolved'] * 100, 1) if sb['resolved'] else 0,
+                'avg_return_pct': round(sb['sum_ret'] / sb['resolved'], 3) if sb['resolved'] else 0,
+            } for vkey, sb in _version_scoreboard.items()
+        },
         "cycle_log": _autotrader['cycle_log'][-20:],
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "all_positions": engine.get_positions(),
