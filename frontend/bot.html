@@ -148,7 +148,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <input type="checkbox" id="b-compare-chk" onchange="localStorage.setItem('um_compare', this.checked?'1':'0')">
         COMPARE MODE <span style="font-size:6px;font-style:italic">(runs both brains — 2× API cost)</span>
       </label>
+      <a href="bot.html?brain=shadow" target="_blank" style="font-size:7px;color:#00e5ff;margin-left:6px">OPEN 2ND DASHBOARD ↗</a>
       <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
+    </div>
+    <div class="ctrl-row" style="margin-top:4px">
+      <span id="b-ai-health" style="font-size:7px;color:var(--muted)">🧠 checking AI keys…</span>
     </div>
     <div class="ctrl-row" style="margin-top:8px;gap:12px">
       <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
@@ -250,12 +254,46 @@ function bSetVersion(v, btn) {
   btn.parentElement.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
 }
-// Restore saved brain + compare choice on load
+
+// SHADOW VIEW: bot.html?brain=shadow shows the OTHER brain's own paper book (read-only)
+const SHADOW_VIEW = new URLSearchParams(location.search).get('brain') === 'shadow';
+
+// AI key health — a dead key fails SILENTLY otherwise; make it loud
+let lastAiHealth = null;
+async function checkAiHealth() {
+  const el = document.getElementById('b-ai-health');
+  try {
+    const r = await fetch(`${backendUrl}/keys/health`, {signal:AbortSignal.timeout(30000)});
+    const h = await r.json();
+    lastAiHealth = h;
+    if (!el) return h;
+    const f = (n,s) => `${n}: ${s.ok ? '✓ OK' : (s.configured ? '✗ ' + s.detail : 'not set')}`;
+    el.innerHTML = h.any_ok
+      ? `<span style="color:#00e676">🧠 AI ONLINE — ${f('DeepSeek',h.deepseek)} | ${f('OpenAI',h.openai)}</span>`
+      : `<span style="color:#ff1744;font-weight:700">🧠 AI OFFLINE — ${f('DeepSeek',h.deepseek)} | ${f('OpenAI',h.openai)} — the bot will NOT trade. Fix the key in Railway → Variables (check spelling + credit balance), then redeploy.</span>`;
+    return h;
+  } catch(e) {
+    if (el) el.textContent = '🧠 AI key check failed: ' + e.message;
+    return null;
+  }
+}
+
+// Restore saved brain + compare choice on load; set up shadow view
 document.addEventListener('DOMContentLoaded', () => {
   const v3b = document.getElementById('b-v3-btn'), v2b = document.getElementById('b-v2-btn');
   if (v3b && v2b) { v3b.classList.toggle('active', bVersion === 3); v2b.classList.toggle('active', bVersion !== 3); }
   const chk = document.getElementById('b-compare-chk');
   if (chk) chk.checked = localStorage.getItem('um_compare') === '1';
+  checkAiHealth();
+  if (SHADOW_VIEW) {
+    document.title = 'ULTRAMAX — SHADOW BOOK';
+    const ban = document.createElement('div');
+    ban.textContent = '👁 SHADOW BOOK — the other brain trading its own separate paper money (read-only; control the bot from the main dashboard)';
+    ban.style.cssText = 'background:#141400;color:#ffd600;font-size:9px;padding:8px;text-align:center;border-bottom:1px solid #333';
+    document.body.prepend(ban);
+    const t = document.getElementById('b-toggle'); if (t) t.style.display = 'none';
+    document.querySelectorAll('.cash-btn').forEach(b => b.style.display = 'none');
+  }
 });
 
 function bShowTab(tab, btn) {
@@ -275,6 +313,10 @@ async function bToggle() {
     bRunning = false;
   } else {
     if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
+    const health = await checkAiHealth();
+    if (health && !health.any_ok) {
+      if (!confirm('⚠ AI KEYS ARE FAILING — every LLM call is being rejected.\n\nThe bot will skip every asset (it refuses to trade blind).\nFix DEEPSEEK_API_KEY / OPENAI_API_KEY in Railway → Variables first.\n\nStart anyway?')) { btn.disabled=false; return; }
+    }
     const startEq = parseFloat(document.getElementById('b-equity-input').value) || 10000;
     const tradeSize = parseFloat(document.getElementById('b-size-input').value) || 0;
     const hardStop = parseFloat(document.getElementById('b-hardstop-input').value) || 5.0;
@@ -372,7 +414,7 @@ async function bExport() {
 
 async function bRefresh() {
   try {
-    const r = await fetch(`${backendUrl}/autotrader/status`, {signal:AbortSignal.timeout(10000)});
+    const r = await fetch(`${backendUrl}${SHADOW_VIEW ? '/autotrader/status-shadow' : '/autotrader/status'}`, {signal:AbortSignal.timeout(10000)});
     if (!r.ok) return;
     const d = await r.json();
     bRunning = d.enabled;

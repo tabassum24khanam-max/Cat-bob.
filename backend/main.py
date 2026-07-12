@@ -32,7 +32,7 @@ from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
 from telegram_bot import send_prediction, send_scanner_summary
-from trading_engine import get_engine as get_trading_engine
+from trading_engine import get_engine as get_trading_engine, TradingEngine
 from portfolio import scan_portfolio
 from calibration import calibrate_confidence
 from equity_tracker import EquityTracker
@@ -90,6 +90,53 @@ _autotrader = {
     'compare_mode': False,   # run BOTH pipelines each cycle; trade active one, score the other as shadow
     'time_decay_hours': 7.0, # force-close losers held longer than this
 }
+
+# Shadow book: in COMPARE mode the inactive brain trades its OWN paper ledger,
+# viewable on its own dashboard (bot.html?brain=shadow). Exits are evaluated at
+# cycle boundaries only (no intra-cycle trailing).
+_shadow_engine_inst: Optional[TradingEngine] = None
+
+def get_shadow_engine() -> TradingEngine:
+    global _shadow_engine_inst
+    if _shadow_engine_inst is None:
+        _shadow_engine_inst = TradingEngine()
+    return _shadow_engine_inst
+
+
+def _is_ai_dead(result: dict) -> bool:
+    """True when every LLM agent failed (bad/missing API keys, no credit, outage):
+    the judge errored AND the quant analyst produced no direction. In that state
+    any trade would be a blind indicator coin flip — refuse it, loudly."""
+    quant_dir = (result.get('quant', {}).get('direction') or '').upper()
+    return result.get('agent_model') == 'error' and quant_dir not in ('BUY', 'SELL')
+
+
+async def _manage_shadow_book(asset: str, direction: str, price: float):
+    """Cash-out cycle rules applied to the shadow brain's own paper ledger:
+    profit → close + reopen fresh direction; small loss → hold; hard stop or
+    time decay → close. Exits evaluated only at cycle boundaries."""
+    sh = get_shadow_engine()
+    hard_stop_pct = _autotrader.get('hard_stop_pct', 5.0)
+    max_hold = int(float(_autotrader.get('time_decay_hours', 7.0)) * 3600)
+    size = _autotrader.get('trade_size') or min(10000.0, sh._equity * 0.05)
+    open_pos = [p for p in sh.positions.values() if p.status == 'open' and p.asset == asset]
+    if open_pos:
+        pos = open_pos[0]
+        pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+        if pos.direction == 'SELL':
+            pnl_pct = -pnl_pct
+        age = int(time.time()) - pos.entry_time
+        if pnl_pct > 0:
+            await sh.close_position(pos.id, price, 'shadow_cashout')
+        elif pnl_pct <= -hard_stop_pct:
+            await sh.close_position(pos.id, price, 'shadow_hard_stop')
+        elif age > max_hold:
+            await sh.close_position(pos.id, price, 'shadow_time_decay')
+        else:
+            return  # holding the small loser — no reopen this cycle
+    await sh.open_position(asset, direction, price, size,
+                           stop_loss_pct=2.0, take_profit_pct=6.0, trailing=0.8)
+
 
 # V3 vs V2 comparison scoreboard — each side tracks its own calls, resolved
 # against actual price movement one cycle later.
@@ -676,16 +723,36 @@ async def _autotrader_loop():
                     if isinstance(result, Exception):
                         raise result
                     if not isinstance(shadow_result, Exception):
-                        s_dir, s_conf = _bot_direction_from_result(shadow_result)
-                        s_price = shadow_result.get('ind', {}).get('cur', 0)
-                        _scoreboard_record(f'v{other_v}', asset_name, s_dir, s_conf, s_price)
-                        forensic_log.log_event_simple(
-                            'shadow_decision', asset_name,
-                            f"V{other_v} (shadow) says {s_dir} {s_conf}% — active V{pipe_version} trades, shadow only scored",
-                            direction=s_dir, confidence=s_conf, version=other_v, price=s_price,
-                        )
+                        if _is_ai_dead(shadow_result):
+                            forensic_log.log_error(asset_name, 'shadow_ai_offline',
+                                                   f"V{other_v} shadow: all LLM calls failed — not scored, not traded")
+                        else:
+                            s_dir, s_conf = _bot_direction_from_result(shadow_result)
+                            s_price = shadow_result.get('ind', {}).get('cur', 0)
+                            _scoreboard_record(f'v{other_v}', asset_name, s_dir, s_conf, s_price)
+                            forensic_log.log_event_simple(
+                                'shadow_decision', asset_name,
+                                f"V{other_v} (shadow) says {s_dir} {s_conf}% — trading its own shadow book",
+                                direction=s_dir, confidence=s_conf, version=other_v, price=s_price,
+                            )
+                            if s_price and s_dir in ('BUY', 'SELL'):
+                                try:
+                                    await _manage_shadow_book(asset_name, s_dir, s_price)
+                                except Exception as she:
+                                    forensic_log.log_error(asset_name, 'shadow_book', str(she)[:150])
                 else:
                     result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
+
+                # ── AI-DEAD GUARD: if every LLM call failed (bad keys / no credit),
+                # refuse to trade a blind coin flip. SL/TP still protect open positions.
+                if _is_ai_dead(result):
+                    forensic_log.log_error(asset_name, 'ai_offline',
+                        "ALL LLM calls failed — check API keys / credit in Railway Variables. "
+                        "Refusing to trade blind. "
+                        f"Judge said: {(result.get('insight') or '')[:150]}")
+                    cycle_summary.append(f"{asset_name}: ⚠ AI OFFLINE — no trade (fix API keys)")
+                    print(f"  {asset_name}: ⚠ AI OFFLINE — skipping (all LLM calls failing)")
+                    continue
 
                 direction = result.get('decision', 'NO_TRADE')
                 confidence = result.get('confidence', 0)
@@ -1352,6 +1419,8 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                                            bot_mode=getattr(req, 'bot_mode', False))
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
+    if not quant_result.get('_quant_model'):
+        slog(f"⚠⚠ QUANT AGENT FAILED — no LLM reachable (bad key / no credit?): {quant_result.get('reasoning','')[:90]}")
 
     # ── Bayesian + 4-way confidence blending ────────────────────────────
     rated_preds = await get_predictions(req.asset, 200)
@@ -1461,6 +1530,8 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
     if model_used == 'gpt-4o' and decision.get('_r1_error'):
         slog(f"⚠ R1 fallback reason: {decision['_r1_error']}")
+    if model_used == 'error':
+        slog(f"⚠⚠ DECISION AGENT FAILED — every LLM errored (check API keys/credit): {(decision.get('insight') or '')[:120]}")
 
     # ── V4 ML OVERRIDE: Only when ML is VERY confident ──────────────────
     # (V3 pipeline: the judge's ruling is FINAL — ML is a witness, never an override)
@@ -2707,6 +2778,38 @@ async def trade_webhook(payload: WebhookPayload):
 
 # ─── Autonomous Trader Control ──────────────────────────────────────────
 
+@app.get("/keys/health")
+async def keys_health():
+    """Live-test the LLM API keys with a 1-token call each. Catches invalid keys,
+    empty credit, and outages that otherwise fail SILENTLY and leave the bot blind."""
+    import httpx as _httpx
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+
+    async def probe(url: str, key: str, model: str) -> dict:
+        if not key or len(key) < 10:
+            return {'configured': False, 'ok': False, 'detail': 'not set'}
+        try:
+            async with _httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"model": model, "max_tokens": 1,
+                          "messages": [{"role": "user", "content": "ping"}]},
+                )
+                if resp.status_code == 200:
+                    return {'configured': True, 'ok': True, 'detail': 'OK'}
+                return {'configured': True, 'ok': False,
+                        'detail': f"HTTP {resp.status_code}: {resp.text[:140]}"}
+        except Exception as e:
+            return {'configured': True, 'ok': False, 'detail': str(e)[:140]}
+
+    ds, oa = await asyncio.gather(
+        probe("https://api.deepseek.com/v1/chat/completions", DEEPSEEK_API_KEY or '', "deepseek-chat"),
+        probe("https://api.openai.com/v1/chat/completions", OPENAI_API_KEY or '', "gpt-4o-mini"),
+    )
+    return {'deepseek': ds, 'openai': oa, 'any_ok': bool(ds['ok'] or oa['ok'])}
+
+
 class AutotraderStartRequest(BaseModel):
     assets: list
     interval_minutes: int = 60
@@ -2747,6 +2850,10 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['pipeline_version'] = 3 if req.pipeline_version >= 3 else 2
     _autotrader['compare_mode'] = bool(req.compare_mode)
     _autotrader['time_decay_hours'] = max(1.0, min(24.0, req.time_decay_hours))
+    # Fresh shadow book every start — same starting equity as the active book
+    global _shadow_engine_inst
+    _shadow_engine_inst = TradingEngine()
+    _shadow_engine_inst._equity = max(100, req.starting_equity)
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
@@ -2851,6 +2958,83 @@ async def autotrader_cashout_winners():
             "total_pnl": round(total_pnl, 2),
             "winners_closed": len(closed), "losers_held": len(held),
             "final_equity": round(engine._equity, 2)}
+
+
+@app.get("/autotrader/status-shadow")
+async def autotrader_status_shadow():
+    """Status of the COMPARE-mode shadow book — the inactive brain's own ledger.
+    Same shape as /autotrader/status so the dashboard can render it directly."""
+    sh = get_shadow_engine()
+    active_v = _autotrader.get('pipeline_version', 3)
+    shadow_v = 2 if active_v >= 3 else 3
+    open_positions = sh.get_positions('open')
+    trade_log = sh.get_trade_log(20)
+    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
+    total = len(trade_log)
+    now = int(time.time())
+    unrealized_total = 0.0
+    open_winners = 0
+    open_losers = 0
+    position_health = []
+    for pos_data in open_positions:
+        try:
+            resp = await fetch_current_price(pos_data['asset'])
+            price = resp.get('price', 0)
+        except Exception:
+            price = 0
+        if price and pos_data.get('entry_price'):
+            if pos_data['direction'] == 'BUY':
+                pnl_pct = (price - pos_data['entry_price']) / pos_data['entry_price'] * 100
+            else:
+                pnl_pct = (pos_data['entry_price'] - price) / pos_data['entry_price'] * 100
+            pnl_usd = pnl_pct / 100 * pos_data.get('size', 0)
+            unrealized_total += pnl_usd
+            if pnl_pct >= 0:
+                open_winners += 1
+            else:
+                open_losers += 1
+            position_health.append({
+                'asset': pos_data['asset'], 'direction': pos_data['direction'],
+                'entry_price': pos_data['entry_price'], 'current_price': round(price, 4),
+                'unrealized_pnl_pct': round(pnl_pct, 2), 'unrealized_pnl_usd': round(pnl_usd, 2),
+                'if_closed_now': round(pnl_usd, 2),
+                'age_minutes': round((now - pos_data.get('entry_time', now)) / 60),
+                'sl_distance_pct': 0, 'tp_distance_pct': 0, 'entry_confidence': 0,
+                'status': 'winning' if pnl_pct >= 0 else 'losing',
+            })
+    all_recent = trade_log + [{'pnl': h['unrealized_pnl_usd']} for h in position_health]
+    true_wins = sum(1 for t in all_recent if t.get('pnl', 0) > 0)
+    true_total = len(all_recent)
+    return {
+        "enabled": _autotrader['enabled'], "status": _autotrader['status'],
+        "brain": f"V{shadow_v}", "is_shadow": True,
+        "compare_mode": _autotrader.get('compare_mode', False),
+        "assets": _autotrader['assets'], "interval_minutes": _autotrader['interval_minutes'],
+        "trade_size": _autotrader.get('trade_size', 0),
+        "total_cycles": _autotrader['total_cycles'],
+        "trades_opened": len(sh.positions),
+        "last_cycle": _autotrader['last_cycle'], "seconds_until_next": 0,
+        "heartbeat": sh.heartbeat(),
+        "open_positions": open_positions, "recent_trades": trade_log,
+        "win_rate": round((wins / total * 100) if total > 0 else 0, 1),
+        "true_win_rate": round((true_wins / true_total * 100) if true_total > 0 else 0, 1),
+        "mtm_equity": round(sh._equity + unrealized_total, 2),
+        "unrealized_pnl": round(unrealized_total, 2),
+        "cashout_impact": round(unrealized_total, 2),
+        "open_winners": open_winners, "open_losers": open_losers,
+        "position_health": position_health,
+        "pipeline_version": shadow_v,
+        "version_scoreboard": {
+            vkey: {
+                'decisions': sb['decisions'], 'resolved': sb['resolved'],
+                'wins': sb['wins'], 'losses': sb['losses'],
+                'win_rate': round(sb['wins'] / sb['resolved'] * 100, 1) if sb['resolved'] else 0,
+                'avg_return_pct': round(sb['sum_ret'] / sb['resolved'], 3) if sb['resolved'] else 0,
+            } for vkey, sb in _version_scoreboard.items()
+        },
+        "cycle_log": [], "lessons": {},
+        "all_positions": sh.get_positions(),
+    }
 
 
 @app.get("/autotrader/status")
