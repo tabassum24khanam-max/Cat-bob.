@@ -32,7 +32,8 @@ from correlation_engine import get_correlation_summary
 from cluster_engine import assign_cluster
 from alert_engine import scan_for_alerts, get_latest_alerts
 from telegram_bot import send_prediction, send_scanner_summary
-from trading_engine import get_engine as get_trading_engine, TradingEngine
+from trading_engine import get_engine as get_trading_engine, TradingEngine, Position
+from dataclasses import asdict as _pos_asdict
 from portfolio import scan_portfolio
 from calibration import calibrate_confidence
 from equity_tracker import EquityTracker
@@ -221,6 +222,105 @@ def _bot_direction_from_result(result: dict) -> tuple:
             confidence = 52
     return direction, confidence
 
+# ─── Crash-proof memory ──────────────────────────────────────────────────
+# The bot's whole state is saved to disk every cycle and restored on boot, so a
+# Railway restart/redeploy can no longer erase a run. With a Railway Volume
+# mounted at /data it survives redeploys too; locally it just works.
+_STATE_DIR = '/data' if os.path.isdir('/data') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+_STATE_FILE = os.path.join(_STATE_DIR, 'bot_state.json')
+
+
+def save_bot_state():
+    """Persist the bot's memory (settings, both books, scoreboard, forensics)."""
+    try:
+        engine = get_trading_engine()
+        sh = get_shadow_engine()
+        state = {
+            'saved_at': int(time.time()),
+            'autotrader': {k: v for k, v in _autotrader.items() if k != '_loop_running'},
+            'engine': {
+                'equity': engine._equity, 'daily_pnl': engine.daily_pnl,
+                'positions': [_pos_asdict(p) for p in engine.positions.values()],
+                'trade_log': engine._trade_log[-500:],
+            },
+            'shadow': {
+                'equity': sh._equity, 'daily_pnl': sh.daily_pnl,
+                'positions': [_pos_asdict(p) for p in sh.positions.values()],
+                'trade_log': sh._trade_log[-500:],
+            },
+            'scoreboard': _version_scoreboard,
+            'lessons': _trade_lessons,
+            'forensic': forensic_log.get_events(10000),
+        }
+        os.makedirs(_STATE_DIR, exist_ok=True)
+        tmp = _STATE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(state, f)
+        os.replace(tmp, _STATE_FILE)
+    except Exception as e:
+        print(f"⚠ Bot memory save failed: {e}")
+
+
+def _restore_book(book: TradingEngine, data: dict):
+    book._equity = data.get('equity', book._equity)
+    book.daily_pnl = data.get('daily_pnl', 0.0)
+    book._trade_log = data.get('trade_log', [])
+    book.positions = {}
+    for d in data.get('positions', []):
+        try:
+            p = Position(**d)
+            book.positions[p.id] = p
+        except Exception:
+            continue
+
+
+def load_bot_state() -> bool:
+    """Restore memory after a restart. Returns True if the bot should auto-resume."""
+    global _shadow_engine_inst
+    try:
+        if not os.path.exists(_STATE_FILE):
+            return False
+        with open(_STATE_FILE) as f:
+            state = json.load(f)
+        _restore_book(get_trading_engine(), state.get('engine', {}))
+        _shadow_engine_inst = TradingEngine()
+        _restore_book(_shadow_engine_inst, state.get('shadow', {}))
+        sb = state.get('scoreboard') or {}
+        for k in ('v3', 'v2'):
+            if k in sb and isinstance(sb[k], dict):
+                _version_scoreboard[k].update(sb[k])
+        _trade_lessons.update(state.get('lessons', {}))
+        try:
+            for ev in state.get('forensic', []):
+                forensic_log._events.append(ev)
+        except Exception:
+            pass
+        saved = state.get('autotrader', {})
+        _autotrader.update({k: v for k, v in saved.items() if k != '_loop_running'})
+        _autotrader['_loop_running'] = False
+        age_min = (time.time() - state.get('saved_at', 0)) / 60
+        engine = get_trading_engine()
+        print(f"💾 Bot memory restored (saved {age_min:.0f} min ago): "
+              f"{len([p for p in engine.positions.values() if p.status == 'open'])} open positions, "
+              f"equity ${engine._equity:,.2f}, enabled={_autotrader.get('enabled')}")
+        forensic_log.log_event_simple(
+            'memory_restored', '*',
+            f"Bot memory restored after restart ({age_min:.0f} min gap); "
+            f"auto-resume={'YES' if _autotrader.get('enabled') else 'no (bot was stopped)'}")
+        return bool(_autotrader.get('enabled'))
+    except Exception as e:
+        print(f"⚠ Bot memory load failed — starting fresh: {e}")
+        return False
+
+
+def clear_bot_state():
+    try:
+        if os.path.exists(_STATE_FILE):
+            os.remove(_STATE_FILE)
+    except Exception:
+        pass
+
+
 # Self-correction: per-asset accuracy tracker
 _asset_accuracy: dict[str, dict] = {}
 
@@ -352,6 +452,10 @@ async def startup():
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
+    # Crash-proof memory: restore the previous run and auto-resume if it was live
+    if load_bot_state():
+        print("💾 Auto-resuming the autotrader from restored memory...")
+        asyncio.create_task(_autotrader_loop())
     asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
 
 
@@ -1015,6 +1119,8 @@ async def _autotrader_loop():
             _autotrader['trades_opened'], _autotrader['trades_closed'],
             parent_id=cycle_id,
         )
+
+        save_bot_state()  # crash-proof memory: checkpoint after every cycle
 
         # Send cycle summary to Telegram
         hb = engine.heartbeat()
@@ -2920,6 +3026,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
+    save_bot_state()  # checkpoint the fresh run immediately
     asyncio.create_task(_autotrader_loop())
     from telegram_bot import send_message
     size_label = f"${_autotrader['trade_size']:.0f}/trade" if _autotrader['trade_size'] > 0 else "Auto (Kelly)"
@@ -2945,6 +3052,7 @@ async def autotrader_stop():
     _autotrader['enabled'] = False
     _autotrader['status'] = 'stopped'
     _autotrader['_loop_running'] = False
+    save_bot_state()  # remember the stop — no auto-resume after restart
     engine = get_trading_engine()
     open_positions = engine.get_positions('open')
     from telegram_bot import send_message
@@ -2977,6 +3085,7 @@ async def autotrader_cashout():
                                'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
         except Exception:
             continue
+    save_bot_state()
     return {"ok": True, "closed": closed, "total_pnl": round(total_pnl, 2),
             "final_equity": round(engine._equity, 2)}
 
@@ -3269,6 +3378,14 @@ async def autotrader_reset():
     _equity_tracker._curve.clear()
 
     forensic_log.clear()
+
+    # Wipe the crash-proof memory and the shadow book too
+    global _shadow_engine_inst
+    _shadow_engine_inst = TradingEngine()
+    _shadow_engine_inst._equity = _autotrader.get('starting_equity', 10000)
+    for sb in _version_scoreboard.values():
+        sb.update({'decisions': 0, 'resolved': 0, 'wins': 0, 'losses': 0, 'sum_ret': 0.0, 'open': {}})
+    clear_bot_state()
 
     return {"ok": True, "message": "Full reset complete — all history, trades, and AI learning wiped"}
 
