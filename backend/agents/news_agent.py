@@ -256,7 +256,8 @@ async def run_news_agent(asset: str, asset_name: str, asset_type: str,
                           fg_data: dict, fr_data: dict, horizon: int,
                           api_key: str, ds_key: str = None,
                           db_sentiment: dict = None,
-                          quant_brief: str = '', version: int = 2) -> dict:
+                          quant_brief: str = '', version: int = 2,
+                          smart_money_ctx: str = '') -> dict:
     """Call DeepSeek V3 News Agent with full context."""
 
     # Aggregate article metrics
@@ -306,6 +307,7 @@ HEADLINES ({min(len(articles), max_headlines)}, tier-weighted, most impactful fi
 
 Average headline sentiment: {avg_sentiment:+.2f} | Average impact: {avg_impact:.2f}
 {db_ctx}{macro_ctx}{onchain_ctx}
+INSIDERS & SMART MONEY (politicians, insider filings, options flow, dark pool, top traders): {smart_money_ctx or 'no smart-money data this cycle'}
 WHAT THE MATH DESK SEES: {quant_brief or 'no quant brief available'}
 
 THINK IN CHAINS, NOT LABELS. Never stop at "positive/negative". Trace consequences: tariff → container volumes fall → shipping names down, domestic steel up. An insider sold big and no news coverage yet? The news is COMING — that is a signal. Second-order effects are where the money is.

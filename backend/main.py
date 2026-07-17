@@ -42,6 +42,7 @@ from orderbook import get_orderbook_imbalance
 from whale_monitor import get_whale_activity
 from options_flow import get_options_sentiment
 from smart_money import analyze_smart_money
+from smart_money_intel import get_smart_money_score
 import forensic_log
 # V5: New intelligence modules
 from funding_oi import get_funding_oi_combined
@@ -1458,6 +1459,27 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         quant_result['confidence'] = round(blended_conf)
         slog(f"✓ Blended: AI={raw_ai_conf}% Bayes={bayes_conf:.0f}% ML={ml_conf or 'N/A'} Cluster={cluster_conf or 'N/A'} → {quant_result['confidence']}%")
 
+    # ── Smart-money intelligence (V3): insiders, politicians, options flow,
+    # dark pool, top traders — THE EYES. Degrades gracefully without keys.
+    smi_data = {}
+    smi_ctx = ""
+    if version >= 3:
+        try:
+            smi_data = await asyncio.wait_for(get_smart_money_score(req.asset), timeout=25)
+            flags = "; ".join((smi_data.get('high_quality_flags') or [])[:3])
+            smi_ctx = (f"score {smi_data.get('score', 0)}/100, direction {smi_data.get('direction', 'neutral')}, "
+                       f"confirmed by 3+ sources: {smi_data.get('confirmed', False)}, "
+                       f"data completeness {smi_data.get('data_completeness', 0)}%")
+            if smi_data.get('top_signal'):
+                smi_ctx += f" | top signal: {smi_data['top_signal']}"
+            if flags:
+                smi_ctx += f" | flags: {flags}"
+            slog(f"🕵️ Smart-money intel: {smi_data.get('direction')} {smi_data.get('score')}/100 "
+                 f"(confirmed={smi_data.get('confirmed')}, data={smi_data.get('data_completeness')}%)")
+        except Exception as e:
+            smi_data = {}
+            slog(f"⚠ Smart-money intel unavailable this cycle: {str(e)[:60]}")
+
     # ── Agent 2: News ────────────────────────────────────────────────────
     slog(f"📰 Agent 2 (News/{'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
     quant_brief = ""
@@ -1469,6 +1491,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         articles, macro_data, onchain_data, fg_data, {},
         req.horizon, req.api_key, req.ds_key, db_sentiment,
         quant_brief=quant_brief, version=version,
+        smart_money_ctx=smi_ctx,
     )
     slog(f"✓ News: {news_result.get('sentiment')} ({news_result.get('sentiment_score',0):+d}) — {news_result.get('reasoning','')[:60]}")
 
@@ -1512,6 +1535,12 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         risk_evidence = build_risk_evidence(req.asset, ind, mtf_data, macro_data,
                                             fg_data, onchain_data, macro_context,
                                             is_crypto)
+        if smi_data and smi_data.get('direction') not in (None, '', 'neutral'):
+            sm_line = (f"SMART MONEY is {smi_data['direction'].upper()} (score {smi_data.get('score', 0)}/100"
+                       + (", CONFIRMED by 3+ independent sources" if smi_data.get('confirmed') else "") + ")")
+            for fl in (smi_data.get('high_quality_flags') or [])[:2]:
+                sm_line += f"; {fl}"
+            risk_evidence.append(sm_line)
         slog(f"📋 Risk Officer's notes: {len(risk_evidence)} facts for the judge")
 
     decision = await run_decision_agent(
@@ -1950,6 +1979,7 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         "gate_reason": gate_reason,
         "pipeline_version": version,
         "risk_evidence": risk_evidence,
+        "smart_money_intel": smi_data or None,
         "judge_confidence": decision.get('_judge_confidence'),
         "flip_trigger": decision.get('flip_trigger'),
         "catalyst_override": news_result.get('catalyst_override', False),
