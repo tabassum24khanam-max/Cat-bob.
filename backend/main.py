@@ -104,6 +104,32 @@ def get_shadow_engine() -> TradingEngine:
     return _shadow_engine_inst
 
 
+def _asset_tradeable_now(asset: str) -> tuple:
+    """(tradeable, reason) — the token-saver. Crypto trades 24/7. US equities
+    (incl. XOM/LMT/RTX, typed 'macro') only during regular NYSE hours
+    9:30-16:00 ET Mon-Fri. Futures (=F) skip weekends. Outside those windows
+    the asset is skipped BEFORE any API call — zero tokens burned."""
+    if get_asset_type(asset) == 'crypto':
+        return True, ''
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        now_et = _dt.now(ZoneInfo("America/New_York"))
+    except Exception:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        now_et = _dt.now(_tz(_td(hours=-5)))  # EST fallback if tzdata missing
+    if asset.endswith('=F'):
+        if now_et.weekday() >= 5:
+            return False, 'futures weekend'
+        return True, ''
+    if now_et.weekday() >= 5:
+        return False, 'weekend'
+    minutes = now_et.hour * 60 + now_et.minute
+    if not (9 * 60 + 30 <= minutes < 16 * 60):
+        return False, 'market closed'
+    return True, ''
+
+
 def _is_ai_dead(result: dict) -> bool:
     """True when every LLM agent failed (bad/missing API keys, no credit, outage):
     the judge errored AND the quant analyst produced no direction. In that state
@@ -676,6 +702,12 @@ async def _autotrader_loop():
 
         for asset_name in _autotrader['assets']:
             try:
+                # Market-hours token-saver: closed market = zero API calls
+                tradeable, closed_why = _asset_tradeable_now(asset_name)
+                if not tradeable:
+                    cycle_summary.append(f"{asset_name}: {closed_why} — skipped (0 tokens)")
+                    continue
+
                 # Run the full prediction — ALWAYS, even if holding
                 api_key = OPENAI_API_KEY or ''
                 ds_key = DEEPSEEK_API_KEY or ''
