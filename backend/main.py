@@ -1126,6 +1126,7 @@ async def serve_appjs():
 
 
 @app.get("/bot")
+@app.get("/bot.html")
 async def serve_bot():
     fp = os.path.join(frontend_path, 'bot.html')
     if os.path.exists(fp):
