@@ -5,3 +5,6 @@ __pycache__/
 *.db
 *.sqlite3
 .DS_Store
+
+# Runtime bot memory (crash-proof state) — machine-specific, never commit
+backend/data/bot_state.json
