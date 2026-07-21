@@ -124,7 +124,7 @@ def log_prediction(asset: str, request_data: Dict, indicators: Dict,
 def log_trade_open(asset: str, direction: str, price: float, size: float,
                     stop_loss: float, take_profit: float, trailing: float,
                     source: str, confidence: int = 0, pqs_score: int = 0,
-                    parent_id: str = None):
+                    parent_id: str = None, autopsy: dict = None):
     return log("trade_open", asset, {
         "direction": direction,
         "entry_price": price,
@@ -135,6 +135,7 @@ def log_trade_open(asset: str, direction: str, price: float, size: float,
         "source": source,  # "autotrader_cycle_N" or "webhook" or "manual"
         "confidence": confidence,
         "pqs_score": pqs_score,
+        "autopsy": autopsy or {},  # WHY the desk took this trade
     }, parent_id=parent_id)
 
 
@@ -360,6 +361,19 @@ def _render_event(ev: Dict) -> List[str]:
         out.append(f"  Stop-loss: ${d.get('stop_loss', 0):,.4f}  Take-profit: ${d.get('take_profit', 0):,.4f}  Trailing: {d.get('trailing_pct', 0)}%")
         out.append(f"  Source: {d.get('source')}")
         out.append(f"  Confidence: {d.get('confidence')}%  PQS: {d.get('pqs_score')}/10")
+        ap = d.get('autopsy') or {}
+        if ap:
+            j = ap.get('judge', {}); q = ap.get('quant', {}); n = ap.get('news', {})
+            out.append(f"  WHY (autopsy):")
+            if j.get('primary_reason'): out.append(f"    Judge ruling: {j.get('primary_reason')}")
+            if j.get('insight'): out.append(f"    Judge reasoning: {j.get('insight')}")
+            if q.get('direction'): out.append(f"    Quant analyst: {q.get('direction')} {q.get('confidence')}% -- {q.get('reasoning','')}")
+            if n.get('sentiment'):
+                cats = ', '.join(n.get('catalysts') or []) if isinstance(n.get('catalysts'), list) else ''
+                out.append(f"    Intelligence: {n.get('sentiment')} -- {n.get('reasoning','')}" + (f" [catalysts: {cats}]" if cats else ""))
+            rn = ap.get('risk_notes')
+            if rn: out.append(f"    Risk notes: {'; '.join(rn[:4]) if isinstance(rn, list) else rn}")
+            if j.get('flip_trigger'): out.append(f"    Would flip if: {j.get('flip_trigger')}")
 
     elif et == "trade_flip":
         out.append(f"  FLIP {d.get('old_direction')} -> {d.get('new_direction')}")

@@ -84,6 +84,7 @@ _autotrader = {
     'force_trade': True,
     'force_size_scale': 0.5,
     '_loop_running': False,
+    '_run_generation': 0,   # bumped on every START; stale loops self-exit
     'use_local': False,
     'local_url': 'http://localhost:11434',
     'local_model': 'qwen2.5:7b',
@@ -772,9 +773,7 @@ async def _continuous_scanner():
 
 async def _autotrader_loop():
     """The autonomous trading brain. Wakes up every interval, runs predictions, opens trades."""
-    if _autotrader['_loop_running']:
-        print("AUTOTRADER: Loop already running, refusing duplicate spawn")
-        return
+    my_gen = _autotrader['_run_generation']  # this loop's identity
     _autotrader['_loop_running'] = True
     from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
     from telegram_bot import send_message
@@ -783,6 +782,9 @@ async def _autotrader_loop():
     engine = get_trading_engine()
 
     while True:
+        if my_gen != _autotrader['_run_generation']:
+            print(f"AUTOTRADER: loop gen {my_gen} superseded by {_autotrader['_run_generation']} -- exiting")
+            return
         if not _autotrader['enabled'] or not _autotrader['assets']:
             _autotrader['_loop_running'] = False
             return
@@ -806,6 +808,8 @@ async def _autotrader_loop():
 
         for asset_name in _autotrader['assets']:
             try:
+                if my_gen != _autotrader['_run_generation']:
+                    break  # superseded by a newer START -- abandon this cycle
                 # Market-hours token-saver: closed market = zero API calls
                 tradeable, closed_why = _asset_tradeable_now(asset_name)
                 if not tradeable:
@@ -1087,12 +1091,32 @@ async def _autotrader_loop():
                     pos_id = pos_data.get('id', '')
                     if pos_id and pos_id in engine.positions:
                         engine.positions[pos_id].entry_confidence = confidence
+                    _autopsy = {
+                        "judge": {
+                            "primary_reason": result.get('primary_reason'),
+                            "insight": result.get('insight'),
+                            "flip_trigger": result.get('flip_trigger'),
+                            "catalyst_override": result.get('catalyst_override'),
+                        },
+                        "quant": {
+                            "direction": result.get('quant', {}).get('direction'),
+                            "confidence": result.get('quant', {}).get('confidence'),
+                            "reasoning": result.get('quant', {}).get('reasoning'),
+                        },
+                        "news": {
+                            "sentiment": result.get('news', {}).get('sentiment'),
+                            "catalysts": result.get('news', {}).get('key_catalysts'),
+                            "reasoning": result.get('news', {}).get('reasoning'),
+                        },
+                        "risk_notes": result.get('risk_evidence'),
+                        "pipeline_version": result.get('pipeline_version'),
+                    }
                     forensic_log.log_trade_open(
                         asset_name, direction, price, size,
                         pos_data.get('stop_loss', 0), pos_data.get('take_profit', 0),
                         pos_data.get('trailing_stop_pct', 1.5),
                         f"autotrader_cycle_{cycle}", confidence, pqs_score,
-                        parent_id=cycle_id,
+                        parent_id=cycle_id, autopsy=_autopsy,
                     )
                     msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
                     print(f"  >>> {msg}")
@@ -3000,11 +3024,10 @@ async def autotrader_start(req: AutotraderStartRequest):
     valid_assets = [a for a in req.assets if a in ALL_ASSETS]
     if not valid_assets:
         return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
-    # Stop any existing loop before starting a new one
-    if _autotrader['_loop_running']:
-        _autotrader['enabled'] = False
-        await asyncio.sleep(1)
-        _autotrader['_loop_running'] = False
+    # Supersede any existing loop(s): bump the generation so stale loops self-exit.
+    # (The old 1-second wait raced against multi-minute cycles -> twin loops.)
+    _autotrader['_run_generation'] += 1
+    _autotrader['_loop_running'] = False
     _autotrader['enabled'] = True
     _autotrader['assets'] = valid_assets
     _autotrader['interval_minutes'] = max(10, req.interval_minutes)
@@ -3026,6 +3049,16 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
+    # Orphan cleanup: close any carried-over positions for assets no longer selected
+    for _p in list(engine.positions.values()):
+        if _p.status == 'open' and _p.asset not in valid_assets:
+            try:
+                _r = await fetch_current_price(_p.asset)
+                await engine.close_position(_p.id, _r.get('price', 0) or _p.entry_price, 'orphan_cleanup')
+                forensic_log.log_event_simple('orphan_cleanup', _p.asset,
+                    f"{_p.asset} de-selected on START -- position auto-closed")
+            except Exception:
+                pass
     save_bot_state()  # checkpoint the fresh run immediately
     asyncio.create_task(_autotrader_loop())
     from telegram_bot import send_message
@@ -3130,6 +3163,29 @@ async def autotrader_cashout_winners():
             "total_pnl": round(total_pnl, 2),
             "winners_closed": len(closed), "losers_held": len(held),
             "final_equity": round(engine._equity, 2)}
+
+
+@app.post("/autotrader/cashout-shadow")
+async def autotrader_cashout_shadow():
+    """Cash out the shadow (inactive-brain) book. Does NOT touch the main bot."""
+    sh = get_shadow_engine()
+    closed = []
+    total_pnl = 0.0
+    for pos in list(sh.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            r = await fetch_current_price(pos.asset)
+            price = r.get('price', 0)
+            if price:
+                cr = await sh.close_position(pos.id, price, 'shadow_cashout_manual')
+                total_pnl += cr.get('pnl', 0)
+                closed.append({'asset': pos.asset, 'direction': pos.direction, 'pnl': cr.get('pnl', 0)})
+        except Exception:
+            continue
+    save_bot_state()
+    return {"ok": True, "closed": closed, "total_pnl": round(total_pnl, 2),
+            "final_equity": round(sh._equity, 2)}
 
 
 @app.get("/autotrader/status-shadow")

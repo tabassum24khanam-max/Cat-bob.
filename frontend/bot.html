@@ -288,8 +288,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (SHADOW_VIEW) {
     document.title = 'ULTRAMAX — SHADOW BOOK';
     const ban = document.createElement('div');
-    ban.textContent = '👁 SHADOW BOOK — the other brain trading its own separate paper money (read-only; control the bot from the main dashboard)';
+    ban.innerHTML = '👁 SHADOW BOOK — the other brain trading its own separate paper money (read-only). ';
     ban.style.cssText = 'background:#141400;color:#ffd600;font-size:9px;padding:8px;text-align:center;border-bottom:1px solid #333';
+    const scb = document.createElement('button');
+    scb.textContent = 'CASHOUT SHADOW BOOK';
+    scb.style.cssText = 'margin-left:8px;font-size:9px;padding:3px 8px;background:#0a0a0a;color:#00e676;border:1px solid #00e676;cursor:pointer';
+    scb.onclick = bCashoutShadow;
+    ban.appendChild(scb);
     document.body.prepend(ban);
     const t = document.getElementById('b-toggle'); if (t) t.style.display = 'none';
     document.querySelectorAll('.cash-btn').forEach(b => b.style.display = 'none');
@@ -350,6 +355,14 @@ async function bCashout() {
   const d = await r.json();
   bRunning = false;
   alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
+  bRefresh();
+}
+
+async function bCashoutShadow() {
+  if (!confirm('Cash out the SHADOW book (the inactive brain\'s own paper money)?\nThis does NOT affect the main bot.')) return;
+  const r = await fetch(`${backendUrl}/autotrader/cashout-shadow`, {method:'POST'});
+  const d = await r.json();
+  alert(`Shadow book cashed out: ${d.closed?.length||0} positions | P&L $${(d.total_pnl||0).toFixed(2)}\nEquity: $${(d.final_equity||0).toFixed(2)}`);
   bRefresh();
 }
 
