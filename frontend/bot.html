@@ -151,6 +151,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <a href="bot?brain=shadow" target="_blank" style="font-size:7px;color:#00e5ff;margin-left:6px">OPEN 2ND DASHBOARD ↗</a>
       <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
     </div>
+    <div style="font-size:8px;color:var(--muted);padding:2px 14px" id="b-v6info">V6 upgrades active</div>
     <div class="ctrl-row" style="margin-top:4px">
       <span id="b-ai-health" style="font-size:7px;color:var(--muted)">🧠 checking AI keys…</span>
     </div>
@@ -498,6 +499,22 @@ async function bRefresh() {
         txt += ` | V3: ${sb.v3.resolved ? f(sb.v3) : '—'} vs V2: ${sb.v2.resolved ? f(sb.v2) : '—'}`;
       }
       vsEl.textContent = txt;
+    }
+    // V6: Voter weights + market intelligence
+    const vwEl = document.getElementById('b-v6info');
+    if (vwEl) {
+      let v6 = '';
+      if (d.voter_weights) {
+        const vw = d.voter_weights;
+        v6 += `VOTER WEIGHTS: Quant ${(vw.quant*100).toFixed(0)}% | News ${(vw.news*100).toFixed(0)}% | ML ${(vw.ml*100).toFixed(0)}%`;
+      }
+      if (d.voter_grades) {
+        const vg = d.voter_grades;
+        const fmt = k => vg[k] ? `${k}: ${vg[k].correct}/${vg[k].total}` : '';
+        const parts = ['quant','news','ml'].map(fmt).filter(x=>x);
+        if (parts.length) v6 += (v6 ? ' | ' : '') + 'GRADES: ' + parts.join(', ');
+      }
+      vwEl.textContent = v6 || 'V6 voter weights: learning (need 10+ trades)';
     }
 
     // Recommendation
