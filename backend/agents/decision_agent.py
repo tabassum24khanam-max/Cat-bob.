@@ -131,11 +131,17 @@ Respond with ONLY this JSON:
         if ml_result and ml_result.get('available'):
             ml_score = ml_result.get('score', 50)
             ml_dir = 'BUY' if ml_score > 55 else 'SELL' if ml_score < 45 else 'NEUTRAL'
+            _cv = ml_result.get('cv_accuracy')
+            _acc_txt = (f"its REAL out-of-sample accuracy is {_cv:.0f}% — "
+                        + ("barely better than a coin flip, so treat it as a weak tiebreaker at most"
+                           if _cv is not None and _cv < 53 else
+                           "a genuine but modest edge" if _cv is not None else
+                           "accuracy unmeasured this cycle")) if True else ""
             ml_witness = (f"STATISTICAL MODEL (one witness among several — pattern-matcher trained on "
-                          f"{ml_result.get('n_train', 0):,} historical samples; its accuracy varies by market regime; "
-                          f"weigh it, do not obey it): {ml_dir} | prob up {ml_score:.1f}% | "
-                          f"XGB {ml_result.get('xgb_score', 50):.1f}% / RF {ml_result.get('rf_score', 50):.1f}% / "
-                          f"GB {ml_result.get('gb_score', 50):.1f}% | models agree: {'YES' if ml_result.get('agreement') else 'NO'}")
+                          f"{ml_result.get('n_train', 0):,} real historical market samples. {_acc_txt}. "
+                          f"Weigh it, never obey it): leans {ml_dir} | prob up {ml_score:.1f}% | "
+                          f"XGB {ml_result.get('xgb_score', 50):.1f}% / RF {ml_result.get('rf_score', 50):.1f}% | "
+                          f"models agree: {'YES' if ml_result.get('agreement') else 'NO'}")
 
         risk_notes = "\n".join(f"  - {e}" for e in (risk_evidence or [])) or "  - nothing unusual flagged"
         catalyst_flag = news.get('catalyst_override', False)
@@ -163,8 +169,10 @@ THE REPORTS:
 CHIEF MARKET ANALYST (math): {quant['direction']} at {quant['confidence']}% — "{quant.get('reasoning', 'N/A')}"
   His own argument against himself: "{quant.get('counter_argument', 'none given')}"
 INTELLIGENCE CHIEF (news): {news['sentiment']} ({news['sentiment_score']:+d}/100), regime {news['market_regime']}
-  Catalysts: {', '.join(news.get('key_catalysts', ['none'])[:3])} | priced in: {news.get('priced_in', 'unknown')} | CATALYST OVERRIDE FLAGGED: {'YES — ' + str(news.get('reasoning', '')) if catalyst_flag else 'no'}
+  DOMINANT CATALYST: {news.get('dominant_catalyst', 'none')} | direction {news.get('catalyst_direction', 'none')} | expected move {news.get('expected_move_pct', 0)}% | timing {news.get('time_to_impact', 'none')} | priced in: {news.get('priced_in', 'unknown')}
+  Noise discarded: {news.get('noise_discarded', 'n/a')} | CATALYST OVERRIDE FLAGGED: {'YES — ' + str(news.get('reasoning', '')) if catalyst_flag else 'no'}
   Reasoning: "{news.get('reasoning', 'N/A')}"
+  HOW TO USE THIS: a fresh, un-priced-in catalyst with a real expected move is the strongest edge you have — the math is only 51% on its own. If the Intelligence Chief found a genuine surprise, lean into it. If it found only noise (catalyst 'none'), do NOT invent conviction from headlines — fall back to the weight of the other evidence.
 {ml_witness}
 {daily_line}
 MONTE CARLO (1000 sims): median {mc['median']:.4f} | prob up {mc['prob_up']*100:.0f}%

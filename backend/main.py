@@ -92,6 +92,10 @@ _autotrader = {
     'pipeline_version': 3,   # 3 = ungagged-judge pipeline, 2 = classic (pre-2026-07)
     'compare_mode': False,   # run BOTH pipelines each cycle; trade active one, score the other as shadow
     'time_decay_hours': 7.0, # force-close losers held longer than this
+    'sentry_enabled': True,  # cheap always-awake watcher can wake the bot early on a real break
+    '_wake_signal': False,   # set by sentry, consumed by the loop to break its sleep early
+    '_wake_count': 0,        # early wakes used this interval (hard cap 2)
+    '_wake_reason': '',      # what the sentry saw — fed to the agents so they "listen" not re-derive
 }
 
 # Shadow book: in COMPARE mode the inactive brain trades its OWN paper ledger,
@@ -251,6 +255,8 @@ def save_bot_state():
             },
             'scoreboard': _version_scoreboard,
             'lessons': _trade_lessons,
+            'voter_grades': _voter_grades,
+            'last_voter_calls': _last_voter_calls,
             'forensic': forensic_log.get_events(10000),
         }
         os.makedirs(_STATE_DIR, exist_ok=True)
@@ -291,6 +297,8 @@ def load_bot_state() -> bool:
             if k in sb and isinstance(sb[k], dict):
                 _version_scoreboard[k].update(sb[k])
         _trade_lessons.update(state.get('lessons', {}))
+        _voter_grades.update(state.get('voter_grades', {}))
+        _last_voter_calls.update(state.get('last_voter_calls', {}))
         try:
             for ev in state.get('forensic', []):
                 forensic_log._events.append(ev)
@@ -385,12 +393,20 @@ def feature_enabled(req_features, name: str) -> bool:
 from typing import Dict
 _trade_lessons: Dict[str, list] = {}
 
+# V6: Last voter calls per asset, for auto-weighting grading
+_last_voter_calls: dict = {}  # {asset: {'quant': 'BUY', 'news': 'BULLISH', 'ml': 'BUY'}}
+
 def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
                    pnl: float, reason: str):
     if asset not in _trade_lessons:
         _trade_lessons[asset] = []
     was_correct = pnl > 0
     pnl_pct = (exit_price - entry) / entry * 100 if direction == 'BUY' else (entry - exit_price) / entry * 100
+    # V6: grade voters on this resolved trade
+    correct_dir = direction if was_correct else ('SELL' if direction == 'BUY' else 'BUY')
+    vc = _last_voter_calls.get(asset, {})
+    if vc:
+        _update_voter_grades(vc.get('quant', ''), vc.get('news', ''), vc.get('ml', ''), correct_dir)
     if was_correct:
         lesson = f"{direction} was correct ({pnl_pct:+.2f}%). Closed via {reason}."
     else:
@@ -423,6 +439,118 @@ def record_lesson(asset: str, direction: str, entry: float, exit_price: float,
     except Exception:
         pass
 
+# ── V6 UPGRADE: Chop Detector ───────────────────────────────────────────────
+def _detect_chop(ind: dict) -> tuple:
+    """Returns (is_chop, severity 0.0-1.0). High chop = shrink position size."""
+    adx = ind.get('adx', 25)
+    hurst = ind.get('hurst_exp', 0.5)
+    entropy = ind.get('entropy_ratio', 0.5)
+    bb_width = ind.get('bb_width', 0.03)
+    score = 0.0
+    if adx < 20: score += 0.25
+    if adx < 15: score += 0.20
+    if 0.45 <= hurst <= 0.55: score += 0.20
+    if entropy > 0.85: score += 0.15
+    if bb_width > 0 and bb_width < 0.02: score += 0.20
+    return score >= 0.5, min(1.0, score)
+
+
+# ── V6 UPGRADE: Correlation Veto ────────────────────────────────────────────
+_CORR_MAP = {
+    'BTC': ['ETH', 'SOL'], 'ETH': ['BTC', 'SOL'], 'SOL': ['BTC', 'ETH'],
+    'AAPL': ['MSFT', 'GOOGL', 'SPY', 'NVDA'], 'MSFT': ['AAPL', 'GOOGL', 'SPY'],
+    'GOOGL': ['AAPL', 'MSFT', 'SPY'], 'NVDA': ['SPY', 'MSFT', 'AAPL'],
+    'SPY': ['AAPL', 'MSFT', 'NVDA', 'GOOGL'],
+    'RTX': ['LMT'], 'LMT': ['RTX'],
+    'XOM': ['CL=F'], 'CL=F': ['XOM'],
+}
+
+def _correlation_veto(asset: str, direction: str, engine) -> tuple:
+    """Returns (vetoed, reason). Vetoed = cut size to 25%, not skip."""
+    related = _CORR_MAP.get(asset, [])
+    if not related:
+        return False, ''
+    opposing = aligned = 0
+    for pos in engine.positions.values():
+        if pos.status != 'open' or pos.asset not in related:
+            continue
+        if pos.direction == direction:
+            aligned += 1
+        else:
+            opposing += 1
+    if opposing >= 3 and aligned == 0:
+        return True, f"{opposing} correlated positions oppose {direction}"
+    return False, ''
+
+
+# ── V6 UPGRADE: Per-Voter Auto-Weighting ────────────────────────────────────
+_voter_grades: dict = {}
+
+def _update_voter_grades(quant_dir: str, news_sent: str, ml_dir: str, correct_dir: str):
+    for name, called in [('quant', quant_dir), ('news', news_sent), ('ml', ml_dir)]:
+        if not called or called in ('NO_TRADE', 'NEUTRAL', 'neutral', ''):
+            continue
+        if name not in _voter_grades:
+            _voter_grades[name] = {'correct': 0, 'total': 0}
+        _voter_grades[name]['total'] += 1
+        is_right = False
+        if name == 'news':
+            is_right = ((called.upper() == 'BULLISH' and correct_dir == 'BUY') or
+                        (called.upper() == 'BEARISH' and correct_dir == 'SELL'))
+        else:
+            is_right = called.upper() == correct_dir.upper()
+        if is_right:
+            _voter_grades[name]['correct'] += 1
+
+def _get_voter_weights() -> dict:
+    defaults = {'quant': 0.33, 'news': 0.33, 'ml': 0.34}
+    if all(_voter_grades.get(v, {}).get('total', 0) >= 10 for v in defaults):
+        accs = {}
+        for v in defaults:
+            g = _voter_grades[v]
+            accs[v] = g['correct'] / g['total'] if g['total'] > 0 else 0.33
+        t = sum(accs.values()) or 1.0
+        return {v: round(accs[v] / t, 3) for v in defaults}
+    return defaults
+
+
+# ── V6 UPGRADE: Time-Decaying Stop ──────────────────────────────────────────
+BREAKEVEN_TRIGGER_PCT = 0.3
+
+def _time_decay_stop(hard_stop_pct: float, age_seconds: int, max_hold_seconds: int) -> float:
+    """Tighten hard stop linearly as a red position ages. At max age: 0.5%."""
+    if max_hold_seconds <= 0:
+        return hard_stop_pct
+    ratio = min(1.0, age_seconds / max_hold_seconds)
+    return hard_stop_pct - (hard_stop_pct - 0.5) * ratio
+
+
+# ── V6 UPGRADE: Market Mode Detection ──────────────────────────────────────
+def _detect_market_mode(ind: dict) -> str:
+    hurst = ind.get('hurst_exp', 0.5)
+    adx = ind.get('adx', 20)
+    if hurst > 0.55 and adx > 25:
+        return 'trend'
+    if hurst < 0.45 and adx < 20:
+        return 'mean_revert'
+    return 'chop'
+
+
+# ── V6 UPGRADE: Per-Asset Humility Memory ──────────────────────────────────
+def _get_humility_context(asset: str) -> str:
+    acc = _asset_accuracy.get(asset)
+    if not acc or acc['total'] < 3:
+        return ''
+    wr = acc['wins'] / acc['total'] * 100
+    streak = acc['streak']
+    s_txt = f"{abs(streak)}-trade {'WIN' if streak > 0 else 'LOSS'} streak" if streak else 'no streak'
+    avg = acc['pnl_sum'] / acc['total']
+    hot = ' You are HOT on this asset — trust your read.' if wr >= 65 else ''
+    cold = ' You have been COLD — second-guess your instinct, weigh the math heavier.' if wr <= 40 else ''
+    return (f"YOUR TRACK RECORD ON {asset}: {acc['wins']}W/{acc['losses']}L "
+            f"({wr:.0f}% win rate, avg {avg:+.2f}%/trade, {s_txt}).{hot}{cold}")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -453,6 +581,8 @@ async def startup():
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
+    asyncio.create_task(_resolve_outcomes_loop())
+    asyncio.create_task(_event_sentry_loop())
     # Crash-proof memory: restore the previous run and auto-resume if it was live
     if load_bot_state():
         print("💾 Auto-resuming the autotrader from restored memory...")
@@ -476,6 +606,7 @@ class PredictRequest(BaseModel):
     features: Optional[dict] = None
     pipeline_version: Optional[int] = 2  # 2 = classic, 3 = ungagged-judge pipeline
     shadow: Optional[bool] = False       # compare-mode shadow run: no telegram, no session memory
+    breaking_context: Optional[str] = None  # sentry's reason for an early wake — agents "listen" to it
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -573,13 +704,25 @@ def _postmortem_analysis(req, feedback: str, moved_pct: float, outcome_price: fl
 
 
 async def _safe_refresh_calendar():
-    """Safely refresh economic calendar on startup."""
+    """Refresh the economic calendar (FOMC/CPI/NFP) AND the per-asset earnings
+    calendar. Was startup-only before -- now loops every 12h so newly-scheduled
+    events (a freshly-announced earnings date, a new Fed meeting) keep showing
+    up instead of freezing at whatever existed when the bot last restarted."""
     await asyncio.sleep(3)
-    try:
-        from macro_engine import refresh_calendar
-        await refresh_calendar()
-    except Exception:
-        pass
+    while True:
+        try:
+            from macro_engine import refresh_calendar
+            n_macro = await refresh_calendar()
+        except Exception:
+            n_macro = 0
+        try:
+            from earnings_calendar import refresh_earnings_calendar
+            n_earn = await refresh_earnings_calendar()
+        except Exception:
+            n_earn = 0
+        if n_macro or n_earn:
+            print(f"📅 Calendar refreshed: {n_macro} macro events, {n_earn} earnings dates")
+        await asyncio.sleep(12 * 3600)
 
 
 async def _safe_assign_cluster(asset: str, ind: dict) -> dict:
@@ -613,32 +756,80 @@ _ml_cache = {}  # asset -> trained ensemble model artifact
 
 
 async def _async_retrain(asset_name: str):
-    """Retrain ML ensemble in background after new feedback."""
+    """Retrain this asset's ML model in the background after new feedback —
+    on real 2y history PLUS our accumulated trades (honest, per-asset)."""
     await asyncio.sleep(1)
     try:
-        preds = await get_predictions(asset_name, 500)
-        model = await train_ensemble(preds)
-        if model:
-            _ml_cache[asset_name] = model
-            print(f"✓ ML retrained for {asset_name}: {model['n_samples']} samples")
-    except Exception:
-        pass
+        from ml_trainer import train_asset
+        r = await train_asset(asset_name)
+        if r.get('ok'):
+            _ml_cache[asset_name] = {'available': True, 'cv_accuracy': r.get('cv_accuracy'),
+                                      'n_train': r.get('n_train', 0)}
+            print(f"✓ ML retrained for {asset_name}: {r['n_train']} samples "
+                  f"({r['n_our_data']} ours), {r['cv_accuracy']}% out-of-sample")
+    except Exception as e:
+        print(f"⚠ retrain {asset_name} failed: {str(e)[:80]}")
 
 
 async def warm_ml_models():
-    """Pre-train ML ensemble models from existing prediction history."""
+    """Load per-asset ML models trained on real historical data (ml_trainer).
+    If any are missing or stale (>7 days), retrain them in the background.
+    This replaces the old path that overfit on 15 of the bot's own trades."""
     await asyncio.sleep(2)  # Let DB init complete
+    from ml_engine import _asset_model_path, load_ensemble
+    # Register whatever models already exist on disk so predictions can use them
+    present = []
+    for asset_name in ALL_ASSETS:
+        try:
+            md = load_ensemble(asset_name)
+            if md and md.get('source', '').startswith('yahoo'):
+                _ml_cache[asset_name] = {'available': True, 'cv_accuracy': md.get('cv_accuracy'),
+                                          'n_train': md.get('n_train', 0)}
+                present.append(asset_name)
+        except Exception:
+            continue
+    if present:
+        print(f"✓ ML models loaded for {len(present)} assets (real historical training)")
+    # Retrain any missing/stale models in the background (non-blocking)
+    asyncio.create_task(_ensure_ml_models_fresh())
+
+
+async def _ensure_ml_models_fresh(max_age_days: float = 7.0):
+    """Train per-asset models that are missing or older than max_age_days.
+    Runs in the background so startup is never blocked by ~13 min of training."""
+    import gzip, pickle
+    from ml_engine import _asset_model_path
     try:
-        all_preds = await get_predictions(limit=500)
-        assets = list(set(p['asset'] for p in all_preds))
-        for asset_name in assets:
-            asset_preds = [p for p in all_preds if p['asset'] == asset_name]
-            model = await train_ensemble(asset_preds)
-            if model:
-                _ml_cache[asset_name] = model
-                print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
+        from ml_trainer import train_asset
     except Exception as e:
-        print(f"⚠ ML warm-up skipped: {e}")
+        print(f"⚠ ml_trainer unavailable: {e}")
+        return
+    now = time.time()
+    stale = []
+    for asset_name in ALL_ASSETS:
+        p = _asset_model_path(asset_name)
+        if not p.exists():
+            stale.append(asset_name); continue
+        try:
+            with gzip.open(p, 'rb') as f:
+                md = pickle.load(f)
+            if (now - md.get('trained_at', 0)) > max_age_days * 86400:
+                stale.append(asset_name)
+        except Exception:
+            stale.append(asset_name)
+    if not stale:
+        return
+    print(f"🎓 Training {len(stale)} ML models on real historical data: {stale}")
+    for asset_name in stale:
+        try:
+            r = await train_asset(asset_name)
+            if r.get('ok'):
+                _ml_cache[asset_name] = {'available': True, 'cv_accuracy': r.get('cv_accuracy'),
+                                          'n_train': r.get('n_train', 0)}
+                print(f"  ✓ {asset_name}: {r['n_train']} samples, {r['cv_accuracy']}% out-of-sample")
+        except Exception as e:
+            print(f"  ✗ {asset_name}: {str(e)[:80]}")
+    print("🎓 ML historical training complete")
 
 
 def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
@@ -757,6 +948,193 @@ def get_adaptive_floor():
     return 52
 
 
+# Cheap always-awake sentry: watches price velocity (and, less often, news) for
+# a REAL break between analysis cycles. It IGNORES normal wiggle — the thesis is
+# about the next half hour, not the next second — and only wakes the bot when a
+# move is far outside the asset's own recent noise. Hard cap: 2 early wakes per
+# interval. Zero LLM cost; the expensive 3-agent analysis still runs on the slow
+# clock, it just gets triggered early when something genuinely happens.
+_sentry_price_hist: dict = {}   # asset -> list[(ts, price)]
+_sentry_last_news = 0
+_sentry_last_8k = 0
+
+async def _event_sentry_loop():
+    """Runs every 10s. Flags abnormal price velocity on open positions and wakes
+    the slow AI loop early (<=2x/interval). Self-calibrates to each asset's noise."""
+    global _sentry_last_news, _sentry_last_8k
+    await asyncio.sleep(60)
+    engine = get_trading_engine()
+    while True:
+        try:
+            if (_autotrader.get('enabled') and _autotrader.get('sentry_enabled')
+                    and int(_autotrader.get('pipeline_version', 3)) >= 3
+                    and _autotrader.get('status') == 'sleeping'
+                    and _autotrader.get('_wake_count', 0) < 2):
+                open_assets = list({p.asset for p in engine.positions.values() if p.status == 'open'})
+                now = int(time.time())
+                for asset in open_assets:
+                    try:
+                        r = await fetch_current_price(asset)
+                        price = r.get('price', 0)
+                    except Exception:
+                        continue
+                    if not price:
+                        continue
+                    hist = _sentry_price_hist.setdefault(asset, [])
+                    hist.append((now, price))
+                    # keep ~4 min of ticks
+                    _sentry_price_hist[asset] = [(t, p) for (t, p) in hist if now - t <= 240]
+                    hist = _sentry_price_hist[asset]
+                    if len(hist) < 8:
+                        continue
+                    prices = [p for _, p in hist]
+                    ref = prices[0]
+                    move = (price - ref) / ref * 100 if ref else 0
+                    # Directionality: net move vs total path walked. Pure noise/chop
+                    # wanders (net << path, low ratio); a real break moves in a
+                    # straight line (net ~= path, high ratio). This cleanly separates
+                    # a genuine catalyst move from a bounce-back wiggle.
+                    path = sum(abs(prices[i] - prices[i-1]) / prices[i-1] * 100
+                               for i in range(1, len(prices)) if prices[i-1]) or 0.001
+                    efficiency = abs(move) / path
+                    floor = 0.8 if get_asset_type(asset) == 'crypto' else 0.5
+                    if abs(move) > floor and efficiency > 0.6:
+                        _autotrader['_wake_signal'] = True
+                        _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                        _autotrader['_wake_reason'] = (
+                            f"{asset} moved {move:+.2f}% in ~{(now - hist[0][0])//60 or 1}min, "
+                            f"straight-line (directionality {efficiency:.0%}) — checking if a real catalyst broke")
+                        forensic_log.log_event_simple('sentry_trigger', asset, _autotrader['_wake_reason'])
+                        break
+                # Light news-burst check at most every 5 min
+                if (now - _sentry_last_news > 300 and open_assets
+                        and _autotrader.get('_wake_count', 0) < 2):
+                    _sentry_last_news = now
+                    for asset in open_assets:
+                        try:
+                            atype = 'crypto' if asset in BINANCE_SYMBOLS else ('macro' if asset in ['GC=F','CL=F','SI=F'] else 'stock')
+                            arts = await fetch_asset_news(asset, ASSET_NAMES.get(asset, asset), atype)
+                            fresh_hi = [a for a in arts
+                                        if (now - a.get('ts', now)) < 900 and abs(a.get('sentiment', 0)) >= 0.5]
+                            if len(fresh_hi) >= 2:
+                                _autotrader['_wake_signal'] = True
+                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                                top = fresh_hi[0].get('headline', 'breaking news')[:90]
+                                _autotrader['_wake_reason'] = f"{asset} news burst: {len(fresh_hi)} fresh high-impact headlines — top: {top}"
+                                forensic_log.log_event_simple('sentry_news', asset, _autotrader['_wake_reason'])
+                                break
+                        except Exception:
+                            continue
+                # SEC EDGAR 8-K check (official material-event filings, free, no key,
+                # stocks only) at most every 10 min -- catches things headlines lag on:
+                # M&A, exec departure, bankruptcy, guidance cuts, major litigation.
+                if (now - _sentry_last_8k > 600 and open_assets
+                        and _autotrader.get('_wake_count', 0) < 2):
+                    _sentry_last_8k = now
+                    for asset in open_assets:
+                        if get_asset_type(asset) != 'stock':
+                            continue
+                        try:
+                            hit = await _check_fresh_8k(asset)
+                            if hit:
+                                _autotrader['_wake_signal'] = True
+                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                                _autotrader['_wake_reason'] = f"{asset} just filed a new SEC 8-K (material corporate event): {hit}"
+                                forensic_log.log_event_simple('sentry_8k', asset, _autotrader['_wake_reason'])
+                                break
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"[sentry] error: {e}")
+        await asyncio.sleep(10)
+
+
+# EDGAR's full-text search only reports a filing DATE, not a timestamp, so we
+# can't honestly compute "N minutes ago" from it. Instead we track which
+# accession numbers we've already seen per ticker -- a filing that's new
+# TODAY and wasn't in our last check is the real signal, no fake precision.
+_seen_8k_ids: dict = {}  # ticker -> set(accession numbers already seen)
+
+async def _check_fresh_8k(ticker: str) -> Optional[str]:
+    """Returns a short description if this stock has a same-day SEC 8-K
+    (Current Report -- material corporate event) we haven't seen before,
+    else None. Free, official, no API key required -- EDGAR full-text search."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://efts.sec.gov/LATEST/search-index",
+                params={"q": f'"{ticker}"', "forms": "8-K", "dateRange": "custom",
+                        "startdt": _today_utc_str(), "enddt": _today_utc_str()},
+                headers={"User-Agent": "ULTRAMAX/1.0 (research@ultramax.app)"},
+            )
+            if r.status_code != 200:
+                return None
+            hits = (r.json() or {}).get("hits", {}).get("hits", [])
+            if not hits:
+                return None
+            seen = _seen_8k_ids.setdefault(ticker, set())
+            is_first_check = len(seen) == 0
+            for h in hits:
+                acc_id = h.get("_id") or h.get("_source", {}).get("adsh")
+                if not acc_id or acc_id in seen:
+                    continue
+                seen.add(acc_id)
+                if is_first_check:
+                    continue  # first check just baselines what already existed today
+                names = h.get("_source", {}).get("display_names", [ticker])
+                return f"{names[0] if names else ticker} (filed today, form 8-K)"
+    except Exception:
+        pass
+    return None
+
+
+def _today_utc_str() -> str:
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).strftime("%Y-%m-%d")
+
+
+async def _resolve_outcomes_loop():
+    """Every 15 min, score predictions whose horizon has expired. This closes the
+    learning loop: bot saves a trade at open -> we resolve it here -> ML retrains
+    on real outcomes. Previously nothing ran this and outcomes never accrued."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            preds = await get_predictions(None, 500)
+            now = int(time.time())
+            resolved = 0
+            for p in preds:
+                if p.get('feedback'):
+                    continue
+                expires_at = (p.get('saved_at', 0) // 1000) + (p.get('horizon', 4) * 3600)
+                if now < expires_at:
+                    continue
+                entry_price = p.get('entry_price', 0)
+                if not entry_price:
+                    continue
+                try:
+                    r = await fetch_current_price(p['asset'])
+                    price = r.get('price', 0)
+                    if not price:
+                        continue
+                    orig = p.get('original_decision')
+                    decision = p.get('decision', 'NO_TRADE')
+                    pred_price = p.get('predicted_price') or p.get('target_price')
+                    feedback = _score_prediction(decision, orig, entry_price, price, pred_price)
+                    moved = price - entry_price
+                    note = f"{entry_price:.4f} -> {price:.4f} ({moved/entry_price*100:+.2f}%)"
+                    await update_prediction_outcome(p['id'], price, now, feedback, None, note)
+                    resolved += 1
+                except Exception:
+                    continue
+            if resolved:
+                print(f"[outcomes] resolved {resolved} expired prediction(s)")
+        except Exception as e:
+            print(f"[outcomes] loop error: {e}")
+        await asyncio.sleep(15 * 60)
+
+
 async def _continuous_scanner():
     """Background scanner — runs every 60s, sends Telegram alerts."""
     await asyncio.sleep(30)
@@ -794,6 +1172,14 @@ async def _autotrader_loop():
         _autotrader['last_cycle'] = int(time.time())
         _autotrader['total_cycles'] += 1
         cycle = _autotrader['total_cycles']
+        # New interval → the sentry gets a fresh budget of 2 early wakes
+        woke_reason = _autotrader.get('_wake_reason', '')
+        _autotrader['_wake_signal'] = False
+        _autotrader['_wake_count'] = 0
+        _autotrader['_interval_start'] = int(time.time())
+        if woke_reason:
+            print(f"⚡ SENTRY WAKE: {woke_reason}")
+            forensic_log.log_event_simple('sentry_wake', '*', f"Bot woken early by sentry: {woke_reason}")
 
         print(f"\n{'='*60}")
         print(f"AUTOTRADER CYCLE #{cycle} — {len(_autotrader['assets'])} assets")
@@ -838,6 +1224,7 @@ async def _autotrader_loop():
                     local_model=_autotrader.get('local_model', 'qwen2.5:7b'),
                     features=_autotrader.get('features'),
                     pipeline_version=pipe_version,
+                    breaking_context=woke_reason or None,
                 )
 
                 start_time = time.time()
@@ -903,6 +1290,13 @@ async def _autotrader_loop():
 
                 print(f"  {asset_name}: {direction} {confidence}% PQS:{pqs_score} @ {price}")
 
+                # V6: store voter calls for auto-weighting grading
+                _last_voter_calls[asset_name] = {
+                    'quant': result.get('quant', {}).get('direction', ''),
+                    'news': result.get('news', {}).get('sentiment', ''),
+                    'ml': 'BUY' if result.get('ml', {}).get('score', 50) > 55 else 'SELL' if result.get('ml', {}).get('score', 50) < 45 else '',
+                }
+
                 # ── ADX Sizing Factor — weak/no trend = smaller position, never skip
                 adx = result.get('ind', {}).get('adx', 0)
                 if adx >= 25:
@@ -913,6 +1307,18 @@ async def _autotrader_loop():
                 else:
                     adx_scale = 0.4
                     print(f"  {asset_name}: ADX {adx:.1f} very weak — 40% size")
+
+                # V6: CHOP DETECTOR — shrink to near-zero in choppy markets
+                is_chop, chop_severity = _detect_chop(result.get('ind', {}))
+                chop_scale = 1.0
+                if is_chop:
+                    chop_scale = max(0.15, 1.0 - chop_severity)
+                    print(f"  {asset_name}: CHOP detected (severity {chop_severity:.2f}) — {chop_scale:.0%} size")
+
+                # V6: MARKET MODE — trend-follow vs mean-revert
+                market_mode = _detect_market_mode(result.get('ind', {}))
+                if market_mode != 'chop':
+                    print(f"  {asset_name}: Market mode: {market_mode}")
 
                 # ── PQS Sizing Factor — low quality = smaller position, never skip
                 if pqs_score >= 7:
@@ -959,7 +1365,7 @@ async def _autotrader_loop():
                 # Record the active version's call on the comparison scoreboard
                 _scoreboard_record(f'v{pipe_version}', asset_name, direction, confidence, price)
 
-                # ── Cash-out Cycles: profitable → cash out + reopen; loss → hold
+                # ── Cash-out Cycles (V6): breakeven stop, thesis-flip, time-decaying stop
                 open_for_asset = [p for p in engine.positions.values()
                                   if p.status == 'open' and p.asset == asset_name]
 
@@ -967,13 +1373,35 @@ async def _autotrader_loop():
                     current_pos = open_for_asset[0]
                     if current_pos.direction == 'BUY':
                         pnl_pct = (price - current_pos.entry_price) / current_pos.entry_price * 100
+                        peak_pnl = (current_pos.highest_price - current_pos.entry_price) / current_pos.entry_price * 100
+                        current_pos.highest_price = max(current_pos.highest_price, price)
                     else:
                         pnl_pct = (current_pos.entry_price - price) / current_pos.entry_price * 100
+                        peak_pnl = (current_pos.entry_price - current_pos.lowest_price) / current_pos.entry_price * 100
+                        current_pos.lowest_price = min(current_pos.lowest_price, price)
 
                     hard_stop_pct = _autotrader.get('hard_stop_pct', 5.0)
+                    age_seconds = int(time.time()) - current_pos.entry_time
+                    max_hold_seconds = int(float(_autotrader.get('time_decay_hours', 7.0)) * 3600)
 
-                    if pnl_pct > 0:
-                        # Profitable → cash out, lock in gains, reopen fresh position below
+                    # V6: BREAKEVEN STOP — once position was green by +0.3%, can never turn red
+                    if peak_pnl >= BREAKEVEN_TRIGGER_PCT and pnl_pct <= 0:
+                        print(f"  {asset_name}: BREAKEVEN STOP — was +{peak_pnl:.2f}%, now {pnl_pct:+.2f}%")
+                        close_result = await engine.close_position(current_pos.id, price, 'breakeven_stop')
+                        be_pnl = close_result.get('pnl', 0)
+                        _autotrader['trades_closed'] += 1
+                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, be_pnl, 'breakeven_stop')
+                        forensic_log.log_trade_flip(
+                            asset_name, current_pos.direction, direction,
+                            current_pos.entry_price, price, be_pnl, 0,
+                            parent_id=cycle_id,
+                        )
+                        asyncio.create_task(send_message(
+                            f"🛡 BREAKEVEN {asset_name}: was +{peak_pnl:.1f}%, closed {pnl_pct:+.1f}% | ${be_pnl:+.2f} | Reopening {direction}"
+                        ))
+                        cycle_summary.append(f"{asset_name}: BREAKEVEN → {direction}")
+
+                    elif pnl_pct > 0:
                         print(f"  {asset_name}: CASHOUT {current_pos.direction} +{pnl_pct:.2f}% profit, reopening {direction}")
                         close_result = await engine.close_position(current_pos.id, price, 'cycle_cashout')
                         cashed_pnl = close_result.get('pnl', 0)
@@ -989,13 +1417,47 @@ async def _autotrader_loop():
                         ))
                         cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
 
-                    elif pnl_pct > -hard_stop_pct:
-                        # Time-decay: force-close losers held longer than the configured limit (default 7h)
-                        age_seconds = int(time.time()) - current_pos.entry_time
-                        max_hold_seconds = int(float(_autotrader.get('time_decay_hours', 7.0)) * 3600)
-                        if pnl_pct < 0 and age_seconds > max_hold_seconds:
+                    elif pnl_pct < 0 and direction != current_pos.direction and confidence >= 60:
+                        # V6: THESIS-FLIP — judge disagrees with position at high confidence
+                        print(f"  {asset_name}: THESIS FLIP — holding {current_pos.direction} at {pnl_pct:+.2f}% but AI says {direction} at {confidence}%")
+                        close_result = await engine.close_position(current_pos.id, price, 'thesis_flip')
+                        flip_pnl = close_result.get('pnl', 0)
+                        _autotrader['trades_closed'] += 1
+                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, flip_pnl, 'thesis_flip')
+                        forensic_log.log_trade_flip(
+                            asset_name, current_pos.direction, direction,
+                            current_pos.entry_price, price, flip_pnl, 0,
+                            parent_id=cycle_id,
+                        )
+                        asyncio.create_task(send_message(
+                            f"🔄 THESIS FLIP {asset_name}: {current_pos.direction} {pnl_pct:+.2f}% → {direction} ({confidence}%) | ${flip_pnl:+.2f}"
+                        ))
+                        cycle_summary.append(f"{asset_name}: THESIS FLIP → {direction} ({confidence}%)")
+
+                    else:
+                        # V6: TIME-DECAYING STOP — tightens as position ages red
+                        effective_stop = _time_decay_stop(hard_stop_pct, age_seconds, max_hold_seconds)
+
+                        if pnl_pct <= -effective_stop:
                             age_hrs = round(age_seconds / 3600, 1)
-                            print(f"  {asset_name}: TIME DECAY {current_pos.direction} {pnl_pct:+.2f}% held {age_hrs}h > {max_hold_seconds/3600:.0f}h limit → force close")
+                            print(f"  {asset_name}: DECAYING STOP {pnl_pct:+.2f}% hit -{effective_stop:.1f}% (age {age_hrs}h)")
+                            close_result = await engine.close_position(current_pos.id, price, 'decaying_stop')
+                            stop_pnl = close_result.get('pnl', 0)
+                            _autotrader['trades_closed'] += 1
+                            record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, stop_pnl, 'decaying_stop')
+                            forensic_log.log_trade_flip(
+                                asset_name, current_pos.direction, direction,
+                                current_pos.entry_price, price, stop_pnl, 0,
+                                parent_id=cycle_id,
+                            )
+                            asyncio.create_task(send_message(
+                                f"📉 DECAYING STOP {asset_name}: {pnl_pct:+.2f}% (limit -{effective_stop:.1f}% at {age_hrs}h) | ${stop_pnl:+.2f}"
+                            ))
+                            cycle_summary.append(f"{asset_name}: DECAYING STOP {pnl_pct:+.1f}% → {direction}")
+
+                        elif pnl_pct < 0 and age_seconds > max_hold_seconds:
+                            age_hrs = round(age_seconds / 3600, 1)
+                            print(f"  {asset_name}: TIME DECAY {pnl_pct:+.2f}% held {age_hrs}h > limit")
                             close_result = await engine.close_position(current_pos.id, price, 'time_decay')
                             decay_pnl = close_result.get('pnl', 0)
                             _autotrader['trades_closed'] += 1
@@ -1008,28 +1470,12 @@ async def _autotrader_loop():
                             asyncio.create_task(send_message(
                                 f"⏰ TIME DECAY {asset_name}: {pnl_pct:+.2f}% after {age_hrs}h | ${decay_pnl:+.2f} | Reopening {direction}"
                             ))
-                            cycle_summary.append(f"{asset_name}: TIME DECAY {pnl_pct:+.1f}% ({age_hrs}h) → {direction}")
+                            cycle_summary.append(f"{asset_name}: TIME DECAY {pnl_pct:+.1f}% → {direction}")
+
                         else:
-                            print(f"  {asset_name}: HOLD {current_pos.direction} {pnl_pct:+.2f}% (waiting for recovery, hard stop at -{hard_stop_pct:.1f}%)")
+                            print(f"  {asset_name}: HOLD {current_pos.direction} {pnl_pct:+.2f}% (stop -{effective_stop:.1f}%, hard -{hard_stop_pct:.1f}%)")
                             cycle_summary.append(f"{asset_name}: HOLD {current_pos.direction} ({pnl_pct:+.1f}% loss)")
                             continue
-
-                    else:
-                        # Loss exceeded hard stop → emergency close, accept the loss
-                        print(f"  {asset_name}: HARD STOP {current_pos.direction} {pnl_pct:+.2f}% exceeds -{hard_stop_pct:.1f}% limit")
-                        close_result = await engine.close_position(current_pos.id, price, 'hard_stop')
-                        hard_pnl = close_result.get('pnl', 0)
-                        _autotrader['trades_closed'] += 1
-                        record_lesson(asset_name, current_pos.direction, current_pos.entry_price, price, hard_pnl, 'hard_stop')
-                        forensic_log.log_trade_flip(
-                            asset_name, current_pos.direction, direction,
-                            current_pos.entry_price, price, hard_pnl, 0,
-                            parent_id=cycle_id,
-                        )
-                        asyncio.create_task(send_message(
-                            f"🛑 HARD STOP {asset_name}: {pnl_pct:+.2f}% loss | -${abs(hard_pnl):.2f} | Reopening {direction}"
-                        ))
-                        cycle_summary.append(f"{asset_name}: HARD STOP {pnl_pct:+.1f}% → {direction}")
 
                 # ── Daily loss limit: only hard stop
                 if engine.daily_pnl <= -(engine._equity * 0.05):
@@ -1068,13 +1514,19 @@ async def _autotrader_loop():
                     if base_size < 10:
                         base_size = max(engine._equity * 0.02, 500)
                     asset_factor = _get_asset_size_factor(asset_name)
-                    size = round(base_size * pqs_scale * asset_factor * adx_scale, 2)
+                    size = round(base_size * pqs_scale * asset_factor * adx_scale * chop_scale, 2)
 
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
                     tp_pct = sl_pct * 3.0
 
-                print(f"  {asset_name}: size=${size:.0f} PQS={pqs_score} ADX={adx:.0f} SL={sl_pct:.1f}% TP={tp_pct:.1f}%")
+                # V6: CORRELATION VETO — cut size if opposing correlated positions
+                corr_vetoed, corr_reason = _correlation_veto(asset_name, direction, engine)
+                if corr_vetoed:
+                    size = round(size * 0.25, 2)
+                    print(f"  {asset_name}: CORR VETO — {corr_reason} — size cut to ${size:.0f}")
+
+                print(f"  {asset_name}: size=${size:.0f} PQS={pqs_score} ADX={adx:.0f} SL={sl_pct:.1f}% TP={tp_pct:.1f}% mode={market_mode}")
 
                 # Open the trade
                 trade_result = await engine.open_position(
@@ -1097,6 +1549,7 @@ async def _autotrader_loop():
                             "insight": result.get('insight'),
                             "flip_trigger": result.get('flip_trigger'),
                             "catalyst_override": result.get('catalyst_override'),
+                            "ensemble": result.get('ensemble'),
                         },
                         "quant": {
                             "direction": result.get('quant', {}).get('direction'),
@@ -1110,6 +1563,10 @@ async def _autotrader_loop():
                         },
                         "risk_notes": result.get('risk_evidence'),
                         "pipeline_version": result.get('pipeline_version'),
+                        "market_mode": market_mode,
+                        "chop_severity": chop_severity if is_chop else 0,
+                        "voter_weights": result.get('voter_weights'),
+                        "corr_vetoed": corr_vetoed,
                     }
                     forensic_log.log_trade_open(
                         asset_name, direction, price, size,
@@ -1118,6 +1575,24 @@ async def _autotrader_loop():
                         f"autotrader_cycle_{cycle}", confidence, pqs_score,
                         parent_id=cycle_id, autopsy=_autopsy,
                     )
+                    # "Our data": persist entry indicators + decision so the background
+                    # resolver can score it at horizon and future ML retrains learn from it.
+                    try:
+                        await save_prediction({
+                            'id': f"auto_{asset_name}_{int(time.time())}_{cycle}",
+                            'saved_at': int(time.time() * 1000),
+                            'asset': asset_name,
+                            'horizon': bot_horizon,
+                            'decision': direction,
+                            'original_decision': direction,
+                            'confidence': confidence,
+                            'entry_price': price,
+                            'ind_snapshot': result.get('ind_snapshot'),
+                            'ml_score': result.get('ml', {}).get('score'),
+                            'agent_model': result.get('agent_model'),
+                        })
+                    except Exception as _se:
+                        forensic_log.log_error(asset_name, 'save_our_data', str(_se)[:120])
                     msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
                     print(f"  >>> {msg}")
                     cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
@@ -1169,8 +1644,17 @@ async def _autotrader_loop():
             ))
 
         _autotrader['status'] = 'sleeping'
-        print(f"Autotrader sleeping {_autotrader['interval_minutes']}min until next cycle...")
-        await asyncio.sleep(interval)
+        print(f"Autotrader sleeping up to {_autotrader['interval_minutes']}min (sentry can wake it early)...")
+        _autotrader['_wake_reason'] = ''
+        slept = 0
+        while slept < interval:
+            await asyncio.sleep(5)
+            slept += 5
+            if my_gen != _autotrader['_run_generation'] or not _autotrader['enabled']:
+                break
+            if _autotrader.get('_wake_signal'):
+                # Sentry flagged a real break — run a fresh cycle now (reason already stored)
+                break
 
 
 async def _trading_position_monitor():
@@ -1560,14 +2044,15 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             mtf_data['h1_rsi'] = h1_ind['rsi14']
             slog(f"✓ 1H: {'BULL' if mtf_data['h1_bull'] else 'BEAR' if mtf_data['h1_bear'] else 'NEUTRAL'} RSI={h1_ind['rsi14']:.1f}")
 
-    # ── ML Ensemble ──────────────────────────────────────────────────────
-    ml_result = {'confidence': 50, 'available': False}
-    model_artifact = _ml_cache.get(req.asset)
-    if model_artifact:
-        ml_result = predict_ensemble(ind)
-        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
+    # ── ML Ensemble (per-asset, trained on real 2y history by ml_trainer) ──
+    ml_result = predict_ensemble(ind, asset=req.asset)
+    if ml_result.get('available'):
+        cv = ml_result.get('cv_accuracy')
+        cv_txt = f"{cv}% real out-of-sample" if cv is not None else "accuracy n/a"
+        slog(f"✓ ML[{req.asset}]: score={ml_result.get('score', 0):.1f} ({cv_txt}, "
+             f"n={ml_result.get('n_train',0)}, agree={ml_result.get('agreement', False)})")
     else:
-        slog("⚠ ML ensemble: no trained model yet")
+        slog("⚠ ML ensemble: no per-asset model yet (train via /ml/train-historical)")
 
     # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
@@ -1698,6 +2183,9 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         risk_evidence = build_risk_evidence(req.asset, ind, mtf_data, macro_data,
                                             fg_data, onchain_data, macro_context,
                                             is_crypto)
+        if getattr(req, 'breaking_context', None):
+            risk_evidence.insert(0, f"⚡ BREAKING (sentry woke the desk early): {req.breaking_context}. "
+                                    f"Something moved outside normal noise — decide if it is a real catalyst or a fakeout.")
         if smi_data and smi_data.get('direction') not in (None, '', 'neutral'):
             sm_line = (f"SMART MONEY is {smi_data['direction'].upper()} (score {smi_data.get('score', 0)}/100"
                        + (", CONFIRMED by 3+ independent sources" if smi_data.get('confirmed') else "") + ")")
@@ -1706,18 +2194,57 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             risk_evidence.append(sm_line)
         slog(f"📋 Risk Officer's notes: {len(risk_evidence)} facts for the judge")
 
-    decision = await run_decision_agent(
-        req.asset, ind, req.horizon, quant_result, news_result,
-        mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
-        ml_result=ml_result,
-        use_local=use_local,
-        local_url=req.local_url or "http://localhost:11434",
-        local_model=req.local_model or "qwen2.5:7b",
-        recent_trades_ctx=recent_trades_ctx,
-        risk_evidence=risk_evidence,
-        bot_mode=getattr(req, 'bot_mode', False),
-        version=version,
-    )
+    # V6: Per-asset humility memory — judge sees its own track record
+    humility_ctx = _get_humility_context(req.asset)
+    if humility_ctx:
+        recent_trades_ctx = humility_ctx + "\n" + recent_trades_ctx if recent_trades_ctx else humility_ctx
+
+    # V6: Judge ensemble — run 3 votes, majority wins (V3 only, costs 3x tokens)
+    if version >= 3 and not getattr(req, 'shadow', False):
+        ensemble_results = []
+        for _vote_i in range(3):
+            _vote = await run_decision_agent(
+                req.asset, ind, req.horizon, quant_result, news_result,
+                mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
+                ml_result=ml_result,
+                use_local=use_local,
+                local_url=req.local_url or "http://localhost:11434",
+                local_model=req.local_model or "qwen2.5:7b",
+                recent_trades_ctx=recent_trades_ctx,
+                risk_evidence=risk_evidence,
+                bot_mode=getattr(req, 'bot_mode', False),
+                version=version,
+            )
+            ensemble_results.append(_vote)
+        buy_votes = sum(1 for r in ensemble_results if r.get('decision') == 'BUY')
+        sell_votes = sum(1 for r in ensemble_results if r.get('decision') == 'SELL')
+        if buy_votes >= 2:
+            decision = max([r for r in ensemble_results if r.get('decision') == 'BUY'],
+                          key=lambda r: r.get('confidence', 0))
+            decision['_ensemble'] = f"BUY {buy_votes}/3 votes"
+        elif sell_votes >= 2:
+            decision = max([r for r in ensemble_results if r.get('decision') == 'SELL'],
+                          key=lambda r: r.get('confidence', 0))
+            decision['_ensemble'] = f"SELL {sell_votes}/3 votes"
+        else:
+            decision = max(ensemble_results, key=lambda r: r.get('confidence', 0))
+            decision['_ensemble'] = "split vote — highest confidence wins"
+        avg_conf = sum(r.get('confidence', 50) for r in ensemble_results) / 3
+        decision['confidence'] = int(round(avg_conf))
+        slog(f"✓ V6 Judge ensemble: {decision.get('_ensemble')} → {decision.get('decision')} {decision['confidence']}%")
+    else:
+        decision = await run_decision_agent(
+            req.asset, ind, req.horizon, quant_result, news_result,
+            mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
+            ml_result=ml_result,
+            use_local=use_local,
+            local_url=req.local_url or "http://localhost:11434",
+            local_model=req.local_model or "qwen2.5:7b",
+            recent_trades_ctx=recent_trades_ctx,
+            risk_evidence=risk_evidence,
+            bot_mode=getattr(req, 'bot_mode', False),
+            version=version,
+        )
     model_used = decision.get('_model', 'unknown')
     slog(f"✓ Decision: {decision.get('decision')} {decision.get('confidence')}% [{model_used}]")
     if model_used == 'gpt-4o' and decision.get('_r1_error'):
@@ -2080,9 +2607,11 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         if decision.get('decision') in ('BUY', 'SELL'):
             judge_conf = float(decision.get('confidence', 55) or 55)
             d3 = decision['decision']
+            # V6: Per-voter auto-weighting — learned blend ratios
+            vw = _get_voter_weights()
             parts = [(judge_conf, 0.50)]
             if ml_conf is not None:
-                parts.append((ml_conf if d3 == 'BUY' else 100 - ml_conf, 0.25))
+                parts.append((ml_conf if d3 == 'BUY' else 100 - ml_conf, 0.25 * (vw.get('ml', 0.34) / 0.34)))
             if cluster_conf is not None:
                 parts.append((cluster_conf if d3 == 'BUY' else 100 - cluster_conf, 0.15))
             parts.append((bayes_conf, 0.10))
@@ -2090,7 +2619,8 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             final_conf = sum(v * w for v, w in parts) / total_w if total_w else judge_conf
             decision['_judge_confidence'] = round(judge_conf)
             decision['confidence'] = int(round(max(40, min(95, final_conf))))
-            slog(f"✓ V3 final: judge {judge_conf:.0f}% (50%) + ML/cluster/Bayes numbers (50%) → {decision['confidence']}%")
+            decision['_voter_weights'] = vw
+            slog(f"✓ V3 final: judge {judge_conf:.0f}% (50%) + numbers (50%, voter weights: {vw}) → {decision['confidence']}%")
 
     # Save predicted price BEFORE nulling target for NO_TRADE
     # Use ML-informed direction for target instead of bland MC median
@@ -2138,6 +2668,8 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         "insight": decision.get('insight', ''),
         "primary_reason": decision.get('primary_reason', ''),
         "agent_model": decision.get('_model', 'gpt-4o'),
+        "ensemble": decision.get('_ensemble'),
+        "voter_weights": decision.get('_voter_weights'),
         "original_decision": decision.get('_original_decision'),
         "gate_reason": gate_reason,
         "pipeline_version": version,
@@ -2547,13 +3079,14 @@ async def check_all_outcomes(asset: str = None):
             pred_price = p.get('predicted_price') or p.get('target_price')
             feedback = _score_prediction(decision, orig, entry_price, price, pred_price)
 
+            moved = (price - entry_price) if entry_price else 0  # FIX: was undefined -> NameError killed every resolve
             target_hit = None
             if p.get('target_price') and entry_price:
                 tp = (p['target_price'] - entry_price) / entry_price * 100
                 ap = moved / entry_price * 100
                 target_hit = (ap >= tp * 0.8) if tp > 0 else (ap <= tp * 0.8)
 
-            note = f"{entry_price:.4f} → {price:.4f} ({moved/entry_price*100:+.2f}%)"
+            note = f"{entry_price:.4f} → {price:.4f} ({(moved/entry_price*100 if entry_price else 0):+.2f}%)"
             await update_prediction_outcome(p['id'], price, now, feedback, target_hit, note)
             resolved.append({'id': p['id'], 'asset': asset_sym, 'feedback': feedback, 'price': price})
 
@@ -3359,6 +3892,14 @@ async def autotrader_status():
         },
         "cycle_log": _autotrader['cycle_log'][-20:],
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
+        "voter_weights": _get_voter_weights(),
+        "voter_grades": {v: g for v, g in _voter_grades.items()},
+        "sentry": {
+            "enabled": _autotrader.get('sentry_enabled', True),
+            "wakes_this_interval": _autotrader.get('_wake_count', 0),
+            "last_wake_reason": _autotrader.get('_wake_reason', ''),
+            "watching": len([p for p in engine.positions.values() if p.status == 'open']),
+        },
         "all_positions": engine.get_positions(),
         "self_correction": {asset: {
             'wins': a['wins'], 'losses': a['losses'], 'total': a['total'],
@@ -3426,6 +3967,8 @@ async def autotrader_reset():
 
     _trade_lessons.clear()
     _asset_accuracy.clear()
+    _voter_grades.clear()
+    _last_voter_calls.clear()
     _session_predictions.clear()
     _ml_cache.clear()
     _gate_stats['trades'] = 0
@@ -3578,6 +4121,57 @@ async def v5_rl_report():
 @app.get("/v5/execution-report")
 async def v5_execution_report():
     return get_execution_optimizer().get_report()
+
+
+@app.post("/ml/train-historical")
+async def ml_train_historical(assets: str = None, horizon_bars: int = 1):
+    """Train per-asset ML models on real 2-year hourly history (Yahoo) + our own
+    rated trades. Pass ?assets=BTC,ETH to limit; omit for all. Runs inline."""
+    from ml_trainer import train_all
+    subset = [a.strip() for a in assets.split(',')] if assets else None
+    results = await train_all(subset, horizon_bars=horizon_bars)
+    ok = [r for r in results if r.get('ok')]
+    return {
+        "trained": len(ok), "total": len(results),
+        "avg_cv_accuracy": round(sum(r['cv_accuracy'] for r in ok) / len(ok), 1) if ok else None,
+        "results": results,
+    }
+
+
+@app.get("/ml/status")
+async def ml_status():
+    """Report every per-asset model's real out-of-sample accuracy + provenance."""
+    import gzip, pickle
+    from ml_engine import _asset_model_path
+    out = []
+    for asset in ALL_ASSETS:
+        p = _asset_model_path(asset)
+        if not p.exists():
+            out.append({"asset": asset, "trained": False}); continue
+        try:
+            with gzip.open(p, 'rb') as f:
+                md = pickle.load(f)
+            age_days = round((time.time() - md.get('trained_at', 0)) / 86400, 1)
+            out.append({
+                "asset": asset, "trained": True,
+                "cv_accuracy": md.get('cv_accuracy'),
+                "n_train": md.get('n_train'),
+                "n_historical": md.get('n_historical'),
+                "n_our_data": md.get('n_our_data'),
+                "up_rate": round(md.get('up_rate', 0.5) * 100, 1),
+                "age_days": age_days,
+                "top_features": [t[0] for t in (md.get('top_features') or [])][:4],
+                "source": md.get('source'),
+            })
+        except Exception as e:
+            out.append({"asset": asset, "trained": True, "error": str(e)[:80]})
+    trained = [o for o in out if o.get('cv_accuracy') is not None]
+    return {
+        "models": out,
+        "count": len(trained),
+        "avg_cv_accuracy": round(sum(o['cv_accuracy'] for o in trained) / len(trained), 1) if trained else None,
+        "note": "cv_accuracy is REAL out-of-sample (TimeSeriesSplit). ~50% means indicators alone have ~no directional edge; the model is a weak tiebreaker, not the source of profit.",
+    }
 
 
 @app.get("/v5/walkforward/{asset}")

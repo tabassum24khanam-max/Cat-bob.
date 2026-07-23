@@ -299,7 +299,7 @@ Long/Short Ratio: {onchain_data.get('long_short_ratio', 1):.2f}
 """
 
     if version >= 3:
-        prompt = f"""You are the Intelligence Chief of a trading desk. Your job is not to read headlines — it is to find out what is REALLY happening around {asset} ({asset_name}) and what it means for price over the next {horizon}h.
+        prompt = f"""You are the Intelligence Chief of a trading desk. You are drowning in headlines and MOST OF THEM ARE NOISE. Your entire value is separating the 1-2 things that will actually move {asset} ({asset_name}) price in the next {horizon}h from the 95% that is filler, recycled, or already priced in. A clerk can summarize headlines. You decide what MATTERS.
 
 YOUR RAW INTELLIGENCE:
 HEADLINES ({min(len(articles), max_headlines)}, tier-weighted, most impactful first):
@@ -310,16 +310,21 @@ Average headline sentiment: {avg_sentiment:+.2f} | Average impact: {avg_impact:.
 INSIDERS & SMART MONEY (politicians, insider filings, options flow, dark pool, top traders): {smart_money_ctx or 'no smart-money data this cycle'}
 WHAT THE MATH DESK SEES: {quant_brief or 'no quant brief available'}
 
-THINK IN CHAINS, NOT LABELS. Never stop at "positive/negative". Trace consequences: tariff → container volumes fall → shipping names down, domestic steel up. An insider sold big and no news coverage yet? The news is COMING — that is a signal. Second-order effects are where the money is.
+YOUR METHOD — do this in order:
+1. TRIAGE. Sort every headline into MARKET-MOVING vs NOISE. Noise = old news, opinion pieces, "could/may/might" speculation, anything already priced in, anything not specific to {asset} or its direct drivers. Be ruthless — most headlines are noise.
+2. FIND THE DOMINANT CATALYST. Of what survives, name the ONE event most likely to drive price in the next {horizon}h. If there is genuinely nothing market-moving, say so — "no catalyst" is a valid, honest answer and better than inventing one.
+3. THINK IN CHAINS, NOT LABELS. Trace the consequence: tariff → container volumes fall → shipping down, domestic steel up. Insider sold big with no coverage yet? The news is COMING — that is the signal. Second-order effects are where the money is.
+4. IS IT PRICED IN? A known, expected event that already moved the price is NOT tradeable. Only SURPRISE moves markets. Judge surprise vs expectation.
+5. SIZE IT. Estimate how far this catalyst moves price and in which direction over the horizon. Be specific, be honest — a weak catalyst is a small number.
 
 RULES:
-- Tier 1.0 sources (Fed/SEC) dominate if present. Social only matters at extreme velocity.
-- A genuine market-mover (regulation, Fed surprise, contract award, hack, earnings shock) OUTRANKS technical analysis: set "catalyst_override" true and say why in "reasoning".
-- Neutral news = no adjustment. Do NOT force sentiment from noise.
-- Your honesty lives in the numbers: strong evidence = strong score, weak evidence = weak score.
+- Tier 1.0 sources (Fed/SEC) dominate. Social only matters at extreme velocity.
+- A genuine SURPRISE market-mover (regulation, Fed surprise, contract award, hack, earnings shock) OUTRANKS all technical analysis: set "catalyst_override" true and say why.
+- NEVER force sentiment from noise. If it is all noise, sentiment is neutral, score near 0, and "noise_discarded" explains what you threw out.
+- Your honesty lives in the numbers: strong surprise = strong score, weak/priced-in = near zero.
 
 Respond ONLY with this JSON:
-{{"sentiment":"<bullish|neutral|bearish>","sentiment_score":<-100 to 100>,"confidence":<0-100>,"market_regime":"<risk_on|risk_off|neutral>","key_catalysts":["<event1>","<event2>"],"time_bias":"<positive|negative|neutral>","reasoning":"<2 sentences: the causal chain that matters most>","macro_warning":"<high-impact upcoming event or null>","event_impact_score":<0-1>,"catalyst_override":<true|false>,"priced_in":"<yes|no|partially>","flip_trigger":"<1 sentence: what news would flip your view>"}}"""
+{{"sentiment":"<bullish|neutral|bearish>","sentiment_score":<-100 to 100>,"confidence":<0-100>,"market_regime":"<risk_on|risk_off|neutral>","dominant_catalyst":"<the single most price-relevant event, or 'none'>","catalyst_direction":"<up|down|none>","expected_move_pct":<your honest estimate of the move this catalyst drives over the horizon, signed>","time_to_impact":"<now|hours|days|none>","noise_discarded":"<1 phrase: what you ignored and why>","key_catalysts":["<event1>","<event2>"],"time_bias":"<positive|negative|neutral>","reasoning":"<2 sentences: the causal chain that matters most>","macro_warning":"<high-impact upcoming event or null>","event_impact_score":<0-1>,"catalyst_override":<true|false>,"priced_in":"<yes|no|partially>","flip_trigger":"<1 sentence: what news would flip your view>"}}"""
     else:
         prompt = f"""You are a professional financial news analyst with expertise in geopolitics, macro economics, and market microstructure. Respond ONLY with valid JSON.
 

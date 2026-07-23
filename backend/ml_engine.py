@@ -12,6 +12,22 @@ from typing import Optional, Dict, Any
 MODEL_PATH = Path(__file__).parent / "data" / "ml_ensemble.pkl"
 MODEL_PATH_GZ = Path(__file__).parent / "data" / "ml_ensemble.pkl.gz"
 MODEL_PATH.parent.mkdir(exist_ok=True)
+# Per-asset models prefer the Railway persistent volume (/data) so a redeploy
+# doesn't wipe ~13 min of training; locally they live in backend/data.
+import os as _os
+_DATA_DIR = Path("/data/ml_models") if _os.path.isdir("/data") else (Path(__file__).parent / "data")
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _asset_model_path(asset: str) -> Path:
+    """Per-asset model file. Fixes the old bug where every asset overwrote one
+    shared file (so BTC's model was used for AAPL)."""
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_" for ch in str(asset))
+    return _DATA_DIR / f"ml_{safe}.pkl.gz"
+
+
+# Per-asset model cache: {asset: (model_data, mtime)}
+_asset_model_cache: dict = {}
 
 # Expanded feature set (~30 features)
 FEATURE_COLS = [
@@ -82,9 +98,27 @@ def extract_features(ind: dict) -> list:
     ]
 
 
-def load_ensemble():
-    """Load ensemble model from disk (supports gzip-compressed pickle)."""
+def load_ensemble(asset: str = None):
+    """Load ensemble model from disk (supports gzip-compressed pickle).
+    If `asset` is given and a per-asset model exists, load THAT (the honest,
+    historically-trained model). Otherwise fall back to the legacy shared file."""
     global _ensemble_cache, _cache_mtime
+    # Per-asset model (preferred — trained by ml_trainer on real history)
+    if asset:
+        try:
+            ap = _asset_model_path(asset)
+            if ap.exists():
+                mtime = ap.stat().st_mtime
+                cached = _asset_model_cache.get(asset)
+                if cached and cached[1] == mtime:
+                    return cached[0]
+                with gzip.open(ap, 'rb') as f:
+                    md = pickle.load(f)
+                _asset_model_cache[asset] = (md, mtime)
+                return md
+        except Exception:
+            pass  # fall through to legacy
+    # Legacy shared model
     try:
         path = MODEL_PATH_GZ if MODEL_PATH_GZ.exists() else MODEL_PATH
         if not path.exists():
@@ -234,9 +268,10 @@ async def train_ensemble(predictions: list) -> dict:
     }
 
 
-def predict_ensemble(ind: dict, direction: str = 'BUY') -> dict:
-    """Run ensemble prediction on current indicators."""
-    model_data = load_ensemble()
+def predict_ensemble(ind: dict, direction: str = 'BUY', asset: str = None) -> dict:
+    """Run ensemble prediction on current indicators. Prefers the per-asset
+    model trained on real history when `asset` is provided."""
+    model_data = load_ensemble(asset)
     if not model_data:
         return {"score": 50, "available": False, "n_train": 0}
 
@@ -270,10 +305,14 @@ def predict_ensemble(ind: dict, direction: str = 'BUY') -> dict:
             "score": round(score, 1),
             "available": True,
             "n_train": model_data.get('n_train', 0),
+            "n_historical": model_data.get('n_historical', 0),
+            "n_our_data": model_data.get('n_our_data', 0),
+            "cv_accuracy": model_data.get('cv_accuracy'),  # REAL out-of-sample accuracy
             "xgb_score": round(xgb_proba[1] * 100, 1),
             "rf_score": round(rf_proba[1] * 100, 1),
             "agreement": agreement,
             "top_features": model_data.get('top_features', []),
+            "source": model_data.get('source', 'legacy'),
         }
         if gb_proba is not None:
             result["gb_score"] = round(gb_proba[1] * 100, 1)
