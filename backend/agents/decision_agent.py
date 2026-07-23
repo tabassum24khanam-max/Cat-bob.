@@ -131,11 +131,17 @@ Respond with ONLY this JSON:
         if ml_result and ml_result.get('available'):
             ml_score = ml_result.get('score', 50)
             ml_dir = 'BUY' if ml_score > 55 else 'SELL' if ml_score < 45 else 'NEUTRAL'
+            _cv = ml_result.get('cv_accuracy')
+            _acc_txt = (f"its REAL out-of-sample accuracy is {_cv:.0f}% — "
+                        + ("barely better than a coin flip, so treat it as a weak tiebreaker at most"
+                           if _cv is not None and _cv < 53 else
+                           "a genuine but modest edge" if _cv is not None else
+                           "accuracy unmeasured this cycle")) if True else ""
             ml_witness = (f"STATISTICAL MODEL (one witness among several — pattern-matcher trained on "
-                          f"{ml_result.get('n_train', 0):,} historical samples; its accuracy varies by market regime; "
-                          f"weigh it, do not obey it): {ml_dir} | prob up {ml_score:.1f}% | "
-                          f"XGB {ml_result.get('xgb_score', 50):.1f}% / RF {ml_result.get('rf_score', 50):.1f}% / "
-                          f"GB {ml_result.get('gb_score', 50):.1f}% | models agree: {'YES' if ml_result.get('agreement') else 'NO'}")
+                          f"{ml_result.get('n_train', 0):,} real historical market samples. {_acc_txt}. "
+                          f"Weigh it, never obey it): leans {ml_dir} | prob up {ml_score:.1f}% | "
+                          f"XGB {ml_result.get('xgb_score', 50):.1f}% / RF {ml_result.get('rf_score', 50):.1f}% | "
+                          f"models agree: {'YES' if ml_result.get('agreement') else 'NO'}")
 
         risk_notes = "\n".join(f"  - {e}" for e in (risk_evidence or [])) or "  - nothing unusual flagged"
         catalyst_flag = news.get('catalyst_override', False)

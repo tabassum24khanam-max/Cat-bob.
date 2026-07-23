@@ -577,6 +577,7 @@ async def startup():
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
+    asyncio.create_task(_resolve_outcomes_loop())
     # Crash-proof memory: restore the previous run and auto-resume if it was live
     if load_bot_state():
         print("💾 Auto-resuming the autotrader from restored memory...")
@@ -737,32 +738,80 @@ _ml_cache = {}  # asset -> trained ensemble model artifact
 
 
 async def _async_retrain(asset_name: str):
-    """Retrain ML ensemble in background after new feedback."""
+    """Retrain this asset's ML model in the background after new feedback —
+    on real 2y history PLUS our accumulated trades (honest, per-asset)."""
     await asyncio.sleep(1)
     try:
-        preds = await get_predictions(asset_name, 500)
-        model = await train_ensemble(preds)
-        if model:
-            _ml_cache[asset_name] = model
-            print(f"✓ ML retrained for {asset_name}: {model['n_samples']} samples")
-    except Exception:
-        pass
+        from ml_trainer import train_asset
+        r = await train_asset(asset_name)
+        if r.get('ok'):
+            _ml_cache[asset_name] = {'available': True, 'cv_accuracy': r.get('cv_accuracy'),
+                                      'n_train': r.get('n_train', 0)}
+            print(f"✓ ML retrained for {asset_name}: {r['n_train']} samples "
+                  f"({r['n_our_data']} ours), {r['cv_accuracy']}% out-of-sample")
+    except Exception as e:
+        print(f"⚠ retrain {asset_name} failed: {str(e)[:80]}")
 
 
 async def warm_ml_models():
-    """Pre-train ML ensemble models from existing prediction history."""
+    """Load per-asset ML models trained on real historical data (ml_trainer).
+    If any are missing or stale (>7 days), retrain them in the background.
+    This replaces the old path that overfit on 15 of the bot's own trades."""
     await asyncio.sleep(2)  # Let DB init complete
+    from ml_engine import _asset_model_path, load_ensemble
+    # Register whatever models already exist on disk so predictions can use them
+    present = []
+    for asset_name in ALL_ASSETS:
+        try:
+            md = load_ensemble(asset_name)
+            if md and md.get('source', '').startswith('yahoo'):
+                _ml_cache[asset_name] = {'available': True, 'cv_accuracy': md.get('cv_accuracy'),
+                                          'n_train': md.get('n_train', 0)}
+                present.append(asset_name)
+        except Exception:
+            continue
+    if present:
+        print(f"✓ ML models loaded for {len(present)} assets (real historical training)")
+    # Retrain any missing/stale models in the background (non-blocking)
+    asyncio.create_task(_ensure_ml_models_fresh())
+
+
+async def _ensure_ml_models_fresh(max_age_days: float = 7.0):
+    """Train per-asset models that are missing or older than max_age_days.
+    Runs in the background so startup is never blocked by ~13 min of training."""
+    import gzip, pickle
+    from ml_engine import _asset_model_path
     try:
-        all_preds = await get_predictions(limit=500)
-        assets = list(set(p['asset'] for p in all_preds))
-        for asset_name in assets:
-            asset_preds = [p for p in all_preds if p['asset'] == asset_name]
-            model = await train_ensemble(asset_preds)
-            if model:
-                _ml_cache[asset_name] = model
-                print(f"✓ ML ensemble for {asset_name}: {model['n_samples']} samples, acc={model.get('train_accuracy', 0):.0%}")
+        from ml_trainer import train_asset
     except Exception as e:
-        print(f"⚠ ML warm-up skipped: {e}")
+        print(f"⚠ ml_trainer unavailable: {e}")
+        return
+    now = time.time()
+    stale = []
+    for asset_name in ALL_ASSETS:
+        p = _asset_model_path(asset_name)
+        if not p.exists():
+            stale.append(asset_name); continue
+        try:
+            with gzip.open(p, 'rb') as f:
+                md = pickle.load(f)
+            if (now - md.get('trained_at', 0)) > max_age_days * 86400:
+                stale.append(asset_name)
+        except Exception:
+            stale.append(asset_name)
+    if not stale:
+        return
+    print(f"🎓 Training {len(stale)} ML models on real historical data: {stale}")
+    for asset_name in stale:
+        try:
+            r = await train_asset(asset_name)
+            if r.get('ok'):
+                _ml_cache[asset_name] = {'available': True, 'cv_accuracy': r.get('cv_accuracy'),
+                                          'n_train': r.get('n_train', 0)}
+                print(f"  ✓ {asset_name}: {r['n_train']} samples, {r['cv_accuracy']}% out-of-sample")
+        except Exception as e:
+            print(f"  ✗ {asset_name}: {str(e)[:80]}")
+    print("🎓 ML historical training complete")
 
 
 def compute_pqs(quant_result: dict, news_result: dict, ml_result: dict,
@@ -879,6 +928,47 @@ def get_adaptive_floor():
     if win_rate > 0.50:
         return 48
     return 52
+
+
+async def _resolve_outcomes_loop():
+    """Every 15 min, score predictions whose horizon has expired. This closes the
+    learning loop: bot saves a trade at open -> we resolve it here -> ML retrains
+    on real outcomes. Previously nothing ran this and outcomes never accrued."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            preds = await get_predictions(None, 500)
+            now = int(time.time())
+            resolved = 0
+            for p in preds:
+                if p.get('feedback'):
+                    continue
+                expires_at = (p.get('saved_at', 0) // 1000) + (p.get('horizon', 4) * 3600)
+                if now < expires_at:
+                    continue
+                entry_price = p.get('entry_price', 0)
+                if not entry_price:
+                    continue
+                try:
+                    r = await fetch_current_price(p['asset'])
+                    price = r.get('price', 0)
+                    if not price:
+                        continue
+                    orig = p.get('original_decision')
+                    decision = p.get('decision', 'NO_TRADE')
+                    pred_price = p.get('predicted_price') or p.get('target_price')
+                    feedback = _score_prediction(decision, orig, entry_price, price, pred_price)
+                    moved = price - entry_price
+                    note = f"{entry_price:.4f} -> {price:.4f} ({moved/entry_price*100:+.2f}%)"
+                    await update_prediction_outcome(p['id'], price, now, feedback, None, note)
+                    resolved += 1
+                except Exception:
+                    continue
+            if resolved:
+                print(f"[outcomes] resolved {resolved} expired prediction(s)")
+        except Exception as e:
+            print(f"[outcomes] loop error: {e}")
+        await asyncio.sleep(15 * 60)
 
 
 async def _continuous_scanner():
@@ -1312,6 +1402,24 @@ async def _autotrader_loop():
                         f"autotrader_cycle_{cycle}", confidence, pqs_score,
                         parent_id=cycle_id, autopsy=_autopsy,
                     )
+                    # "Our data": persist entry indicators + decision so the background
+                    # resolver can score it at horizon and future ML retrains learn from it.
+                    try:
+                        await save_prediction({
+                            'id': f"auto_{asset_name}_{int(time.time())}_{cycle}",
+                            'saved_at': int(time.time() * 1000),
+                            'asset': asset_name,
+                            'horizon': bot_horizon,
+                            'decision': direction,
+                            'original_decision': direction,
+                            'confidence': confidence,
+                            'entry_price': price,
+                            'ind_snapshot': result.get('ind_snapshot'),
+                            'ml_score': result.get('ml', {}).get('score'),
+                            'agent_model': result.get('agent_model'),
+                        })
+                    except Exception as _se:
+                        forensic_log.log_error(asset_name, 'save_our_data', str(_se)[:120])
                     msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
                     print(f"  >>> {msg}")
                     cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
@@ -1754,14 +1862,15 @@ async def _run_prediction(req, worker, start_time, logs, slog):
             mtf_data['h1_rsi'] = h1_ind['rsi14']
             slog(f"✓ 1H: {'BULL' if mtf_data['h1_bull'] else 'BEAR' if mtf_data['h1_bear'] else 'NEUTRAL'} RSI={h1_ind['rsi14']:.1f}")
 
-    # ── ML Ensemble ──────────────────────────────────────────────────────
-    ml_result = {'confidence': 50, 'available': False}
-    model_artifact = _ml_cache.get(req.asset)
-    if model_artifact:
-        ml_result = predict_ensemble(ind)
-        slog(f"✓ ML ensemble: score={ml_result.get('score', 0):.2f} agree={ml_result.get('agreement', False)}")
+    # ── ML Ensemble (per-asset, trained on real 2y history by ml_trainer) ──
+    ml_result = predict_ensemble(ind, asset=req.asset)
+    if ml_result.get('available'):
+        cv = ml_result.get('cv_accuracy')
+        cv_txt = f"{cv}% real out-of-sample" if cv is not None else "accuracy n/a"
+        slog(f"✓ ML[{req.asset}]: score={ml_result.get('score', 0):.1f} ({cv_txt}, "
+             f"n={ml_result.get('n_train',0)}, agree={ml_result.get('agreement', False)})")
     else:
-        slog("⚠ ML ensemble: no trained model yet")
+        slog("⚠ ML ensemble: no per-asset model yet (train via /ml/train-historical)")
 
     # ── Agent 1: Quant (DeepSeek V4 primary, GPT-4o-mini fallback) ─────
     quant_model_label = 'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'
@@ -2785,13 +2894,14 @@ async def check_all_outcomes(asset: str = None):
             pred_price = p.get('predicted_price') or p.get('target_price')
             feedback = _score_prediction(decision, orig, entry_price, price, pred_price)
 
+            moved = (price - entry_price) if entry_price else 0  # FIX: was undefined -> NameError killed every resolve
             target_hit = None
             if p.get('target_price') and entry_price:
                 tp = (p['target_price'] - entry_price) / entry_price * 100
                 ap = moved / entry_price * 100
                 target_hit = (ap >= tp * 0.8) if tp > 0 else (ap <= tp * 0.8)
 
-            note = f"{entry_price:.4f} → {price:.4f} ({moved/entry_price*100:+.2f}%)"
+            note = f"{entry_price:.4f} → {price:.4f} ({(moved/entry_price*100 if entry_price else 0):+.2f}%)"
             await update_prediction_outcome(p['id'], price, now, feedback, target_hit, note)
             resolved.append({'id': p['id'], 'asset': asset_sym, 'feedback': feedback, 'price': price})
 
@@ -3820,6 +3930,57 @@ async def v5_rl_report():
 @app.get("/v5/execution-report")
 async def v5_execution_report():
     return get_execution_optimizer().get_report()
+
+
+@app.post("/ml/train-historical")
+async def ml_train_historical(assets: str = None, horizon_bars: int = 1):
+    """Train per-asset ML models on real 2-year hourly history (Yahoo) + our own
+    rated trades. Pass ?assets=BTC,ETH to limit; omit for all. Runs inline."""
+    from ml_trainer import train_all
+    subset = [a.strip() for a in assets.split(',')] if assets else None
+    results = await train_all(subset, horizon_bars=horizon_bars)
+    ok = [r for r in results if r.get('ok')]
+    return {
+        "trained": len(ok), "total": len(results),
+        "avg_cv_accuracy": round(sum(r['cv_accuracy'] for r in ok) / len(ok), 1) if ok else None,
+        "results": results,
+    }
+
+
+@app.get("/ml/status")
+async def ml_status():
+    """Report every per-asset model's real out-of-sample accuracy + provenance."""
+    import gzip, pickle
+    from ml_engine import _asset_model_path
+    out = []
+    for asset in ALL_ASSETS:
+        p = _asset_model_path(asset)
+        if not p.exists():
+            out.append({"asset": asset, "trained": False}); continue
+        try:
+            with gzip.open(p, 'rb') as f:
+                md = pickle.load(f)
+            age_days = round((time.time() - md.get('trained_at', 0)) / 86400, 1)
+            out.append({
+                "asset": asset, "trained": True,
+                "cv_accuracy": md.get('cv_accuracy'),
+                "n_train": md.get('n_train'),
+                "n_historical": md.get('n_historical'),
+                "n_our_data": md.get('n_our_data'),
+                "up_rate": round(md.get('up_rate', 0.5) * 100, 1),
+                "age_days": age_days,
+                "top_features": [t[0] for t in (md.get('top_features') or [])][:4],
+                "source": md.get('source'),
+            })
+        except Exception as e:
+            out.append({"asset": asset, "trained": True, "error": str(e)[:80]})
+    trained = [o for o in out if o.get('cv_accuracy') is not None]
+    return {
+        "models": out,
+        "count": len(trained),
+        "avg_cv_accuracy": round(sum(o['cv_accuracy'] for o in trained) / len(trained), 1) if trained else None,
+        "note": "cv_accuracy is REAL out-of-sample (TimeSeriesSplit). ~50% means indicators alone have ~no directional edge; the model is a weak tiebreaker, not the source of profit.",
+    }
 
 
 @app.get("/v5/walkforward/{asset}")
