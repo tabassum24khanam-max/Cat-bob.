@@ -169,8 +169,10 @@ THE REPORTS:
 CHIEF MARKET ANALYST (math): {quant['direction']} at {quant['confidence']}% — "{quant.get('reasoning', 'N/A')}"
   His own argument against himself: "{quant.get('counter_argument', 'none given')}"
 INTELLIGENCE CHIEF (news): {news['sentiment']} ({news['sentiment_score']:+d}/100), regime {news['market_regime']}
-  Catalysts: {', '.join(news.get('key_catalysts', ['none'])[:3])} | priced in: {news.get('priced_in', 'unknown')} | CATALYST OVERRIDE FLAGGED: {'YES — ' + str(news.get('reasoning', '')) if catalyst_flag else 'no'}
+  DOMINANT CATALYST: {news.get('dominant_catalyst', 'none')} | direction {news.get('catalyst_direction', 'none')} | expected move {news.get('expected_move_pct', 0)}% | timing {news.get('time_to_impact', 'none')} | priced in: {news.get('priced_in', 'unknown')}
+  Noise discarded: {news.get('noise_discarded', 'n/a')} | CATALYST OVERRIDE FLAGGED: {'YES — ' + str(news.get('reasoning', '')) if catalyst_flag else 'no'}
   Reasoning: "{news.get('reasoning', 'N/A')}"
+  HOW TO USE THIS: a fresh, un-priced-in catalyst with a real expected move is the strongest edge you have — the math is only 51% on its own. If the Intelligence Chief found a genuine surprise, lean into it. If it found only noise (catalyst 'none'), do NOT invent conviction from headlines — fall back to the weight of the other evidence.
 {ml_witness}
 {daily_line}
 MONTE CARLO (1000 sims): median {mc['median']:.4f} | prob up {mc['prob_up']*100:.0f}%

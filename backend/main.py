@@ -92,6 +92,10 @@ _autotrader = {
     'pipeline_version': 3,   # 3 = ungagged-judge pipeline, 2 = classic (pre-2026-07)
     'compare_mode': False,   # run BOTH pipelines each cycle; trade active one, score the other as shadow
     'time_decay_hours': 7.0, # force-close losers held longer than this
+    'sentry_enabled': True,  # cheap always-awake watcher can wake the bot early on a real break
+    '_wake_signal': False,   # set by sentry, consumed by the loop to break its sleep early
+    '_wake_count': 0,        # early wakes used this interval (hard cap 2)
+    '_wake_reason': '',      # what the sentry saw — fed to the agents so they "listen" not re-derive
 }
 
 # Shadow book: in COMPARE mode the inactive brain trades its OWN paper ledger,
@@ -578,6 +582,7 @@ async def startup():
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
     asyncio.create_task(_resolve_outcomes_loop())
+    asyncio.create_task(_event_sentry_loop())
     # Crash-proof memory: restore the previous run and auto-resume if it was live
     if load_bot_state():
         print("💾 Auto-resuming the autotrader from restored memory...")
@@ -601,6 +606,7 @@ class PredictRequest(BaseModel):
     features: Optional[dict] = None
     pipeline_version: Optional[int] = 2  # 2 = classic, 3 = ungagged-judge pipeline
     shadow: Optional[bool] = False       # compare-mode shadow run: no telegram, no session memory
+    breaking_context: Optional[str] = None  # sentry's reason for an early wake — agents "listen" to it
 
 class OutcomeRequest(BaseModel):
     pred_id: str
@@ -930,6 +936,87 @@ def get_adaptive_floor():
     return 52
 
 
+# Cheap always-awake sentry: watches price velocity (and, less often, news) for
+# a REAL break between analysis cycles. It IGNORES normal wiggle — the thesis is
+# about the next half hour, not the next second — and only wakes the bot when a
+# move is far outside the asset's own recent noise. Hard cap: 2 early wakes per
+# interval. Zero LLM cost; the expensive 3-agent analysis still runs on the slow
+# clock, it just gets triggered early when something genuinely happens.
+_sentry_price_hist: dict = {}   # asset -> list[(ts, price)]
+_sentry_last_news = 0
+
+async def _event_sentry_loop():
+    """Runs every 10s. Flags abnormal price velocity on open positions and wakes
+    the slow AI loop early (<=2x/interval). Self-calibrates to each asset's noise."""
+    global _sentry_last_news
+    await asyncio.sleep(60)
+    engine = get_trading_engine()
+    while True:
+        try:
+            if (_autotrader.get('enabled') and _autotrader.get('sentry_enabled')
+                    and int(_autotrader.get('pipeline_version', 3)) >= 3
+                    and _autotrader.get('status') == 'sleeping'
+                    and _autotrader.get('_wake_count', 0) < 2):
+                open_assets = list({p.asset for p in engine.positions.values() if p.status == 'open'})
+                now = int(time.time())
+                for asset in open_assets:
+                    try:
+                        r = await fetch_current_price(asset)
+                        price = r.get('price', 0)
+                    except Exception:
+                        continue
+                    if not price:
+                        continue
+                    hist = _sentry_price_hist.setdefault(asset, [])
+                    hist.append((now, price))
+                    # keep ~4 min of ticks
+                    _sentry_price_hist[asset] = [(t, p) for (t, p) in hist if now - t <= 240]
+                    hist = _sentry_price_hist[asset]
+                    if len(hist) < 8:
+                        continue
+                    prices = [p for _, p in hist]
+                    ref = prices[0]
+                    move = (price - ref) / ref * 100 if ref else 0
+                    # Directionality: net move vs total path walked. Pure noise/chop
+                    # wanders (net << path, low ratio); a real break moves in a
+                    # straight line (net ~= path, high ratio). This cleanly separates
+                    # a genuine catalyst move from a bounce-back wiggle.
+                    path = sum(abs(prices[i] - prices[i-1]) / prices[i-1] * 100
+                               for i in range(1, len(prices)) if prices[i-1]) or 0.001
+                    efficiency = abs(move) / path
+                    floor = 0.8 if get_asset_type(asset) == 'crypto' else 0.5
+                    if abs(move) > floor and efficiency > 0.6:
+                        _autotrader['_wake_signal'] = True
+                        _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                        _autotrader['_wake_reason'] = (
+                            f"{asset} moved {move:+.2f}% in ~{(now - hist[0][0])//60 or 1}min, "
+                            f"straight-line (directionality {efficiency:.0%}) — checking if a real catalyst broke")
+                        forensic_log.log_event_simple('sentry_trigger', asset, _autotrader['_wake_reason'])
+                        break
+                # Light news-burst check at most every 5 min
+                if (now - _sentry_last_news > 300 and open_assets
+                        and _autotrader.get('_wake_count', 0) < 2):
+                    _sentry_last_news = now
+                    for asset in open_assets:
+                        try:
+                            atype = 'crypto' if asset in BINANCE_SYMBOLS else ('macro' if asset in ['GC=F','CL=F','SI=F'] else 'stock')
+                            arts = await fetch_asset_news(asset, ASSET_NAMES.get(asset, asset), atype)
+                            fresh_hi = [a for a in arts
+                                        if (now - a.get('ts', now)) < 900 and abs(a.get('sentiment', 0)) >= 0.5]
+                            if len(fresh_hi) >= 2:
+                                _autotrader['_wake_signal'] = True
+                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                                top = fresh_hi[0].get('headline', 'breaking news')[:90]
+                                _autotrader['_wake_reason'] = f"{asset} news burst: {len(fresh_hi)} fresh high-impact headlines — top: {top}"
+                                forensic_log.log_event_simple('sentry_news', asset, _autotrader['_wake_reason'])
+                                break
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"[sentry] error: {e}")
+        await asyncio.sleep(10)
+
+
 async def _resolve_outcomes_loop():
     """Every 15 min, score predictions whose horizon has expired. This closes the
     learning loop: bot saves a trade at open -> we resolve it here -> ML retrains
@@ -1008,6 +1095,14 @@ async def _autotrader_loop():
         _autotrader['last_cycle'] = int(time.time())
         _autotrader['total_cycles'] += 1
         cycle = _autotrader['total_cycles']
+        # New interval → the sentry gets a fresh budget of 2 early wakes
+        woke_reason = _autotrader.get('_wake_reason', '')
+        _autotrader['_wake_signal'] = False
+        _autotrader['_wake_count'] = 0
+        _autotrader['_interval_start'] = int(time.time())
+        if woke_reason:
+            print(f"⚡ SENTRY WAKE: {woke_reason}")
+            forensic_log.log_event_simple('sentry_wake', '*', f"Bot woken early by sentry: {woke_reason}")
 
         print(f"\n{'='*60}")
         print(f"AUTOTRADER CYCLE #{cycle} — {len(_autotrader['assets'])} assets")
@@ -1052,6 +1147,7 @@ async def _autotrader_loop():
                     local_model=_autotrader.get('local_model', 'qwen2.5:7b'),
                     features=_autotrader.get('features'),
                     pipeline_version=pipe_version,
+                    breaking_context=woke_reason or None,
                 )
 
                 start_time = time.time()
@@ -1471,8 +1567,17 @@ async def _autotrader_loop():
             ))
 
         _autotrader['status'] = 'sleeping'
-        print(f"Autotrader sleeping {_autotrader['interval_minutes']}min until next cycle...")
-        await asyncio.sleep(interval)
+        print(f"Autotrader sleeping up to {_autotrader['interval_minutes']}min (sentry can wake it early)...")
+        _autotrader['_wake_reason'] = ''
+        slept = 0
+        while slept < interval:
+            await asyncio.sleep(5)
+            slept += 5
+            if my_gen != _autotrader['_run_generation'] or not _autotrader['enabled']:
+                break
+            if _autotrader.get('_wake_signal'):
+                # Sentry flagged a real break — run a fresh cycle now (reason already stored)
+                break
 
 
 async def _trading_position_monitor():
@@ -2001,6 +2106,9 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         risk_evidence = build_risk_evidence(req.asset, ind, mtf_data, macro_data,
                                             fg_data, onchain_data, macro_context,
                                             is_crypto)
+        if getattr(req, 'breaking_context', None):
+            risk_evidence.insert(0, f"⚡ BREAKING (sentry woke the desk early): {req.breaking_context}. "
+                                    f"Something moved outside normal noise — decide if it is a real catalyst or a fakeout.")
         if smi_data and smi_data.get('direction') not in (None, '', 'neutral'):
             sm_line = (f"SMART MONEY is {smi_data['direction'].upper()} (score {smi_data.get('score', 0)}/100"
                        + (", CONFIRMED by 3+ independent sources" if smi_data.get('confirmed') else "") + ")")
@@ -3709,6 +3817,12 @@ async def autotrader_status():
         "lessons": {asset: lessons[-5:] for asset, lessons in _trade_lessons.items()},
         "voter_weights": _get_voter_weights(),
         "voter_grades": {v: g for v, g in _voter_grades.items()},
+        "sentry": {
+            "enabled": _autotrader.get('sentry_enabled', True),
+            "wakes_this_interval": _autotrader.get('_wake_count', 0),
+            "last_wake_reason": _autotrader.get('_wake_reason', ''),
+            "watching": len([p for p in engine.positions.values() if p.status == 'open']),
+        },
         "all_positions": engine.get_positions(),
         "self_correction": {asset: {
             'wins': a['wins'], 'losses': a['losses'], 'total': a['total'],

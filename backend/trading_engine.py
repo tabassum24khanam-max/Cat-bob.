@@ -37,6 +37,7 @@ class Position:
     exit_time: int = 0
     paper: bool = True
     entry_confidence: int = 0
+    stop_breach_count: int = 0  # anti-wick-out: a stop must stay breached across checks, not flicker
 
 class TradingEngine:
     def __init__(self):
@@ -119,6 +120,16 @@ class TradingEngine:
         return {'ok': True, 'position': asdict(pos)}
 
     # D7: Stay/Exit — dynamic breakeven + trailing based on position's own stop size
+    # Anti-wick-out: momentary spikes shouldn't stop us out — the thesis is about
+    # the next half hour, not the next second. A stop must stay breached for this
+    # many consecutive 30s checks (~1 min) before we act on it. Take-profit is
+    # exempt (grabbing a profit on a spike is fine).
+    STOP_CONFIRM_CHECKS = 2
+
+    def _confirm_stop(self, pos: Position) -> bool:
+        pos.stop_breach_count = (pos.stop_breach_count or 0) + 1
+        return pos.stop_breach_count >= self.STOP_CONFIRM_CHECKS
+
     def check_exit(self, pos: Position, current_price: float) -> dict:
         """Decide whether to stay or exit a position."""
         trail_pct = pos.trailing_stop_pct or 0.5
@@ -139,12 +150,17 @@ class TradingEngine:
                     pos.stop_loss = lock_price
 
             if current_price <= pos.stop_loss:
-                return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
+                if self._confirm_stop(pos):
+                    return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
+                return {'action': 'hold', 'pnl_pct': pnl_pct, 'note': 'stop breached, awaiting confirmation'}
             if current_price >= pos.take_profit:
                 return {'action': 'exit', 'reason': 'take_profit', 'pnl_pct': pnl_pct}
             # Trailing activates once peak exceeded entry by trail_pct
             if current_price <= trailing_stop and pos.highest_price > pos.entry_price * (1 + trail_pct / 100):
-                return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
+                if self._confirm_stop(pos):
+                    return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
+                return {'action': 'hold', 'pnl_pct': pnl_pct, 'note': 'trailing breached, awaiting confirmation'}
+            pos.stop_breach_count = 0  # back inside — reset the wick counter
         else:  # SELL
             pnl_pct = (pos.entry_price - current_price) / pos.entry_price * 100
             pos.lowest_price = min(pos.lowest_price, current_price)
@@ -159,11 +175,16 @@ class TradingEngine:
                     pos.stop_loss = lock_price
 
             if current_price >= pos.stop_loss:
-                return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
+                if self._confirm_stop(pos):
+                    return {'action': 'exit', 'reason': 'stop_loss', 'pnl_pct': pnl_pct}
+                return {'action': 'hold', 'pnl_pct': pnl_pct, 'note': 'stop breached, awaiting confirmation'}
             if current_price <= pos.take_profit:
                 return {'action': 'exit', 'reason': 'take_profit', 'pnl_pct': pnl_pct}
             if current_price >= trailing_stop and pos.lowest_price < pos.entry_price * (1 - trail_pct / 100):
-                return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
+                if self._confirm_stop(pos):
+                    return {'action': 'exit', 'reason': 'trailing_stop', 'pnl_pct': pnl_pct}
+                return {'action': 'hold', 'pnl_pct': pnl_pct, 'note': 'trailing breached, awaiting confirmation'}
+            pos.stop_breach_count = 0  # back inside — reset the wick counter
 
         return {'action': 'hold', 'pnl_pct': pnl_pct}
 
