@@ -704,13 +704,25 @@ def _postmortem_analysis(req, feedback: str, moved_pct: float, outcome_price: fl
 
 
 async def _safe_refresh_calendar():
-    """Safely refresh economic calendar on startup."""
+    """Refresh the economic calendar (FOMC/CPI/NFP) AND the per-asset earnings
+    calendar. Was startup-only before -- now loops every 12h so newly-scheduled
+    events (a freshly-announced earnings date, a new Fed meeting) keep showing
+    up instead of freezing at whatever existed when the bot last restarted."""
     await asyncio.sleep(3)
-    try:
-        from macro_engine import refresh_calendar
-        await refresh_calendar()
-    except Exception:
-        pass
+    while True:
+        try:
+            from macro_engine import refresh_calendar
+            n_macro = await refresh_calendar()
+        except Exception:
+            n_macro = 0
+        try:
+            from earnings_calendar import refresh_earnings_calendar
+            n_earn = await refresh_earnings_calendar()
+        except Exception:
+            n_earn = 0
+        if n_macro or n_earn:
+            print(f"📅 Calendar refreshed: {n_macro} macro events, {n_earn} earnings dates")
+        await asyncio.sleep(12 * 3600)
 
 
 async def _safe_assign_cluster(asset: str, ind: dict) -> dict:
@@ -944,11 +956,12 @@ def get_adaptive_floor():
 # clock, it just gets triggered early when something genuinely happens.
 _sentry_price_hist: dict = {}   # asset -> list[(ts, price)]
 _sentry_last_news = 0
+_sentry_last_8k = 0
 
 async def _event_sentry_loop():
     """Runs every 10s. Flags abnormal price velocity on open positions and wakes
     the slow AI loop early (<=2x/interval). Self-calibrates to each asset's noise."""
-    global _sentry_last_news
+    global _sentry_last_news, _sentry_last_8k
     await asyncio.sleep(60)
     engine = get_trading_engine()
     while True:
@@ -1012,9 +1025,73 @@ async def _event_sentry_loop():
                                 break
                         except Exception:
                             continue
+                # SEC EDGAR 8-K check (official material-event filings, free, no key,
+                # stocks only) at most every 10 min -- catches things headlines lag on:
+                # M&A, exec departure, bankruptcy, guidance cuts, major litigation.
+                if (now - _sentry_last_8k > 600 and open_assets
+                        and _autotrader.get('_wake_count', 0) < 2):
+                    _sentry_last_8k = now
+                    for asset in open_assets:
+                        if get_asset_type(asset) != 'stock':
+                            continue
+                        try:
+                            hit = await _check_fresh_8k(asset)
+                            if hit:
+                                _autotrader['_wake_signal'] = True
+                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+                                _autotrader['_wake_reason'] = f"{asset} just filed a new SEC 8-K (material corporate event): {hit}"
+                                forensic_log.log_event_simple('sentry_8k', asset, _autotrader['_wake_reason'])
+                                break
+                        except Exception:
+                            continue
         except Exception as e:
             print(f"[sentry] error: {e}")
         await asyncio.sleep(10)
+
+
+# EDGAR's full-text search only reports a filing DATE, not a timestamp, so we
+# can't honestly compute "N minutes ago" from it. Instead we track which
+# accession numbers we've already seen per ticker -- a filing that's new
+# TODAY and wasn't in our last check is the real signal, no fake precision.
+_seen_8k_ids: dict = {}  # ticker -> set(accession numbers already seen)
+
+async def _check_fresh_8k(ticker: str) -> Optional[str]:
+    """Returns a short description if this stock has a same-day SEC 8-K
+    (Current Report -- material corporate event) we haven't seen before,
+    else None. Free, official, no API key required -- EDGAR full-text search."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://efts.sec.gov/LATEST/search-index",
+                params={"q": f'"{ticker}"', "forms": "8-K", "dateRange": "custom",
+                        "startdt": _today_utc_str(), "enddt": _today_utc_str()},
+                headers={"User-Agent": "ULTRAMAX/1.0 (research@ultramax.app)"},
+            )
+            if r.status_code != 200:
+                return None
+            hits = (r.json() or {}).get("hits", {}).get("hits", [])
+            if not hits:
+                return None
+            seen = _seen_8k_ids.setdefault(ticker, set())
+            is_first_check = len(seen) == 0
+            for h in hits:
+                acc_id = h.get("_id") or h.get("_source", {}).get("adsh")
+                if not acc_id or acc_id in seen:
+                    continue
+                seen.add(acc_id)
+                if is_first_check:
+                    continue  # first check just baselines what already existed today
+                names = h.get("_source", {}).get("display_names", [ticker])
+                return f"{names[0] if names else ticker} (filed today, form 8-K)"
+    except Exception:
+        pass
+    return None
+
+
+def _today_utc_str() -> str:
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.now(_tz.utc).strftime("%Y-%m-%d")
 
 
 async def _resolve_outcomes_loop():

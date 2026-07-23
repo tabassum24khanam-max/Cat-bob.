@@ -152,6 +152,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
       <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
     </div>
     <div style="font-size:8px;color:var(--muted);padding:2px 14px" id="b-v6info">V6 upgrades active</div>
+    <div style="font-size:8px;padding:2px 14px" id="b-sentry-panel">Sentry: idle</div>
     <div class="ctrl-row" style="margin-top:4px">
       <span id="b-ai-health" style="font-size:7px;color:var(--muted)">🧠 checking AI keys…</span>
     </div>
@@ -515,6 +516,21 @@ async function bRefresh() {
         if (parts.length) v6 += (v6 ? ' | ' : '') + 'GRADES: ' + parts.join(', ');
       }
       vwEl.textContent = v6 || 'V6 voter weights: learning (need 10+ trades)';
+    }
+    // Sentry: cheap always-awake watcher status
+    const sentEl = document.getElementById('b-sentry-panel');
+    if (sentEl) {
+      const s = d.sentry;
+      if (s) {
+        const dot = s.enabled ? '🟢' : '⚪';
+        let txt = `${dot} SENTRY: watching ${s.watching} position(s) | ${s.wakes_this_interval}/2 early wakes used this interval`;
+        if (s.last_wake_reason) txt += ` | last: ${s.last_wake_reason}`;
+        sentEl.textContent = txt;
+        sentEl.style.color = s.wakes_this_interval > 0 ? 'var(--yellow)' : 'var(--muted)';
+      } else {
+        sentEl.textContent = 'Sentry: idle';
+        sentEl.style.color = 'var(--muted)';
+      }
     }
 
     // Recommendation
