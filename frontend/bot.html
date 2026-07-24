@@ -148,6 +148,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         <input type="checkbox" id="b-compare-chk" onchange="localStorage.setItem('um_compare', this.checked?'1':'0')">
         COMPARE MODE <span style="font-size:6px;font-style:italic">(runs both brains — 2× API cost)</span>
       </label>
+      <label style="font-size:7px;color:var(--yellow);display:flex;align-items:center;gap:4px;margin-left:8px">
+        <input type="checkbox" id="b-forcetrade-chk" checked onchange="localStorage.setItem('um_force_trade', this.checked?'1':'0'); bUpdateForceTradeHint()">
+        FORCE TRADE <span style="font-size:6px;font-style:italic" id="b-forcetrade-hint">(ON: trades every interval, no matter what)</span>
+      </label>
       <a href="bot?brain=shadow" target="_blank" style="font-size:7px;color:#00e5ff;margin-left:6px">OPEN 2ND DASHBOARD ↗</a>
       <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
     </div>
@@ -280,12 +284,23 @@ async function checkAiHealth() {
   }
 }
 
+function bUpdateForceTradeHint() {
+  const ftChk = document.getElementById('b-forcetrade-chk');
+  const hint = document.getElementById('b-forcetrade-hint');
+  if (!ftChk || !hint) return;
+  hint.textContent = ftChk.checked
+    ? '(ON: trades every interval, no matter what)'
+    : '(OFF: only trades on real conviction — saves credits when flat+choppy)';
+}
+
 // Restore saved brain + compare choice on load; set up shadow view
 document.addEventListener('DOMContentLoaded', () => {
   const v3b = document.getElementById('b-v3-btn'), v2b = document.getElementById('b-v2-btn');
   if (v3b && v2b) { v3b.classList.toggle('active', bVersion === 3); v2b.classList.toggle('active', bVersion !== 3); }
   const chk = document.getElementById('b-compare-chk');
   if (chk) chk.checked = localStorage.getItem('um_compare') === '1';
+  const ftChk = document.getElementById('b-forcetrade-chk');
+  if (ftChk) { ftChk.checked = localStorage.getItem('um_force_trade') !== '0'; bUpdateForceTradeHint(); }
   checkAiHealth();
   if (SHADOW_VIEW) {
     document.title = 'ULTRAMAX — SHADOW BOOK';
@@ -341,6 +356,7 @@ async function bToggle() {
         features: JSON.parse(localStorage.getItem('um_features') || '{}'),
         pipeline_version: bVersion,
         compare_mode: document.getElementById('b-compare-chk')?.checked || false,
+        force_trade: document.getElementById('b-forcetrade-chk')?.checked !== false,
       }),
     });
     const d = await r.json();
