@@ -954,25 +954,62 @@ def get_adaptive_floor():
 # move is far outside the asset's own recent noise. Hard cap: 2 early wakes per
 # interval. Zero LLM cost; the expensive 3-agent analysis still runs on the slow
 # clock, it just gets triggered early when something genuinely happens.
-_sentry_price_hist: dict = {}   # asset -> list[(ts, price)]
-_sentry_last_news = 0
-_sentry_last_8k = 0
+_sentry_price_hist: dict = {}      # asset -> list[(ts, price)]
+_sentry_last_news = 0              # throttles the news FETCH (not the wake)
+_sentry_last_8k = 0               # throttles the 8-K FETCH
+_sentry_wake_times: list = []     # wall-clock ts of recent wakes (rolling-window budget)
+_sentry_seen_headlines: dict = {} # asset -> set(headline hashes already woken on)
+_sentry_price_cooldown: dict = {} # asset -> ts until which price-wakes are muted
+
+# Rolling-window budget so a wake can NEVER reset its own cap (the bug that made
+# V3 re-run every ~5 min for 5 hours). At most this many early wakes per window,
+# and never two closer together than the min-gap.
+SENTRY_MAX_WAKES = 2
+SENTRY_WINDOW_S = 1800   # 30 min rolling window
+SENTRY_MIN_GAP_S = 600   # >=10 min between any two early wakes
+
+
+def _sentry_can_wake(now: int) -> bool:
+    """True only if the rolling-window budget AND min-gap both allow a wake."""
+    global _sentry_wake_times
+    _sentry_wake_times = [t for t in _sentry_wake_times if now - t <= SENTRY_WINDOW_S]
+    if len(_sentry_wake_times) >= SENTRY_MAX_WAKES:
+        return False
+    if _sentry_wake_times and (now - _sentry_wake_times[-1]) < SENTRY_MIN_GAP_S:
+        return False
+    return True
+
+
+def _sentry_fire(now: int, asset: str, reason: str, kind: str):
+    """Single guarded entry point for ALL wakes — records the wall-clock time so
+    the budget is real, and sets the signal the loop consumes."""
+    _sentry_wake_times.append(now)
+    _autotrader['_wake_signal'] = True
+    _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
+    _autotrader['_wake_reason'] = reason
+    forensic_log.log_event_simple(kind, asset, reason)
+
 
 async def _event_sentry_loop():
-    """Runs every 10s. Flags abnormal price velocity on open positions and wakes
-    the slow AI loop early (<=2x/interval). Self-calibrates to each asset's noise."""
+    """Runs every 10s. Wakes the slow AI loop early ONLY on a genuine, never-seen
+    break — real price move, brand-new headline, or fresh SEC filing — capped hard
+    at 2 wakes / 30 min with a 10-min floor between them. Zero LLM cost."""
     global _sentry_last_news, _sentry_last_8k
     await asyncio.sleep(60)
     engine = get_trading_engine()
     while True:
         try:
+            now = int(time.time())
             if (_autotrader.get('enabled') and _autotrader.get('sentry_enabled')
                     and int(_autotrader.get('pipeline_version', 3)) >= 3
                     and _autotrader.get('status') == 'sleeping'
-                    and _autotrader.get('_wake_count', 0) < 2):
+                    and _sentry_can_wake(now)):
                 open_assets = list({p.asset for p in engine.positions.values() if p.status == 'open'})
-                now = int(time.time())
+
+                # ── 1. PRICE VELOCITY — real straight-line break, once per move ──
                 for asset in open_assets:
+                    if now < _sentry_price_cooldown.get(asset, 0):
+                        continue  # already woke on this move; muted until it resets
                     try:
                         r = await fetch_current_price(asset)
                         price = r.get('price', 0)
@@ -982,7 +1019,6 @@ async def _event_sentry_loop():
                         continue
                     hist = _sentry_price_hist.setdefault(asset, [])
                     hist.append((now, price))
-                    # keep ~4 min of ticks
                     _sentry_price_hist[asset] = [(t, p) for (t, p) in hist if now - t <= 240]
                     hist = _sentry_price_hist[asset]
                     if len(hist) < 8:
@@ -990,57 +1026,62 @@ async def _event_sentry_loop():
                     prices = [p for _, p in hist]
                     ref = prices[0]
                     move = (price - ref) / ref * 100 if ref else 0
-                    # Directionality: net move vs total path walked. Pure noise/chop
-                    # wanders (net << path, low ratio); a real break moves in a
-                    # straight line (net ~= path, high ratio). This cleanly separates
-                    # a genuine catalyst move from a bounce-back wiggle.
                     path = sum(abs(prices[i] - prices[i-1]) / prices[i-1] * 100
                                for i in range(1, len(prices)) if prices[i-1]) or 0.001
                     efficiency = abs(move) / path
                     floor = 0.8 if get_asset_type(asset) == 'crypto' else 0.5
-                    if abs(move) > floor and efficiency > 0.6:
-                        _autotrader['_wake_signal'] = True
-                        _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
-                        _autotrader['_wake_reason'] = (
-                            f"{asset} moved {move:+.2f}% in ~{(now - hist[0][0])//60 or 1}min, "
-                            f"straight-line (directionality {efficiency:.0%}) — checking if a real catalyst broke")
-                        forensic_log.log_event_simple('sentry_trigger', asset, _autotrader['_wake_reason'])
+                    if abs(move) > floor and efficiency > 0.6 and _sentry_can_wake(now):
+                        _sentry_fire(now, asset,
+                            f"{asset} moved {move:+.2f}% straight-line (directionality {efficiency:.0%}) — checking if a real catalyst broke",
+                            'sentry_trigger')
+                        # Mute this asset for 20 min AND wipe its window so it must
+                        # rebuild fresh ticks — a single move can't fire twice.
+                        _sentry_price_cooldown[asset] = now + 1200
+                        _sentry_price_hist[asset] = []
                         break
-                # Light news-burst check at most every 5 min
-                if (now - _sentry_last_news > 300 and open_assets
-                        and _autotrader.get('_wake_count', 0) < 2):
+
+                # ── 2. NEWS BURST — only BRAND-NEW headlines, each usable once ──
+                if now - _sentry_last_news > 300 and open_assets and _sentry_can_wake(now):
                     _sentry_last_news = now
                     for asset in open_assets:
                         try:
                             atype = 'crypto' if asset in BINANCE_SYMBOLS else ('macro' if asset in ['GC=F','CL=F','SI=F'] else 'stock')
                             arts = await fetch_asset_news(asset, ASSET_NAMES.get(asset, asset), atype)
-                            fresh_hi = [a for a in arts
-                                        if (now - a.get('ts', now)) < 900 and abs(a.get('sentiment', 0)) >= 0.5]
-                            if len(fresh_hi) >= 2:
-                                _autotrader['_wake_signal'] = True
-                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
-                                top = fresh_hi[0].get('headline', 'breaking news')[:90]
-                                _autotrader['_wake_reason'] = f"{asset} news burst: {len(fresh_hi)} fresh high-impact headlines — top: {top}"
-                                forensic_log.log_event_simple('sentry_news', asset, _autotrader['_wake_reason'])
+                            seen = _sentry_seen_headlines.setdefault(asset, set())
+                            first_time = len(seen) == 0
+                            new_hi = []
+                            for a in arts:
+                                h = a.get('headline', '')
+                                hid = hash(h)
+                                fresh = (now - a.get('ts', now)) < 1200
+                                strong = abs(a.get('sentiment', 0)) >= 0.5
+                                if fresh and strong and hid not in seen:
+                                    new_hi.append(a)
+                                seen.add(hid)  # every headline seen is remembered forever
+                            # First pass just baselines what already existed — never wakes
+                            if first_time:
+                                continue
+                            if len(new_hi) >= 2 and _sentry_can_wake(now):
+                                top = new_hi[0].get('headline', 'breaking news')[:90]
+                                _sentry_fire(now, asset,
+                                    f"{asset}: {len(new_hi)} brand-new high-impact headlines — top: {top}",
+                                    'sentry_news')
                                 break
                         except Exception:
                             continue
-                # SEC EDGAR 8-K check (official material-event filings, free, no key,
-                # stocks only) at most every 10 min -- catches things headlines lag on:
-                # M&A, exec departure, bankruptcy, guidance cuts, major litigation.
-                if (now - _sentry_last_8k > 600 and open_assets
-                        and _autotrader.get('_wake_count', 0) < 2):
+
+                # ── 3. SEC 8-K — brand-new material filing (stocks) ──
+                if now - _sentry_last_8k > 600 and open_assets and _sentry_can_wake(now):
                     _sentry_last_8k = now
                     for asset in open_assets:
                         if get_asset_type(asset) != 'stock':
                             continue
                         try:
                             hit = await _check_fresh_8k(asset)
-                            if hit:
-                                _autotrader['_wake_signal'] = True
-                                _autotrader['_wake_count'] = _autotrader.get('_wake_count', 0) + 1
-                                _autotrader['_wake_reason'] = f"{asset} just filed a new SEC 8-K (material corporate event): {hit}"
-                                forensic_log.log_event_simple('sentry_8k', asset, _autotrader['_wake_reason'])
+                            if hit and _sentry_can_wake(now):
+                                _sentry_fire(now, asset,
+                                    f"{asset} just filed a new SEC 8-K (material corporate event): {hit}",
+                                    'sentry_8k')
                                 break
                         except Exception:
                             continue
@@ -1646,14 +1687,18 @@ async def _autotrader_loop():
         _autotrader['status'] = 'sleeping'
         print(f"Autotrader sleeping up to {_autotrader['interval_minutes']}min (sentry can wake it early)...")
         _autotrader['_wake_reason'] = ''
+        # An early wake can never start a cycle within MIN_EARLY_GAP of the last
+        # cycle start — a hard floor on cadence so nothing (bug or storm) can make
+        # V3 spin faster than this. Interval itself is the normal cadence.
+        MIN_EARLY_GAP = min(interval, 600)  # >=10 min between cycles even on a wake
         slept = 0
         while slept < interval:
             await asyncio.sleep(5)
             slept += 5
             if my_gen != _autotrader['_run_generation'] or not _autotrader['enabled']:
                 break
-            if _autotrader.get('_wake_signal'):
-                # Sentry flagged a real break — run a fresh cycle now (reason already stored)
+            if _autotrader.get('_wake_signal') and slept >= MIN_EARLY_GAP:
+                # Genuine break AND enough time since last cycle — run fresh now
                 break
 
 
@@ -3561,6 +3606,15 @@ async def autotrader_start(req: AutotraderStartRequest):
     # (The old 1-second wait raced against multi-minute cycles -> twin loops.)
     _autotrader['_run_generation'] += 1
     _autotrader['_loop_running'] = False
+    # Clean sentry state for a fresh run — no stale wake budget, headline memory,
+    # or price windows carried across a restart.
+    _sentry_wake_times.clear()
+    _sentry_seen_headlines.clear()
+    _sentry_price_cooldown.clear()
+    _sentry_price_hist.clear()
+    _seen_8k_ids.clear()
+    _autotrader['_wake_signal'] = False
+    _autotrader['_wake_count'] = 0
     _autotrader['enabled'] = True
     _autotrader['assets'] = valid_assets
     _autotrader['interval_minutes'] = max(10, req.interval_minutes)
