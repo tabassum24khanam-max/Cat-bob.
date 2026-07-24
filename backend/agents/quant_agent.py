@@ -9,6 +9,7 @@ import re
 from typing import Optional, Dict, Any
 from indicators import compute_indicators, monte_carlo, kalman_filter, hmm_regime
 from ml_engine import bayesian_confidence
+from config import DEEPSEEK_MODEL_FAST
 
 
 async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
@@ -25,7 +26,7 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                     "https://api.deepseek.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "deepseek-chat",
+                        "model": DEEPSEEK_MODEL_FAST,
                         "max_tokens": 600,
                         "messages": [
                             {"role": "system", "content": "You are an expert quantitative trading analyst. Respond ONLY with valid JSON."},

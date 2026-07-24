@@ -9,6 +9,8 @@ import re
 import traceback
 from typing import Dict, Any, Optional
 
+from config import DEEPSEEK_MODEL_FAST, DEEPSEEK_MODEL_REASONER
+
 # Track R1 failures for logging
 _last_r1_error = None
 
@@ -244,7 +246,7 @@ Respond with ONLY this JSON:
                         "https://api.deepseek.com/v1/chat/completions",
                         headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                         json={
-                            "model": "deepseek-reasoner",
+                            "model": DEEPSEEK_MODEL_REASONER,
                             "max_tokens": 8000,
                             "stream": False,
                             "messages": [
@@ -320,7 +322,7 @@ Respond with ONLY this JSON:
                     "https://api.deepseek.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "deepseek-chat",
+                        "model": DEEPSEEK_MODEL_FAST,
                         "max_tokens": 3000,
                         "messages": [
                             {"role": "system", "content": "You are an expert trading AI. Respond ONLY with valid JSON."},

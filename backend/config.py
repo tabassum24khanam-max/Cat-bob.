@@ -23,6 +23,15 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# ─── DeepSeek model IDs ──────────────────────────────────────────────────
+# DeepSeek deprecated "deepseek-chat" / "deepseek-reasoner" (they now 400 with
+#: "supported API model(s) are deepseek-v4-pro or deepseek-v4-flash"). These are
+# centralised AND env-overridable so the next provider rename is a Railway
+# Variable change, not a code deploy — the outage that motivated this cost a
+# live run.
+DEEPSEEK_MODEL_FAST = os.getenv("DEEPSEEK_MODEL_FAST", "deepseek-v4-flash")
+DEEPSEEK_MODEL_REASONER = os.getenv("DEEPSEEK_MODEL_REASONER", "deepseek-v4-pro")
+
 # E8: Production database (optional — defaults to SQLite)
 DATABASE_URL = os.getenv("DATABASE_URL", "")  # PostgreSQL connection string
 REDIS_URL = os.getenv("REDIS_URL", "")  # Redis for caching
