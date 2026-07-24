@@ -3554,7 +3554,7 @@ async def keys_health():
     """Live-test the LLM API keys with a 1-token call each. Catches invalid keys,
     empty credit, and outages that otherwise fail SILENTLY and leave the bot blind."""
     import httpx as _httpx
-    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY, DEEPSEEK_MODEL_FAST
 
     async def probe(url: str, key: str, model: str) -> dict:
         if not key or len(key) < 10:
@@ -3575,7 +3575,7 @@ async def keys_health():
             return {'configured': True, 'ok': False, 'detail': str(e)[:140]}
 
     ds, oa = await asyncio.gather(
-        probe("https://api.deepseek.com/v1/chat/completions", DEEPSEEK_API_KEY or '', "deepseek-chat"),
+        probe("https://api.deepseek.com/v1/chat/completions", DEEPSEEK_API_KEY or '', DEEPSEEK_MODEL_FAST),
         probe("https://api.openai.com/v1/chat/completions", OPENAI_API_KEY or '', "gpt-4o-mini"),
     )
     return {'deepseek': ds, 'openai': oa, 'any_ok': bool(ds['ok'] or oa['ok'])}

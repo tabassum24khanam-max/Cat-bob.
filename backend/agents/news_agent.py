@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 import feedparser
 
+from config import DEEPSEEK_MODEL_FAST
+
 
 FEEDS = {
     'crypto': [
@@ -230,7 +232,7 @@ Headlines:
                     "https://api.deepseek.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "deepseek-chat",
+                        "model": DEEPSEEK_MODEL_FAST,
                         "max_tokens": 100,
                         "temperature": 0.1,
                         "messages": [
@@ -354,7 +356,7 @@ Respond ONLY with this JSON:
                     "https://api.deepseek.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
-                        "model": "deepseek-chat",
+                        "model": DEEPSEEK_MODEL_FAST,
                         "max_tokens": 500,
                         "temperature": 0.1,
                         "messages": [
