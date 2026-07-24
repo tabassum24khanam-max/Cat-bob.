@@ -1254,6 +1254,29 @@ async def _autotrader_loop():
                 interval_min = _autotrader.get('interval_minutes', 30)
                 bot_horizon = max(1, round(interval_min * 1.5 / 60))
                 pipe_version = int(_autotrader.get('pipeline_version', 3) or 3)
+
+                # ── Conviction mode (force_trade=False): cheap pre-check, ZERO LLM
+                # tokens. If we're flat (no open position) and the market is pure
+                # chop by indicators alone (free, no API cost), skip the expensive
+                # 3-agent analysis entirely this cycle — there's nothing to have
+                # conviction ABOUT. Existing positions are still fully managed.
+                if not _autotrader.get('force_trade', True):
+                    _open_now = any(p.status == 'open' and p.asset == asset_name
+                                     for p in engine.positions.values())
+                    if not _open_now:
+                        try:
+                            _pre_iv = '15m' if bot_horizon <= 1 else '1h' if bot_horizon <= 8 else '4h'
+                            _pre_candles = await fetch_candles(asset_name, _pre_iv, 300)
+                            _pre_ind = compute_indicators(_pre_candles) if _pre_candles else None
+                            if _pre_ind:
+                                _pre_chop, _pre_sev = _detect_chop(_pre_ind)
+                                if _pre_chop and _pre_sev >= 0.65:
+                                    cycle_summary.append(f"{asset_name}: pure chop, flat — skipped (0 tokens)")
+                                    print(f"  {asset_name}: CHOP pre-check ({_pre_sev:.2f}) — skipping AI, 0 tokens")
+                                    continue
+                        except Exception:
+                            pass  # pre-check failing should never block real analysis
+
                 req = PredictRequest(
                     asset=asset_name, horizon=bot_horizon,
                     api_key=api_key, ds_key=ds_key,
@@ -1560,6 +1583,19 @@ async def _autotrader_loop():
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
                     tp_pct = sl_pct * 3.0
+
+                # ── Conviction gate (force_trade OFF): only OPEN when the signal is
+                # genuinely strong. This gates fresh entries AND reopens-after-exit
+                # the same way — it never touches exits/holds, only new openings.
+                # force_trade ON (default) preserves the old always-trade behavior.
+                if not _autotrader.get('force_trade', True):
+                    CONVICTION_FLOOR = 60
+                    if confidence < CONVICTION_FLOOR or (is_chop and chop_severity >= 0.5):
+                        reason = (f"confidence {confidence}% < {CONVICTION_FLOOR}%" if confidence < CONVICTION_FLOOR
+                                  else f"chop severity {chop_severity:.2f}")
+                        cycle_summary.append(f"{asset_name}: no conviction ({reason}) — staying flat")
+                        print(f"  {asset_name}: SKIP OPEN — {reason} (force_trade is OFF)")
+                        continue
 
                 # V6: CORRELATION VETO — cut size if opposing correlated positions
                 corr_vetoed, corr_reason = _correlation_veto(asset_name, direction, engine)
@@ -3664,6 +3700,7 @@ async def autotrader_start(req: AutotraderStartRequest):
         "mode": "paper" if engine.paper_mode else "live",
         "pipeline_version": _autotrader['pipeline_version'],
         "compare_mode": _autotrader['compare_mode'],
+        "force_trade": _autotrader['force_trade'],
     }
 
 
@@ -3954,6 +3991,7 @@ async def autotrader_status():
             "last_wake_reason": _autotrader.get('_wake_reason', ''),
             "watching": len([p for p in engine.positions.values() if p.status == 'open']),
         },
+        "force_trade": _autotrader.get('force_trade', True),
         "all_positions": engine.get_positions(),
         "self_correction": {asset: {
             'wins': a['wins'], 'losses': a['losses'], 'total': a['total'],
