@@ -959,6 +959,8 @@ _sentry_last_news = 0              # throttles the news FETCH (not the wake)
 _sentry_last_8k = 0               # throttles the 8-K FETCH
 _sentry_wake_times: list = []     # wall-clock ts of recent wakes (rolling-window budget)
 _sentry_seen_headlines: dict = {} # asset -> set(headline hashes already woken on)
+_news_stop_last_check = 0          # throttles the news-trailing-stop protective check
+_news_stop_seen_headlines: dict = {}  # asset -> set(headline hashes already used to tighten a stop)
 _sentry_price_cooldown: dict = {} # asset -> ts until which price-wakes are muted
 
 # Rolling-window budget so a wake can NEVER reset its own cap (the bug that made
@@ -994,7 +996,7 @@ async def _event_sentry_loop():
     """Runs every 10s. Wakes the slow AI loop early ONLY on a genuine, never-seen
     break — real price move, brand-new headline, or fresh SEC filing — capped hard
     at 2 wakes / 30 min with a 10-min floor between them. Zero LLM cost."""
-    global _sentry_last_news, _sentry_last_8k
+    global _sentry_last_news, _sentry_last_8k, _news_stop_last_check
     await asyncio.sleep(60)
     engine = get_trading_engine()
     while True:
@@ -1083,6 +1085,60 @@ async def _event_sentry_loop():
                                     f"{asset} just filed a new SEC 8-K (material corporate event): {hit}",
                                     'sentry_8k')
                                 break
+                        except Exception:
+                            continue
+
+                # ── 4. NEWS TRAILING-STOP — the free/cheap analog of the price
+                # trailing stop, but for news. Pure rule-based sentiment scoring
+                # already computed by fetch_asset_news (RSS + keyword/FinBERT
+                # scoring) -- ZERO LLM cost. This is protective risk management,
+                # not an opinion, so it is NOT gated by the wake budget: it can
+                # tighten a stop every check, same as the price trailing stop
+                # runs unbudgeted every 30s. It never closes a position outright
+                # (a shallow sentiment score isn't trustworthy enough for that) --
+                # it only pulls the stop closer, and a real AI wake (above) still
+                # decides whether to actually flip or exit.
+                if now - _news_stop_last_check > 180 and open_assets:
+                    _news_stop_last_check = now
+                    for pos in list(engine.positions.values()):
+                        if pos.status != 'open':
+                            continue
+                        try:
+                            atype = ('crypto' if pos.asset in BINANCE_SYMBOLS else
+                                      'macro' if pos.asset in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
+                            arts = await fetch_asset_news(pos.asset, ASSET_NAMES.get(pos.asset, pos.asset), atype)
+                            seen = _news_stop_seen_headlines.setdefault(pos.asset, set())
+                            first_time = len(seen) == 0
+                            for a in arts:
+                                h = a.get('headline', '')
+                                hid = hash(h)
+                                if hid in seen:
+                                    continue
+                                seen.add(hid)
+                                if first_time:
+                                    continue  # baseline silently -- don't react to pre-existing news
+                                fresh = (now - a.get('ts', now)) < 900
+                                sent = a.get('sentiment', 0)
+                                strong = abs(sent) >= 0.5
+                                adverse = (pos.direction == 'BUY' and sent <= -0.5) or \
+                                          (pos.direction == 'SELL' and sent >= 0.5)
+                                if fresh and strong and adverse:
+                                    pr = await fetch_current_price(pos.asset)
+                                    cur = pr.get('price', 0)
+                                    if cur:
+                                        if pos.direction == 'BUY':
+                                            tight = cur * 0.997
+                                            if tight > pos.stop_loss:
+                                                pos.stop_loss = tight
+                                                forensic_log.log_event_simple('news_trailing_stop', pos.asset,
+                                                    f"Adverse headline tightened stop to \${tight:.2f}: \"{h[:80]}\" (sentiment {sent:+.2f})")
+                                        else:
+                                            tight = cur * 1.003
+                                            if pos.stop_loss == 0 or tight < pos.stop_loss:
+                                                pos.stop_loss = tight
+                                                forensic_log.log_event_simple('news_trailing_stop', pos.asset,
+                                                    f"Adverse headline tightened stop to \${tight:.2f}: \"{h[:80]}\" (sentiment {sent:+.2f})")
+                                    break  # one tighten per position per check is enough
                         except Exception:
                             continue
         except Exception as e:
@@ -1465,7 +1521,8 @@ async def _autotrader_loop():
                         ))
                         cycle_summary.append(f"{asset_name}: BREAKEVEN → {direction}")
 
-                    elif pnl_pct > 0:
+                    elif pnl_pct > 0 and pipe_version < 3:
+                        # V2 unchanged: cash out any green position on the clock.
                         print(f"  {asset_name}: CASHOUT {current_pos.direction} +{pnl_pct:.2f}% profit, reopening {direction}")
                         close_result = await engine.close_position(current_pos.id, price, 'cycle_cashout')
                         cashed_pnl = close_result.get('pnl', 0)
@@ -1480,6 +1537,16 @@ async def _autotrader_loop():
                             f"💰 CASHOUT {asset_name}: {current_pos.direction} +{pnl_pct:.2f}% | +${cashed_pnl:.2f} | Reopening {direction}"
                         ))
                         cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
+
+                    elif pnl_pct > 0:
+                        # V3 HOLD-LONG: don't bank a winner on the clock. The mechanical
+                        # trailing stop (trading_engine.check_exit, checked every 30s,
+                        # zero AI cost) manages the real exit at the actual peak instead
+                        # of an arbitrary 30-min tick. Thesis-flip/decaying-stop below
+                        # still apply if the position turns red first.
+                        print(f"  {asset_name}: HOLD WINNER {current_pos.direction} +{pnl_pct:.2f}% — trailing stop manages exit")
+                        cycle_summary.append(f"{asset_name}: HOLD WINNER +{pnl_pct:.1f}% (trailing stop active)")
+                        continue
 
                     elif pnl_pct < 0 and direction != current_pos.direction and confidence >= 60:
                         # V6: THESIS-FLIP — judge disagrees with position at high confidence
@@ -3646,6 +3713,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     # or price windows carried across a restart.
     _sentry_wake_times.clear()
     _sentry_seen_headlines.clear()
+    _news_stop_seen_headlines.clear()
     _sentry_price_cooldown.clear()
     _sentry_price_hist.clear()
     _seen_8k_ids.clear()
