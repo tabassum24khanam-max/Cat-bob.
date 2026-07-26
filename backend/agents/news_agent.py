@@ -357,7 +357,11 @@ Respond ONLY with this JSON:
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
                         "model": DEEPSEEK_MODEL_FAST,
-                        "max_tokens": 500,
+                        # V3 asks for 17 JSON fields incl. several free-text ones
+                        # (dominant_catalyst, noise_discarded, reasoning, flip_trigger).
+                        # 500 truncated the response mid-JSON -> parse failure ->
+                        # silent fallback -> "News analysis unavailable".
+                        "max_tokens": 1500,
                         "temperature": 0.1,
                         "messages": [
                             {"role": "system", "content": "You are a professional financial news analyst. Respond ONLY with valid JSON."},
@@ -372,7 +376,10 @@ Respond ONLY with this JSON:
                     return json.loads(m.group())
 
     except Exception as e:
-        pass
+        # Was a bare `pass` — the DeepSeek failure was invisible, so a truncated
+        # response looked identical to "no news". Log it so the next failure is
+        # diagnosable from the Railway logs instead of guessed at.
+        print(f"⚠ News agent (DeepSeek) failed, falling back to OpenAI: {str(e)[:200]}")
 
     # Fallback to GPT-4o-mini
     try:
@@ -382,7 +389,7 @@ Respond ONLY with this JSON:
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "gpt-4o-mini",
-                    "max_tokens": 500,
+                    "max_tokens": 1500,
                     "messages": [{"role": "user", "content": prompt}]
                 }
             )
