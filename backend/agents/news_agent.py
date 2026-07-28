@@ -84,6 +84,16 @@ def score_sentiment(text: str) -> float:
     return rule_based_sentiment(text)
 
 
+def finbert_active() -> bool:
+    """True only if real financial-NLP sentiment is available. The keyword
+    fallback (rule_based_sentiment) scores ANY headline containing generic
+    words like "up"/"record"/"boost" as bullish regardless of subject -- it
+    mistook an Avengers movie headline for bullish SPY news. Protective,
+    no-AI-review mechanisms (like the news trailing-stop) must refuse to act
+    on the fallback scorer rather than trust it."""
+    return get_finbert() is not None
+
+
 # Impact scoring heuristics
 IMPACT_KEYWORDS = {
     'high': ['fed', 'fomc', 'sec', 'cftc', 'ban', 'regulation', 'earnings', 'cpi', 'inflation',
@@ -259,7 +269,8 @@ async def run_news_agent(asset: str, asset_name: str, asset_type: str,
                           api_key: str, ds_key: str = None,
                           db_sentiment: dict = None,
                           quant_brief: str = '', version: int = 2,
-                          smart_money_ctx: str = '') -> dict:
+                          smart_money_ctx: str = '',
+                          breaking_context: str = '') -> dict:
     """Call DeepSeek V3 News Agent with full context."""
 
     # Aggregate article metrics
@@ -301,8 +312,16 @@ Long/Short Ratio: {onchain_data.get('long_short_ratio', 1):.2f}
 """
 
     if version >= 3:
+        breaking_block = ""
+        if breaking_context:
+            breaking_block = f"""
+⚡ YOU WERE WOKEN EARLY FOR THIS SPECIFIC REASON: {breaking_context}
+You MUST explicitly rule on it: is this the dominant catalyst, a fakeout, or already
+priced in? Do not let it get lost among the other headlines below — answer it directly
+in "reasoning", and set catalyst_override based on YOUR judgment of it, not a reflex.
+"""
         prompt = f"""You are the Intelligence Chief of a trading desk. You are drowning in headlines and MOST OF THEM ARE NOISE. Your entire value is separating the 1-2 things that will actually move {asset} ({asset_name}) price in the next {horizon}h from the 95% that is filler, recycled, or already priced in. A clerk can summarize headlines. You decide what MATTERS.
-
+{breaking_block}
 YOUR RAW INTELLIGENCE:
 HEADLINES ({min(len(articles), max_headlines)}, tier-weighted, most impactful first):
 {headlines_str}

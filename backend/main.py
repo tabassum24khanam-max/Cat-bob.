@@ -24,7 +24,7 @@ from data_fetcher import fetch_candles, fetch_candles_before, fetch_macro, fetch
 from indicators import compute_indicators, monte_carlo
 from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
 from agents.quant_agent import run_quant_agent, build_quant_prompt, build_quant_prompt_v3
-from agents.news_agent import fetch_asset_news, filter_headlines_ai, run_news_agent
+from agents.news_agent import fetch_asset_news, filter_headlines_ai, run_news_agent, finbert_active
 from agents.decision_agent import run_decision_agent
 from sentiment import get_sentiment_snapshot
 from macro_engine import get_macro_context
@@ -959,8 +959,32 @@ _sentry_last_news = 0              # throttles the news FETCH (not the wake)
 _sentry_last_8k = 0               # throttles the 8-K FETCH
 _sentry_wake_times: list = []     # wall-clock ts of recent wakes (rolling-window budget)
 _sentry_seen_headlines: dict = {} # asset -> set(headline hashes already woken on)
+# Real names/aliases a headline must contain to count as actually ABOUT this
+# asset. Fixes: a Zcash headline tightening BTC's stop, an Avengers-movie
+# headline tightening SPY's stop -- generic feeds return off-topic headlines,
+# and with no AI review step in the cheap path, relevance must be checked by hand.
+_ASSET_ALIASES = {
+    'BTC': ['bitcoin', 'btc'], 'ETH': ['ethereum', 'eth', 'ether'],
+    'SOL': ['solana', 'sol'], 'BNB': ['bnb', 'binance coin'],
+    'XRP': ['xrp', 'ripple'], 'DOGE': ['dogecoin', 'doge'],
+    'AAPL': ['apple', 'aapl', 'iphone'], 'TSLA': ['tesla', 'tsla', 'elon musk'],
+    'NVDA': ['nvidia', 'nvda'], 'MSFT': ['microsoft', 'msft'],
+    'GOOGL': ['google', 'alphabet', 'googl'], 'SPY': ['s&p 500', 's&p500', 'spy etf'],
+    'GC=F': ['gold'], 'CL=F': ['crude oil', 'wti', 'oil price'], 'SI=F': ['silver'],
+    'XOM': ['exxon', 'exxonmobil'], 'LMT': ['lockheed'], 'RTX': ['raytheon'],
+}
+
+def _headline_mentions_asset(headline: str, asset: str) -> bool:
+    h = headline.lower()
+    for alias in _ASSET_ALIASES.get(asset, [asset.lower()]):
+        if alias in h:
+            return True
+    return False
+
+
 _news_stop_last_check = 0          # throttles the news-trailing-stop protective check
 _news_stop_seen_headlines: dict = {}  # asset -> set(headline hashes already used to tighten a stop)
+_news_stop_last_check_warned = [False]  # one-shot flag: warn once if FinBERT is unavailable
 _sentry_price_cooldown: dict = {} # asset -> ts until which price-wakes are muted
 
 # Rolling-window budget so a wake can NEVER reset its own cap (the bug that made
@@ -1088,59 +1112,90 @@ async def _event_sentry_loop():
                         except Exception:
                             continue
 
-                # ── 4. NEWS TRAILING-STOP — the free/cheap analog of the price
-                # trailing stop, but for news. Pure rule-based sentiment scoring
-                # already computed by fetch_asset_news (RSS + keyword/FinBERT
-                # scoring) -- ZERO LLM cost. This is protective risk management,
-                # not an opinion, so it is NOT gated by the wake budget: it can
-                # tighten a stop every check, same as the price trailing stop
-                # runs unbudgeted every 30s. It never closes a position outright
-                # (a shallow sentiment score isn't trustworthy enough for that) --
-                # it only pulls the stop closer, and a real AI wake (above) still
-                # decides whether to actually flip or exit.
+                # ── 4. NEWS TRAILING-STOP (hardened) — free, no LLM cost, but with
+                # guards added after a real misfire: an Avengers-movie headline
+                # tightened SPY's stop and a Zcash headline tightened BTC's,
+                # because (a) the keyword-fallback scorer calls ANY headline
+                # with generic words like "record"/"boost"/"up" bullish
+                # regardless of subject, and (b) nothing checked the headline
+                # was actually ABOUT the asset. Fixed:
+                #   1. Headline must literally mention the asset/company (see
+                #      _headline_mentions_asset) -- off-topic headlines can't
+                #      qualify no matter how they score. This alone would have
+                #      caught both real misfires.
+                #   2. Requires 2 independent qualifying adverse headlines, not
+                #      1 -- same bar the sentry's news-wake already uses.
+                #   3. Widened tighten distance (0.5-0.8% vs the old 0.3%) so a
+                #      real adverse read doesn't hair-trigger on normal noise.
+                # Does NOT hard-require FinBERT: Railway's deploy deliberately
+                # excludes torch/transformers to save 2GB RAM, so FinBERT never
+                # loads in production -- gating on it would silently disable
+                # this feature forever. Still never force-closes outright.
                 if now - _news_stop_last_check > 180 and open_assets:
                     _news_stop_last_check = now
+                    # NOTE: Railway's deploy deliberately excludes torch/transformers
+                    # (requirements-deploy.txt, saves 2GB RAM) -- FinBERT NEVER loads
+                    # in production, so gating this feature on it would silently kill
+                    # it forever. The relevance filter below is the real fix: both
+                    # real misfires (Avengers headline on SPY, Zcash headline on BTC)
+                    # were OFF-TOPIC headlines, not just mis-scored ones -- neither
+                    # would have passed _headline_mentions_asset. We log which scorer
+                    # is active once, for visibility, but don't block on it.
+                    if not _news_stop_last_check_warned[0]:
+                        _news_stop_last_check_warned[0] = True
+                        scorer = "FinBERT" if finbert_active() else "keyword fallback (FinBERT not installed on this deploy)"
+                        forensic_log.log_event_simple('news_trailing_stop_active', '*',
+                            f"News trailing-stop running with {scorer} sentiment scoring "
+                            f"+ mandatory relevance filter + 2-headline requirement")
                     for pos in list(engine.positions.values()):
-                        if pos.status != 'open':
-                            continue
-                        try:
-                            atype = ('crypto' if pos.asset in BINANCE_SYMBOLS else
-                                      'macro' if pos.asset in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
-                            arts = await fetch_asset_news(pos.asset, ASSET_NAMES.get(pos.asset, pos.asset), atype)
-                            seen = _news_stop_seen_headlines.setdefault(pos.asset, set())
-                            first_time = len(seen) == 0
-                            for a in arts:
-                                h = a.get('headline', '')
-                                hid = hash(h)
-                                if hid in seen:
-                                    continue
-                                seen.add(hid)
-                                if first_time:
-                                    continue  # baseline silently -- don't react to pre-existing news
-                                fresh = (now - a.get('ts', now)) < 900
-                                sent = a.get('sentiment', 0)
-                                strong = abs(sent) >= 0.5
-                                adverse = (pos.direction == 'BUY' and sent <= -0.5) or \
-                                          (pos.direction == 'SELL' and sent >= 0.5)
-                                if fresh and strong and adverse:
+                            if pos.status != 'open':
+                                continue
+                            try:
+                                atype = ('crypto' if pos.asset in BINANCE_SYMBOLS else
+                                          'macro' if pos.asset in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
+                                arts = await fetch_asset_news(pos.asset, ASSET_NAMES.get(pos.asset, pos.asset), atype)
+                                seen = _news_stop_seen_headlines.setdefault(pos.asset, set())
+                                first_time = len(seen) == 0
+                                qualifying = []
+                                for a in arts:
+                                    h = a.get('headline', '')
+                                    hid = hash(h)
+                                    if hid in seen:
+                                        continue
+                                    seen.add(hid)
+                                    if first_time:
+                                        continue  # baseline silently -- don't react to pre-existing news
+                                    if not _headline_mentions_asset(h, pos.asset):
+                                        continue  # off-topic -- the Zcash/Avengers case
+                                    fresh = (now - a.get('ts', now)) < 900
+                                    sent = a.get('sentiment', 0)
+                                    strong = abs(sent) >= 0.5
+                                    adverse = (pos.direction == 'BUY' and sent <= -0.5) or \
+                                              (pos.direction == 'SELL' and sent >= 0.5)
+                                    if fresh and strong and adverse:
+                                        qualifying.append((h, sent))
+                                if len(qualifying) >= 2:
                                     pr = await fetch_current_price(pos.asset)
                                     cur = pr.get('price', 0)
                                     if cur:
+                                        widen = 0.008 if get_asset_type(pos.asset) == 'crypto' else 0.005
+                                        h, sent = qualifying[0]
                                         if pos.direction == 'BUY':
-                                            tight = cur * 0.997
+                                            tight = cur * (1 - widen)
                                             if tight > pos.stop_loss:
                                                 pos.stop_loss = tight
                                                 forensic_log.log_event_simple('news_trailing_stop', pos.asset,
-                                                    f"Adverse headline tightened stop to \${tight:.2f}: \"{h[:80]}\" (sentiment {sent:+.2f})")
+                                                    f"{len(qualifying)} adverse relevant headlines tightened stop to \${tight:.2f}: "
+                                                    f"\"{h[:80]}\" (sentiment {sent:+.2f})")
                                         else:
-                                            tight = cur * 1.003
+                                            tight = cur * (1 + widen)
                                             if pos.stop_loss == 0 or tight < pos.stop_loss:
                                                 pos.stop_loss = tight
                                                 forensic_log.log_event_simple('news_trailing_stop', pos.asset,
-                                                    f"Adverse headline tightened stop to \${tight:.2f}: \"{h[:80]}\" (sentiment {sent:+.2f})")
-                                    break  # one tighten per position per check is enough
-                        except Exception:
-                            continue
+                                                    f"{len(qualifying)} adverse relevant headlines tightened stop to \${tight:.2f}: "
+                                                    f"\"{h[:80]}\" (sentiment {sent:+.2f})")
+                            except Exception:
+                                continue
         except Exception as e:
             print(f"[sentry] error: {e}")
         await asyncio.sleep(10)
@@ -1813,9 +1868,37 @@ async def _trading_position_monitor():
         try:
             open_positions = [p for p in engine.positions.values() if p.status == 'open']
             if open_positions:
+                # capture entry_time/confidence BEFORE closing -- check_all_positions
+                # mutates engine.positions, so pos objects are gone by the time we
+                # get `actions` back.
+                _pre_close = {p.id: (p.entry_time, p.direction, p.entry_price) for p in open_positions}
                 actions = await engine.check_all_positions(fetch_current_price)
                 for act in actions:
-                    print(f"Trading: auto-closed {act.get('asset')} ({act.get('reason')}) P&L: {act.get('pnl')}")
+                    asset = act.get('asset')
+                    reason = act.get('reason')
+                    pnl = act.get('pnl', 0)
+                    posinfo = act.get('position', {})
+                    direction = posinfo.get('direction')
+                    entry = posinfo.get('entry_price')
+                    exit_price = posinfo.get('exit_price')
+                    print(f"Trading: auto-closed {asset} ({reason}) P&L: {pnl}")
+                    # V6 FIX: mechanical stop/trailing/take-profit closes were
+                    # invisible before -- no forensic entry, no learning-memory
+                    # entry. 15 of 19 closes in one real run vanished this way.
+                    try:
+                        entry_time = None
+                        for pid, (etime, edir, eprice) in _pre_close.items():
+                            if edir == direction and abs(eprice - (entry or 0)) < 1e-6:
+                                entry_time = etime
+                                break
+                        hold_s = int(time.time()) - entry_time if entry_time else 0
+                        forensic_log.log_trade_close(
+                            asset, direction, entry, exit_price, pnl, reason,
+                            hold_seconds=hold_s, was_correct=pnl > 0,
+                        )
+                        record_lesson(asset, direction, entry, exit_price, pnl, reason)
+                    except Exception as _le:
+                        forensic_log.log_error(asset, 'mechanical_close_logging', str(_le)[:150])
 
                 # V5: Stale position timeout — close positions stuck for 6+ hours not making progress
                 now = int(time.time())
@@ -1845,6 +1928,10 @@ async def _trading_position_monitor():
                         if should_close:
                             close_result = await engine.close_position(pos.id, cur_price, 'stale_timeout')
                             stale_pnl = close_result.get('pnl', 0)
+                            forensic_log.log_trade_close(
+                                pos.asset, pos.direction, pos.entry_price, cur_price, stale_pnl,
+                                'stale_timeout', hold_seconds=int(hold_hours * 3600), was_correct=stale_pnl > 0,
+                            )
                             record_lesson(pos.asset, pos.direction, pos.entry_price, cur_price, stale_pnl, 'stale_timeout')
                             print(f"Trading: stale timeout {pos.asset} — {reason} — P&L: {stale_pnl}")
                     except Exception:
@@ -2288,6 +2375,7 @@ async def _run_prediction(req, worker, start_time, logs, slog):
         req.horizon, req.api_key, req.ds_key, db_sentiment,
         quant_brief=quant_brief, version=version,
         smart_money_ctx=smi_ctx,
+        breaking_context=getattr(req, 'breaking_context', None) or '',
     )
     slog(f"✓ News: {news_result.get('sentiment')} ({news_result.get('sentiment_score',0):+d}) — {news_result.get('reasoning','')[:60]}")
 
@@ -3714,6 +3802,7 @@ async def autotrader_start(req: AutotraderStartRequest):
     _sentry_wake_times.clear()
     _sentry_seen_headlines.clear()
     _news_stop_seen_headlines.clear()
+    _news_stop_last_check_warned[0] = False
     _sentry_price_cooldown.clear()
     _sentry_price_hist.clear()
     _seen_8k_ids.clear()
