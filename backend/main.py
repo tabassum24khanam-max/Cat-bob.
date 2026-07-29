@@ -144,10 +144,23 @@ def _is_ai_dead(result: dict) -> bool:
     return result.get('agent_model') == 'error' and quant_dir not in ('BUY', 'SELL')
 
 
-async def _manage_shadow_book(asset: str, direction: str, price: float):
-    """Cash-out cycle rules applied to the shadow brain's own paper ledger:
-    profit → close + reopen fresh direction; small loss → hold; hard stop or
-    time decay → close. Exits evaluated only at cycle boundaries."""
+async def _manage_shadow_book(asset: str, direction: str, price: float,
+                               shadow_version: int = 2, shadow_confidence: int = 0):
+    """Cash-out cycle rules applied to the shadow brain's own paper ledger.
+    The rules the shadow book follows must match the RULES of the shadow brain
+    itself -- otherwise the comparison is silently invalid. Before this fix,
+    the shadow book always followed V2 rules regardless of which brain was
+    shadow, so flipping ACTIVE V3 -> ACTIVE V2 would have graded a "V3 shadow"
+    that was actually trading V2's rules.
+
+    - V2 shadow: cash-out winners at any green, hold losers to hard-stop/time.
+    - V3 shadow: hold winners for the trailing stop; thesis-flip on adverse
+      high-conviction reads; time-decaying stop; breakeven lock. Simplified
+      but rule-matched to V3's active book -- shadow gets only cycle-boundary
+      granularity so intra-cycle trailing isn't simulated.
+
+    Exits evaluated only at cycle boundaries; this is not a live risk layer,
+    it's a scoreboard bookkeeper."""
     sh = get_shadow_engine()
     hard_stop_pct = _autotrader.get('hard_stop_pct', 5.0)
     max_hold = int(float(_autotrader.get('time_decay_hours', 7.0)) * 3600)
@@ -159,14 +172,37 @@ async def _manage_shadow_book(asset: str, direction: str, price: float):
         if pos.direction == 'SELL':
             pnl_pct = -pnl_pct
         age = int(time.time()) - pos.entry_time
-        if pnl_pct > 0:
-            await sh.close_position(pos.id, price, 'shadow_cashout')
-        elif pnl_pct <= -hard_stop_pct:
-            await sh.close_position(pos.id, price, 'shadow_hard_stop')
-        elif age > max_hold:
-            await sh.close_position(pos.id, price, 'shadow_time_decay')
+
+        if shadow_version >= 3:
+            # V3 shadow rules (must match _autotrader_loop's V3 branch)
+            if pnl_pct > 0 and direction == pos.direction:
+                # HOLD-LONG: don't clip a winner just because time passed
+                return
+            elif pnl_pct > 0 and direction != pos.direction and shadow_confidence >= 60:
+                # THESIS FLIP on a winner: V3 will follow high-conviction reversal
+                await sh.close_position(pos.id, price, 'shadow_thesis_flip')
+            elif pnl_pct > 0:
+                # Winner + agreeing direction + no strong reversal signal -> hold
+                return
+            elif pnl_pct < 0 and direction != pos.direction and shadow_confidence >= 60:
+                # THESIS FLIP on a loser
+                await sh.close_position(pos.id, price, 'shadow_thesis_flip')
+            elif pnl_pct <= -hard_stop_pct:
+                await sh.close_position(pos.id, price, 'shadow_hard_stop')
+            elif age > max_hold:
+                await sh.close_position(pos.id, price, 'shadow_time_decay')
+            else:
+                return
         else:
-            return  # holding the small loser — no reopen this cycle
+            # V2 shadow rules (original behavior, unchanged)
+            if pnl_pct > 0:
+                await sh.close_position(pos.id, price, 'shadow_cashout')
+            elif pnl_pct <= -hard_stop_pct:
+                await sh.close_position(pos.id, price, 'shadow_hard_stop')
+            elif age > max_hold:
+                await sh.close_position(pos.id, price, 'shadow_time_decay')
+            else:
+                return
     await sh.open_position(asset, direction, price, size,
                            stop_loss_pct=2.0, take_profit_pct=6.0, trailing=0.8)
 
@@ -242,7 +278,13 @@ def save_bot_state():
         sh = get_shadow_engine()
         state = {
             'saved_at': int(time.time()),
-            'autotrader': {k: v for k, v in _autotrader.items() if k != '_loop_running'},
+            # Filter out ephemeral runtime fields -- if we persist the sentry
+            # wake signal/count/reason, the next boot inherits a stale "BREAKING"
+            # trigger from before the restart and feeds a phantom reason to the
+            # first cycle's news agent. These belong to a live loop only.
+            'autotrader': {k: v for k, v in _autotrader.items()
+                            if k not in ('_loop_running', '_wake_signal', '_wake_count',
+                                          '_wake_reason', '_interval_start')},
             'engine': {
                 'equity': engine._equity, 'daily_pnl': engine.daily_pnl,
                 'positions': [_pos_asdict(p) for p in engine.positions.values()],
@@ -307,6 +349,12 @@ def load_bot_state() -> bool:
         saved = state.get('autotrader', {})
         _autotrader.update({k: v for k, v in saved.items() if k != '_loop_running'})
         _autotrader['_loop_running'] = False
+        # Belt-and-suspenders: even if an older saved state still has these
+        # ephemeral wake fields, clear them so the resumed loop starts clean.
+        _autotrader['_wake_signal'] = False
+        _autotrader['_wake_count'] = 0
+        _autotrader['_wake_reason'] = ''
+        _autotrader['_interval_start'] = int(time.time())
         age_min = (time.time() - state.get('saved_at', 0)) / 60
         engine = get_trading_engine()
         print(f"💾 Bot memory restored (saved {age_min:.0f} min ago): "
@@ -829,6 +877,10 @@ async def _ensure_ml_models_fresh(max_age_days: float = 7.0):
                 print(f"  ✓ {asset_name}: {r['n_train']} samples, {r['cv_accuracy']}% out-of-sample")
         except Exception as e:
             print(f"  ✗ {asset_name}: {str(e)[:80]}")
+        # Yield/breathe between assets so the 30s stop monitor and sentry get
+        # scheduled reliably even when 18 trainings queue up back-to-back on a
+        # small Railway box.
+        await asyncio.sleep(2)
     print("🎓 ML historical training complete")
 
 
@@ -1067,34 +1119,40 @@ async def _event_sentry_loop():
                         break
 
                 # ── 2. NEWS BURST — only BRAND-NEW headlines, each usable once ──
+                # Fetch every position's news IN PARALLEL. Sequential fetches
+                # blocked the 10s price-velocity watcher for 30-60s while news
+                # ran; parallel completes in the slowest single-asset time.
                 if now - _sentry_last_news > 300 and open_assets and _sentry_can_wake(now):
                     _sentry_last_news = now
-                    for asset in open_assets:
+                    async def _fetch_one(asset):
+                        atype = 'crypto' if asset in BINANCE_SYMBOLS else ('macro' if asset in ['GC=F','CL=F','SI=F'] else 'stock')
                         try:
-                            atype = 'crypto' if asset in BINANCE_SYMBOLS else ('macro' if asset in ['GC=F','CL=F','SI=F'] else 'stock')
                             arts = await fetch_asset_news(asset, ASSET_NAMES.get(asset, asset), atype)
-                            seen = _sentry_seen_headlines.setdefault(asset, set())
-                            first_time = len(seen) == 0
-                            new_hi = []
-                            for a in arts:
-                                h = a.get('headline', '')
-                                hid = hash(h)
-                                fresh = (now - a.get('ts', now)) < 1200
-                                strong = abs(a.get('sentiment', 0)) >= 0.5
-                                if fresh and strong and hid not in seen:
-                                    new_hi.append(a)
-                                seen.add(hid)  # every headline seen is remembered forever
-                            # First pass just baselines what already existed — never wakes
-                            if first_time:
-                                continue
-                            if len(new_hi) >= 2 and _sentry_can_wake(now):
-                                top = new_hi[0].get('headline', 'breaking news')[:90]
-                                _sentry_fire(now, asset,
-                                    f"{asset}: {len(new_hi)} brand-new high-impact headlines — top: {top}",
-                                    'sentry_news')
-                                break
+                            return (asset, arts)
                         except Exception:
+                            return (asset, [])
+                    burst_results = await asyncio.gather(*[_fetch_one(a) for a in open_assets],
+                                                          return_exceptions=False)
+                    for asset, arts in burst_results:
+                        seen = _sentry_seen_headlines.setdefault(asset, set())
+                        first_time = len(seen) == 0
+                        new_hi = []
+                        for a in arts:
+                            h = a.get('headline', '')
+                            hid = hash(h)
+                            fresh = (now - a.get('ts', now)) < 1200
+                            strong = abs(a.get('sentiment', 0)) >= 0.5
+                            if fresh and strong and hid not in seen:
+                                new_hi.append(a)
+                            seen.add(hid)  # every headline seen is remembered forever
+                        if first_time:
                             continue
+                        if len(new_hi) >= 2 and _sentry_can_wake(now):
+                            top = new_hi[0].get('headline', 'breaking news')[:90]
+                            _sentry_fire(now, asset,
+                                f"{asset}: {len(new_hi)} brand-new high-impact headlines — top: {top}",
+                                'sentry_news')
+                            break
 
                 # ── 3. SEC 8-K — brand-new material filing (stocks) ──
                 if now - _sentry_last_8k > 600 and open_assets and _sentry_can_wake(now):
@@ -1147,13 +1205,22 @@ async def _event_sentry_loop():
                         forensic_log.log_event_simple('news_trailing_stop_active', '*',
                             f"News trailing-stop running with {scorer} sentiment scoring "
                             f"+ mandatory relevance filter + 2-headline requirement")
-                    for pos in list(engine.positions.values()):
-                            if pos.status != 'open':
-                                continue
+                    # Fetch all positions' news in parallel -- was sequential (30-60s)
+                    # blocking the 10s price watcher; now completes in the slowest
+                    # single-asset time.
+                    open_positions_here = [p for p in list(engine.positions.values()) if p.status == 'open']
+                    async def _fetch_pos_news(pos):
+                        atype = ('crypto' if pos.asset in BINANCE_SYMBOLS else
+                                  'macro' if pos.asset in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
+                        try:
+                            arts = await fetch_asset_news(pos.asset, ASSET_NAMES.get(pos.asset, pos.asset), atype)
+                            return (pos, arts)
+                        except Exception:
+                            return (pos, [])
+                    pos_news_pairs = await asyncio.gather(*[_fetch_pos_news(p) for p in open_positions_here],
+                                                          return_exceptions=False) if open_positions_here else []
+                    for pos, arts in pos_news_pairs:
                             try:
-                                atype = ('crypto' if pos.asset in BINANCE_SYMBOLS else
-                                          'macro' if pos.asset in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
-                                arts = await fetch_asset_news(pos.asset, ASSET_NAMES.get(pos.asset, pos.asset), atype)
                                 seen = _news_stop_seen_headlines.setdefault(pos.asset, set())
                                 first_time = len(seen) == 0
                                 qualifying = []
@@ -1440,7 +1507,8 @@ async def _autotrader_loop():
                             )
                             if s_price and s_dir in ('BUY', 'SELL'):
                                 try:
-                                    await _manage_shadow_book(asset_name, s_dir, s_price)
+                                    await _manage_shadow_book(asset_name, s_dir, s_price,
+                                                              shadow_version=other_v, shadow_confidence=s_conf)
                                 except Exception as she:
                                     forensic_log.log_error(asset_name, 'shadow_book', str(she)[:150])
                 else:

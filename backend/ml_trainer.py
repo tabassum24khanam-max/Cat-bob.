@@ -201,8 +201,8 @@ async def train_asset(asset: str, horizon_bars: int = 1, max_samples: int = 8000
     if len(candles) < 500:
         return {"asset": asset, "ok": False, "error": f"only {len(candles)} history bars"}
 
-    Xh, yh = build_dataset(candles, horizon_bars=horizon_bars,
-                           max_samples=max_samples, deadband_pct=deadband_pct)
+    Xh, yh = await asyncio.to_thread(build_dataset, candles, horizon_bars,
+                                     300, max_samples, 1, deadband_pct)
     n_hist = len(Xh)
 
     n_our = 0
@@ -227,7 +227,7 @@ async def train_asset(asset: str, horizon_bars: int = 1, max_samples: int = 8000
     if len(np.unique(y)) < 2:
         return {"asset": asset, "ok": False, "error": "labels are single-class"}
 
-    trained = _train_models(X, y)
+    trained = await asyncio.to_thread(_train_models, X, y)
 
     model_data = {
         "xgb": trained["xgb"], "rf": trained["rf"],
