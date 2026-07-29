@@ -1868,10 +1868,6 @@ async def _trading_position_monitor():
         try:
             open_positions = [p for p in engine.positions.values() if p.status == 'open']
             if open_positions:
-                # capture entry_time/confidence BEFORE closing -- check_all_positions
-                # mutates engine.positions, so pos objects are gone by the time we
-                # get `actions` back.
-                _pre_close = {p.id: (p.entry_time, p.direction, p.entry_price) for p in open_positions}
                 actions = await engine.check_all_positions(fetch_current_price)
                 for act in actions:
                     asset = act.get('asset')
@@ -1881,16 +1877,12 @@ async def _trading_position_monitor():
                     direction = posinfo.get('direction')
                     entry = posinfo.get('entry_price')
                     exit_price = posinfo.get('exit_price')
+                    entry_time = act.get('entry_time')  # exact, from trading_engine -- no guessing
                     print(f"Trading: auto-closed {asset} ({reason}) P&L: {pnl}")
                     # V6 FIX: mechanical stop/trailing/take-profit closes were
                     # invisible before -- no forensic entry, no learning-memory
                     # entry. 15 of 19 closes in one real run vanished this way.
                     try:
-                        entry_time = None
-                        for pid, (etime, edir, eprice) in _pre_close.items():
-                            if edir == direction and abs(eprice - (entry or 0)) < 1e-6:
-                                entry_time = etime
-                                break
                         hold_s = int(time.time()) - entry_time if entry_time else 0
                         forensic_log.log_trade_close(
                             asset, direction, entry, exit_price, pnl, reason,

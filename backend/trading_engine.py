@@ -297,8 +297,10 @@ class TradingEngine:
                     continue
                 check = self.check_exit(pos, current_price)
                 if check['action'] == 'exit':
+                    entry_time_snapshot = pos.entry_time  # capture before close_position mutates status
                     close_result = await self.close_position(pos.id, current_price, check['reason'])
                     actions.append({**close_result, 'asset': pos.asset, 'reason': check['reason'],
+                                    'position_id': pos.id, 'entry_time': entry_time_snapshot,
                                     'position': {'direction': pos.direction, 'entry_price': pos.entry_price, 'exit_price': current_price}})
             except Exception:
                 continue
