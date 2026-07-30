@@ -27,7 +27,15 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                     headers={"Authorization": f"Bearer {ds_key}", "Content-Type": "application/json"},
                     json={
                         "model": DEEPSEEK_MODEL_FAST,
-                        "max_tokens": 600,
+                        # The V3 prompt (build_quant_prompt_v3) explicitly demands a
+                        # 4-step written reasoning process (own view -> evidence ->
+                        # contrast -> verdict) BEFORE the JSON. 600 was the same
+                        # truncation bug already found and fixed in news_agent.py
+                        # (500->1500) -- the narrative alone can exceed 600 tokens,
+                        # cutting the response off mid-JSON, so json.loads() throws,
+                        # gets silently swallowed below, and the quant agent goes
+                        # dark for the entire run with no trace of why.
+                        "max_tokens": 1500,
                         "messages": [
                             {"role": "system", "content": "You are an expert quantitative trading analyst. Respond ONLY with valid JSON."},
                             {"role": "user", "content": quant_prompt}
@@ -42,8 +50,13 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                         result = json.loads(m.group())
                         result['_quant_model'] = 'deepseek-v4'
                         return result
-        except Exception:
-            pass
+                    print(f"⚠ Quant agent (DeepSeek): no JSON found in response for {asset}. Preview: {text[:150]}")
+                else:
+                    print(f"⚠ Quant agent (DeepSeek) HTTP {resp.status_code} for {asset}: {resp.text[:150]}")
+        except Exception as e:
+            # Was a bare `pass` -- every DeepSeek failure (including the truncation
+            # bug above) was completely invisible. Now it's diagnosable from logs.
+            print(f"⚠ Quant agent (DeepSeek) failed for {asset}, falling back to OpenAI: {str(e)[:200]}")
 
     # Fallback: OpenAI GPT-4o-mini
     if not api_key or len(api_key) < 10:
@@ -55,7 +68,7 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
                     "model": "gpt-4o-mini",
-                    "max_tokens": 600,
+                    "max_tokens": 1500,
                     "messages": [{"role": "user", "content": quant_prompt}]
                 }
             )
@@ -67,8 +80,10 @@ async def run_quant_agent(asset: str, ind: dict, sim: dict, horizon: int,
                 result = json.loads(m.group())
                 result['_quant_model'] = 'gpt-4o-mini'
                 return result
+            print(f"⚠ Quant agent (OpenAI): no JSON found in response for {asset}. Preview: {text[:150]}")
             return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50, "confidence": 40, "reasoning": "Parse error"}
     except Exception as e:
+        print(f"⚠ Quant agent (OpenAI) failed for {asset}: {str(e)[:200]}")
         return {"direction": "NO_TRADE", "prob_up": 50, "prob_down": 50,
                 "confidence": 40, "reasoning": f"Quant agent error: {str(e)[:100]}"}
 
