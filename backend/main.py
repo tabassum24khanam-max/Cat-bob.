@@ -1888,6 +1888,7 @@ async def _autotrader_loop():
                             "flip_trigger": result.get('flip_trigger'),
                             "catalyst_override": result.get('catalyst_override'),
                             "ensemble": result.get('ensemble'),
+                            "genuine_unanimity": result.get('genuine_unanimity', False),
                         },
                         "quant": {
                             "direction": result.get('quant', {}).get('direction'),
@@ -1901,6 +1902,7 @@ async def _autotrader_loop():
                         },
                         "risk_notes": result.get('risk_evidence'),
                         "pipeline_version": result.get('pipeline_version'),
+                        "quant_dead": result.get('quant_dead', False),
                         "market_mode": market_mode,
                         "chop_severity": chop_severity if is_chop else 0,
                         "voter_weights": result.get('voter_weights'),
