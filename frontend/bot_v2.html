@@ -119,8 +119,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     </div>
     <div class="ctrl-row" style="margin-top:6px;gap:10px">
       <span style="font-size:7px;color:var(--muted)">ENGINE:</span>
-      <button class="int-btn active" id="b-ai-btn" onclick="bSetEngine('ai',this)">AI (DeepSeek)</button>
       <button class="int-btn" id="b-bot-btn" onclick="bSetEngine('bot',this)">BOT (ML only, $0)</button>
+      <button class="int-btn" id="b-hybrid-btn" onclick="bSetEngine('hybrid',this)">HYBRID (1 AI, ~1¢)</button>
+      <button class="int-btn active" id="b-ai-btn" onclick="bSetEngine('ai',this)">AI (3 AI, ~10¢)</button>
       <span style="font-size:6px;color:var(--muted);font-style:italic" id="b-engine-hint">(AI: real V2 LLM pipeline, same as V2 always ran)</span>
     </div>
     <div class="ctrl-row" style="margin-top:4px">
@@ -209,10 +210,15 @@ function bSetEngine(mode, btn) {
   localStorage.setItem('um_v2_engine', mode);
   document.getElementById('b-ai-btn').classList.toggle('active', mode === 'ai');
   document.getElementById('b-bot-btn').classList.toggle('active', mode === 'bot');
+  document.getElementById('b-hybrid-btn').classList.toggle('active', mode === 'hybrid');
   const hint = document.getElementById('b-engine-hint');
-  hint.textContent = mode === 'bot'
-    ? '(BOT: zero-LLM — the trained ML ensemble decides directly, no API cost, no news awareness)'
-    : '(AI: real V2 LLM pipeline, same as V2 always ran)';
+  if (mode === 'bot') {
+    hint.textContent = '(BOT: zero-LLM — the trained ML ensemble decides directly, no API cost, no news awareness)';
+  } else if (mode === 'hybrid') {
+    hint.textContent = '(HYBRID: 1 real AI call — the decision agent only. Quant + news are free ML/indicator + headline-sentiment stand-ins, not LLM reads)';
+  } else {
+    hint.textContent = '(AI: real V2 LLM pipeline, same as V2 always ran — 3 AI calls: quant, news, decision)';
+  }
 }
 
 let lastAiHealth = null;
@@ -226,7 +232,7 @@ async function checkAiHealth() {
     const f = (n,s) => `${n}: ${s.ok ? '✓ OK' : (s.configured ? '✗ ' + s.detail : 'not set')}`;
     el.innerHTML = h.any_ok
       ? `<span style="color:#00e676">🧠 AI ONLINE — ${f('DeepSeek',h.deepseek)} | ${f('OpenAI',h.openai)}</span>`
-      : `<span style="color:#ff1744;font-weight:700">🧠 AI OFFLINE — only matters in AI engine mode; BOT mode doesn't need this.</span>`;
+      : `<span style="color:#ff1744;font-weight:700">🧠 AI OFFLINE — only matters in AI/HYBRID engine mode; BOT mode doesn't need this.</span>`;
     return h;
   } catch(e) {
     if (el) el.textContent = '🧠 AI key check failed: ' + e.message;
@@ -235,7 +241,7 @@ async function checkAiHealth() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  bSetEngine(bEngine, bEngine === 'bot' ? document.getElementById('b-bot-btn') : document.getElementById('b-ai-btn'));
+  bSetEngine(bEngine);
   checkAiHealth();
 });
 
@@ -255,7 +261,7 @@ async function bToggle() {
     bRunning = false;
   } else {
     if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
-    if (bEngine === 'ai') {
+    if (bEngine === 'ai' || bEngine === 'hybrid') {
       const health = await checkAiHealth();
       if (health && !health.any_ok) {
         if (!confirm('⚠ AI KEYS ARE FAILING — every LLM call is being rejected.\n\nThe bot will skip every asset (it refuses to trade blind).\nStart anyway, or switch to BOT (ML only, $0) engine instead?')) { btn.disabled=false; return; }
