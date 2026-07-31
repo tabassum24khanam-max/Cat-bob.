@@ -23,6 +23,7 @@ from database import (init_db, get_predictions, save_prediction, update_predicti
 from data_fetcher import fetch_candles, fetch_candles_before, fetch_macro, fetch_fear_greed, fetch_onchain, fetch_current_price
 from indicators import compute_indicators, monte_carlo
 from ml_engine import predict_ensemble, train_ensemble, bayesian_confidence, extract_features
+from meta_model import meta_probability, train_meta_model, meta_status
 from agents.quant_agent import run_quant_agent, build_quant_prompt, build_quant_prompt_v3
 from agents.news_agent import fetch_asset_news, filter_headlines_ai, run_news_agent, finbert_active
 from agents.decision_agent import run_decision_agent
@@ -1387,6 +1388,18 @@ async def _autotrader_loop():
             return
 
         interval = max(10, _autotrader['interval_minutes']) * 60
+        # CYCLE-RATE ALARM: independent of the sentry's own budget (which has
+        # already been the source of one real runaway bug this session) --
+        # this catches ANY future path that makes cycles fire too fast,
+        # sentry-related or not. Pure observability, changes no behavior.
+        _prev_cycle_ts = _autotrader.get('last_cycle', 0)
+        _gap_s = int(time.time()) - _prev_cycle_ts if _prev_cycle_ts else interval
+        if _prev_cycle_ts and _gap_s < min(600, interval * 0.34):
+            forensic_log.log_event_simple('cycle_rate_alarm', '*',
+                f"Cycle fired {_gap_s}s after the previous one (configured interval "
+                f"is {interval}s) -- well outside the sentry's own >=600s floor. "
+                f"Investigate: this pattern preceded a real runaway bug before.")
+            print(f"⚠⚠ CYCLE-RATE ALARM: only {_gap_s}s since last cycle (interval={interval}s)")
         _autotrader['status'] = 'running'
         _autotrader['last_cycle'] = int(time.time())
         _autotrader['total_cycles'] += 1
@@ -1408,6 +1421,29 @@ async def _autotrader_loop():
             cycle, _autotrader['assets'], _autotrader['interval_minutes'],
             engine._equity, _autotrader.get('trade_size', 0), engine.paper_mode,
         )
+
+        # ── DAILY DRAWDOWN CIRCUIT BREAKER — checked ONCE per cycle, not per
+        # asset. The old 5% check only skipped opening a NEW position on the
+        # asset that happened to trip it; existing positions kept running and
+        # the bot kept trying every other asset. A real circuit breaker stops
+        # the whole machine and says so loudly, the same way a real trading
+        # desk would halt for the day rather than quietly keep placing bets.
+        _dd_pct = (engine.daily_pnl / engine._equity * 100) if engine._equity else 0
+        if _dd_pct <= -5.0:
+            _autotrader['enabled'] = False
+            _autotrader['status'] = 'stopped'
+            _autotrader['_loop_running'] = False  # every other exit path clears this; must match
+            forensic_log.log_event_simple('circuit_breaker', '*',
+                f"DAILY DRAWDOWN CIRCUIT BREAKER: {_dd_pct:+.2f}% (${engine.daily_pnl:+,.2f}) -- "
+                f"autotrader STOPPED. Existing positions remain open under their own stops; "
+                f"no new cycles will run until manually restarted.")
+            asyncio.create_task(send_message(
+                f"🛑 CIRCUIT BREAKER: daily P&L {_dd_pct:+.2f}% (${engine.daily_pnl:+,.2f}) -- "
+                f"autotrader STOPPED for the day. Existing positions still protected by their own "
+                f"stops. Restart manually when ready."
+            ))
+            save_bot_state()
+            break
 
         cycle_summary = []
 
@@ -1770,6 +1806,41 @@ async def _autotrader_loop():
                     asset_factor = _get_asset_size_factor(asset_name)
                     size = round(base_size * pqs_scale * asset_factor * adx_scale * chop_scale, 2)
 
+                # ── META-LABELING SIZE (V3 only): a second model trained on the
+                # PRIMARY system's own track record, answering "given the machine
+                # just said BUY/SELL under these exact conditions, what's the odds
+                # it's actually right?" That probability scales the bet -- not the
+                # primary's own confidence, which is unreliable, but a model that
+                # has actually been graded against outcomes. Primary stays ~51%;
+                # this finds the slice where IT is trustworthy and starves the rest.
+                # No model yet (<40 rated samples) -> neutral, unchanged sizing.
+                # Captured BEFORE scaling so the unanimity floor below works
+                # whether the user set a fixed trade_size or auto/Kelly sizing --
+                # base_size/asset_factor don't exist on the fixed-size path.
+                _pre_meta_size = size
+                if pipe_version >= 3:
+                    _meta_p = meta_probability(
+                        confidence, result.get('ml', {}).get('score'),
+                        result.get('ind', {}), direction, get_asset_type(asset_name),
+                    )
+                    if _meta_p is not None:
+                        if _meta_p < 0.50:
+                            meta_scale = 0.15
+                        elif _meta_p < 0.55:
+                            meta_scale = 0.40
+                        elif _meta_p < 0.58:
+                            meta_scale = 0.70
+                        else:
+                            meta_scale = min(1.75, 1.0 + (_meta_p - 0.58) * 5)
+                        size = round(size * meta_scale, 2)
+                        print(f"  {asset_name}: META-LABEL p={_meta_p:.2f} — size scale {meta_scale:.2f}x")
+                    # Genuine unanimity (bull-framed, bear-framed, AND neutral runs
+                    # all agreed) is the rare real conviction event -- bet it fully,
+                    # a floor on top of whatever the meta-model already set.
+                    if result.get('genuine_unanimity'):
+                        size = round(max(size, _pre_meta_size * 1.2), 2)
+                        print(f"  {asset_name}: GENUINE UNANIMITY — size floor raised to ${size:.0f}")
+
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
                     tp_pct = sl_pct * 3.0
@@ -1860,9 +1931,10 @@ async def _autotrader_loop():
                         })
                     except Exception as _se:
                         forensic_log.log_error(asset_name, 'save_our_data', str(_se)[:120])
-                    msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}"
+                    _quorum_tag = " [QUORUM 2/3 - quant dead]" if result.get('quant_dead') else ""
+                    msg = f"OPENED {direction} {asset_name} @ ${price:,.2f} size=${size:.0f} conf={confidence}% PQS={pqs_score}{_quorum_tag}"
                     print(f"  >>> {msg}")
-                    cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}")
+                    cycle_summary.append(f"{asset_name}: {direction} ${size:.0f}{_quorum_tag}")
                     asyncio.create_task(send_message(f"🤖 AUTO-TRADE: {msg}"))
                 else:
                     cycle_summary.append(f"{asset_name}: trade failed ({trade_result.get('error', '?')})")
@@ -2279,13 +2351,11 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                                               req.api_key, req.ds_key, keep=headline_keep)
     slog(f"✓ {len(articles)} headlines after AI filter")
 
-    # V3: raw news brief for the quant analyst (cross-visibility, pre-analysis)
+    # BLINDED (was: raw news brief fed to quant pre-analysis). An agent that
+    # reads the other's read before forming its own isn't an independent voice
+    # -- it's anchored. Quant now forms its view from indicators alone; the
+    # judge is where the two independent reads get weighed against each other.
     news_brief = ""
-    if version >= 3 and articles:
-        top = articles[:5]
-        avg_sent = sum(a.get('sentiment', 0) for a in articles) / len(articles)
-        news_brief = (f"avg sentiment {avg_sent:+.2f} across {len(articles)} headlines; top: "
-                      + " | ".join(a['headline'][:80] for a in top))
 
     # Get DB sentiment memory
     db_news = await get_news_history(req.asset, 24)
@@ -2363,7 +2433,14 @@ async def _run_prediction(req, worker, start_time, logs, slog):
                                            bot_mode=getattr(req, 'bot_mode', False))
     quant_result = await run_quant_agent(req.asset, ind, mc, req.horizon, quant_prompt, req.api_key, ds_key=req.ds_key or '')
     slog(f"✓ Quant[{quant_result.get('_quant_model','?')}]: {quant_result.get('direction')} {quant_result.get('confidence')}% — {quant_result.get('reasoning','')[:60]}")
-    if not quant_result.get('_quant_model'):
+    # QUORUM RULE: the quant agent has gone silently dead for entire runs
+    # twice now, invisible on the dashboard, only found by reading the
+    # exported forensic log after the fact. This flag now travels with the
+    # response so the cycle summary (what the dashboard actually shows)
+    # says it plainly, and the V3 blend below applies a real penalty instead
+    # of quietly running the judge on 2 of 3 voices as if nothing happened.
+    quant_dead = not quant_result.get('_quant_model')
+    if quant_dead:
         slog(f"⚠⚠ QUANT AGENT FAILED — no LLM reachable (bad key / no credit?): {quant_result.get('reasoning','')[:90]}")
 
     # ── Bayesian + 4-way confidence blending ────────────────────────────
@@ -2425,10 +2502,10 @@ async def _run_prediction(req, worker, start_time, logs, slog):
 
     # ── Agent 2: News ────────────────────────────────────────────────────
     slog(f"📰 Agent 2 (News/{'DeepSeek V4' if req.ds_key else 'GPT-4o-mini'}) analyzing...")
+    # BLINDED (was: quant's direction+reasoning fed to news pre-analysis) --
+    # same anchoring problem in the other direction. News now forms its read
+    # from headlines alone.
     quant_brief = ""
-    if version >= 3:
-        quant_brief = (f"{quant_result.get('direction')} at {quant_result.get('confidence')}% — "
-                       f"{(quant_result.get('reasoning') or '')[:160]}")
     news_result = await run_news_agent(
         req.asset, ASSET_NAMES.get(req.asset, req.asset), asset_type,
         articles, macro_data, onchain_data, fg_data, {},
@@ -2495,10 +2572,17 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
     if humility_ctx:
         recent_trades_ctx = humility_ctx + "\n" + recent_trades_ctx if recent_trades_ctx else humility_ctx
 
-    # V6: Judge ensemble — run 3 votes, majority wins (V3 only, costs 3x tokens)
+    # Judge ensemble — 3 votes with GENUINELY DIFFERENT framings (bull/bear/
+    # neutral), not the same prompt resampled 3x. Running one prompt through
+    # one model three times measures sampling temperature, not disagreement --
+    # it can't produce a real conviction signal because there's no independent
+    # error to cancel out. Forcing one run to steelman the bull case and
+    # another to steelman the bear case means unanimity across them is a real,
+    # rare event: the machine tried hard to argue against itself and failed.
+    # THAT'S the high-confidence trigger -- not a bigger number, a rarer one.
     if version >= 3 and not getattr(req, 'shadow', False):
         ensemble_results = []
-        for _vote_i in range(3):
+        for _framing in ('bull', 'bear', 'neutral'):
             _vote = await run_decision_agent(
                 req.asset, ind, req.horizon, quant_result, news_result,
                 mtf_data, mc, similar, req.ds_key or '', req.api_key, use_r1,
@@ -2510,24 +2594,29 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
                 risk_evidence=risk_evidence,
                 bot_mode=getattr(req, 'bot_mode', False),
                 version=version,
+                framing=_framing,
             )
             ensemble_results.append(_vote)
         buy_votes = sum(1 for r in ensemble_results if r.get('decision') == 'BUY')
         sell_votes = sum(1 for r in ensemble_results if r.get('decision') == 'SELL')
+        genuine_unanimity = (buy_votes == 3 or sell_votes == 3)
         if buy_votes >= 2:
             decision = max([r for r in ensemble_results if r.get('decision') == 'BUY'],
                           key=lambda r: r.get('confidence', 0))
-            decision['_ensemble'] = f"BUY {buy_votes}/3 votes"
+            decision['_ensemble'] = f"BUY {buy_votes}/3 votes (bull/bear/neutral framings)"
         elif sell_votes >= 2:
             decision = max([r for r in ensemble_results if r.get('decision') == 'SELL'],
                           key=lambda r: r.get('confidence', 0))
-            decision['_ensemble'] = f"SELL {sell_votes}/3 votes"
+            decision['_ensemble'] = f"SELL {sell_votes}/3 votes (bull/bear/neutral framings)"
         else:
             decision = max(ensemble_results, key=lambda r: r.get('confidence', 0))
-            decision['_ensemble'] = "split vote — highest confidence wins"
+            decision['_ensemble'] = "split vote (bull/bear/neutral disagree) — highest confidence wins"
         avg_conf = sum(r.get('confidence', 50) for r in ensemble_results) / 3
         decision['confidence'] = int(round(avg_conf))
-        slog(f"✓ V6 Judge ensemble: {decision.get('_ensemble')} → {decision.get('decision')} {decision['confidence']}%")
+        decision['_genuine_unanimity'] = genuine_unanimity
+        if genuine_unanimity:
+            slog(f"⭐ GENUINE UNANIMITY: bull-framed, bear-framed, AND neutral-framed runs all landed on {decision.get('decision')} — rare, real conviction signal")
+        slog(f"✓ Judge ensemble: {decision.get('_ensemble')} → {decision.get('decision')} {decision['confidence']}%")
     else:
         decision = await run_decision_agent(
             req.asset, ind, req.horizon, quant_result, news_result,
@@ -2965,6 +3054,8 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         "primary_reason": decision.get('primary_reason', ''),
         "agent_model": decision.get('_model', 'gpt-4o'),
         "ensemble": decision.get('_ensemble'),
+        "genuine_unanimity": decision.get('_genuine_unanimity', False),
+        "quant_dead": quant_dead,
         "voter_weights": decision.get('_voter_weights'),
         "original_decision": decision.get('_original_decision'),
         "gate_reason": gate_reason,
@@ -4384,6 +4475,19 @@ async def _periodic_retrain_check():
             get_rl_lite().decay_unused()
         except Exception as e:
             print(f"[V5] Retrain check error: {e}")
+        # Meta-labeling model: trains on ALL assets' rated predictions pooled
+        # together (it predicts "is the primary system trustworthy right now,"
+        # not price -- more pooled samples make it more robust, not less).
+        # Heavy sklearn fit -> off the event loop, same lesson as the ML
+        # trainer freeze bug found earlier this session.
+        try:
+            all_rated = await get_predictions(None, 3000)
+            meta_result = await asyncio.to_thread(train_meta_model, all_rated)
+            if meta_result.get('ok'):
+                print(f"[meta] retrained: n={meta_result['n_train']} "
+                      f"cv_accuracy={meta_result.get('cv_accuracy')}%")
+        except Exception as e:
+            print(f"[meta] retrain error: {e}")
         await asyncio.sleep(6 * 3600)  # every 6 hours
 
 
@@ -4444,6 +4548,83 @@ async def ml_train_historical(assets: str = None, horizon_bars: int = 1):
         "trained": len(ok), "total": len(results),
         "avg_cv_accuracy": round(sum(r['cv_accuracy'] for r in ok) / len(ok), 1) if ok else None,
         "results": results,
+    }
+
+
+@app.get("/meta/status")
+async def meta_model_status():
+    """Status of the meta-labeling model: given the primary system just called
+    BUY/SELL under these conditions, what's the odds it's right? This is what
+    actually drives position sizing now, not the primary's own confidence."""
+    return meta_status()
+
+
+@app.post("/meta/train")
+async def meta_model_train():
+    """Manually trigger a meta-model retrain (normally runs every 6h)."""
+    all_rated = await get_predictions(None, 3000)
+    result = await asyncio.to_thread(train_meta_model, all_rated)
+    return result
+
+
+@app.get("/calibration")
+async def calibration_curve(asset: str = None, min_per_bucket: int = 5):
+    """The single most important honesty check in the whole system: when the
+    judge says 55% confidence, does that trade actually win ~55% of the time?
+    If this curve is flat/wrong, the confidence number is decoration and every
+    downstream decision (sizing, meta-labeling, conviction gates) rests on
+    sand. Buckets every rated prediction by confidence decile and reports the
+    REAL win rate in each bucket, plus isotonic-regression-ready raw pairs."""
+    preds = await get_predictions(asset, 2000)
+    rated = [p for p in preds if p.get('feedback') in ('correct', 'wrong') and p.get('confidence') is not None]
+    if len(rated) < 10:
+        return {"available": False, "reason": f"need 10+ rated predictions, have {len(rated)}"}
+
+    buckets = {}
+    for p in rated:
+        conf = p['confidence']
+        bucket = min(95, max(45, int(conf // 5) * 5))  # 5-point buckets, 45-95
+        b = buckets.setdefault(bucket, {'n': 0, 'wins': 0})
+        b['n'] += 1
+        if p['feedback'] == 'correct':
+            b['wins'] += 1
+
+    curve = []
+    total_abs_gap = 0.0
+    n_meaningful = 0
+    for bucket in sorted(buckets):
+        b = buckets[bucket]
+        if b['n'] < min_per_bucket:
+            continue
+        actual = b['wins'] / b['n'] * 100
+        gap = actual - bucket  # positive = underconfident, negative = overconfident
+        curve.append({
+            "confidence_bucket": bucket, "n": b['n'],
+            "actual_win_rate": round(actual, 1), "gap": round(gap, 1),
+        })
+        total_abs_gap += abs(gap) * b['n']
+        n_meaningful += b['n']
+
+    mean_abs_gap = round(total_abs_gap / n_meaningful, 1) if n_meaningful else None
+    verdict = "not enough data yet"
+    if mean_abs_gap is not None:
+        if mean_abs_gap <= 5:
+            verdict = "well-calibrated -- confidence numbers are trustworthy"
+        elif mean_abs_gap <= 12:
+            verdict = "moderately miscalibrated -- consider isotonic recalibration"
+        else:
+            verdict = "POORLY CALIBRATED -- confidence is close to decoration; fix before trusting sizing off it"
+
+    return {
+        "available": True,
+        "asset": asset or "all assets",
+        "n_rated": len(rated),
+        "curve": curve,
+        "mean_absolute_calibration_gap": mean_abs_gap,
+        "verdict": verdict,
+        "note": "gap = actual_win_rate - confidence_bucket. Positive means the system is "
+                "UNDERconfident in that bucket (real edge exceeds stated); negative means "
+                "OVERconfident (stated confidence exceeds real edge -- the dangerous direction).",
     }
 
 
