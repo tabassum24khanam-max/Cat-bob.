@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>ULTRAMAX BOT — Autonomous Trading</title>
+<title>ULTRAMAX BOT — V2 Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.7/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 :root {
@@ -63,41 +63,20 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .tab-btn.active { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
 
 .rec-box { padding: 10px 14px; font-size: 10px; border-bottom: 1px solid var(--border); }
-
-/* Feature Panel */
-.feature-panel { position: fixed; top: 0; right: 0; bottom: 0; width: 320px; max-width: 90vw; background: var(--bg); border-left: 1px solid var(--border); z-index: 250; display: none; flex-direction: column; transform: translateX(100%); transition: transform .25s ease; }
-.feature-panel.on { display: flex; transform: translateX(0); }
-.fp-hdr { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface); gap: 10px; }
-.fp-title { font-family: 'Bebas Neue'; font-size: 18px; letter-spacing: 2px; color: var(--cyan); }
-.fp-close { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
-.fp-body { flex: 1; overflow-y: auto; padding: 12px; }
-.fp-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 10px; }
-.fp-item-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.fp-item-label { font-size: 10px; color: var(--text); font-weight: 700; flex: 1; }
-.fp-item-desc { font-size: 8px; color: var(--muted); line-height: 1.5; }
-.fp-item-status { font-size: 7px; margin-top: 6px; padding: 2px 6px; border-radius: 3px; display: inline-block; }
-.fp-item-status.applied { background: rgba(0,230,118,.1); color: var(--green); }
-.fp-item-status.skipped { background: rgba(255,23,68,.1); color: var(--red); }
-.fp-item-status.idle { background: rgba(45,77,110,.2); color: var(--muted); }
-.fp-reset { width: 100%; margin-top: 8px; padding: 8px; background: none; border: 1px solid var(--border); color: var(--muted); font-family: 'Space Mono'; font-size: 8px; border-radius: 4px; cursor: pointer; }
-.fp-reset:hover { border-color: var(--cyan); color: var(--cyan); }
-.toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
-.toggle input { opacity: 0; width: 0; height: 0; }
-.toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: var(--dim); border-radius: 20px; transition: .2s; }
-.toggle .slider:before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: var(--muted); border-radius: 50%; transition: .2s; }
-.toggle input:checked + .slider { background: rgba(0,229,255,.25); }
-.toggle input:checked + .slider:before { transform: translateX(16px); background: var(--cyan); }
 </style>
 </head>
 <body>
 <div class="app">
   <!-- Header -->
   <div class="hdr">
-    <div class="logo">ULTRAMAX BOT</div>
+    <div class="logo">ULTRAMAX BOT — V2</div>
     <a href="/" class="nav-btn">PREDICT MODE</a>
-    <a href="/bot2" class="nav-btn" style="color:#ffd600;border-color:#ffd600">V2 DASHBOARD ↗</a>
-    <button class="nav-btn" onclick="openFeatures()" style="color:#ab47bc;border-color:#ab47bc">FEATURES</button>
+    <a href="/bot" class="nav-btn">V3 DASHBOARD ↗</a>
     <div class="status-badge" id="b-badge" style="background:var(--dim);color:var(--muted)">STOPPED</div>
+  </div>
+
+  <div style="font-size:8px;color:#ffd600;padding:6px 14px;background:#141400;border-bottom:1px solid #333">
+    This is an INDEPENDENT bot — its own paper money, its own clock, separate from the V3 dashboard and from Compare Mode. Pick an engine below.
   </div>
 
   <!-- Stats Row 1: Core -->
@@ -108,7 +87,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="stat"><div class="stat-lbl">WIN RATE</div><div class="stat-val" id="b-wr">—</div></div>
     <div class="stat"><div class="stat-lbl">CYCLES</div><div class="stat-val" id="b-cycles" style="color:var(--text)">0</div></div>
   </div>
-  <!-- Stats Row 2: Mark-to-Market (the REAL numbers) -->
+  <!-- Stats Row 2: Mark-to-Market -->
   <div class="stats-bar" style="border-top:1px solid rgba(255,214,0,.15)">
     <div class="stat"><div class="stat-lbl" style="color:#ffd600">REAL EQUITY</div><div class="stat-val" id="b-mtm-equity" style="color:#ffd600">—</div></div>
     <div class="stat"><div class="stat-lbl" style="color:#ffd600">UNREALIZED</div><div class="stat-val" id="b-unrealized">—</div></div>
@@ -117,8 +96,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="stat"><div class="stat-lbl" style="color:#ffd600">W / L OPEN</div><div class="stat-val" id="b-wl-open" style="color:var(--text)">—</div></div>
   </div>
 
-  <!-- Recommendation -->
-  <div class="rec-box" id="b-rec" style="color:var(--muted)">Select assets and press START to begin autonomous trading.</div>
+  <div class="rec-box" id="b-rec" style="color:var(--muted)">Select assets, pick an engine, and press START.</div>
 
   <!-- Controls -->
   <div class="section">
@@ -138,26 +116,13 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
     <div class="ctrl-row" style="margin-top:6px">
       <button class="cash-btn" onclick="bCashout()">CASHOUT ALL</button>
       <button class="cash-btn" style="border-color:#00e676;color:#00e676;font-weight:700" onclick="bCashoutWinners()">CASHOUT WINNERS</button>
-      <button class="cash-btn" style="border-color:#ff5252;color:#ff5252" onclick="bReset()">RESET ALL</button>
-      <button class="cash-btn" style="border-color:#00e5ff;color:#00e5ff" onclick="bExport()">📥 EXPORT LOG</button>
     </div>
     <div class="ctrl-row" style="margin-top:6px;gap:10px">
-      <span style="font-size:7px;color:var(--muted)">BRAIN:</span>
-      <button class="int-btn active" id="b-v3-btn" onclick="bSetVersion(3,this)">V3 NEW BRAIN</button>
-      <button class="int-btn" id="b-v2-btn" onclick="bSetVersion(2,this)">V2.4 CLASSIC</button>
-      <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px;margin-left:8px">
-        <input type="checkbox" id="b-compare-chk" onchange="localStorage.setItem('um_compare', this.checked?'1':'0')">
-        COMPARE MODE <span style="font-size:6px;font-style:italic">(runs both brains — 2× API cost)</span>
-      </label>
-      <label style="font-size:7px;color:var(--yellow);display:flex;align-items:center;gap:4px;margin-left:8px">
-        <input type="checkbox" id="b-forcetrade-chk" checked onchange="localStorage.setItem('um_force_trade', this.checked?'1':'0'); bUpdateForceTradeHint()">
-        FORCE TRADE <span style="font-size:6px;font-style:italic" id="b-forcetrade-hint">(ON: trades every interval, no matter what)</span>
-      </label>
-      <a href="bot?brain=shadow" target="_blank" style="font-size:7px;color:#00e5ff;margin-left:6px">OPEN 2ND DASHBOARD ↗</a>
-      <span id="b-vscore" style="font-size:7px;color:var(--cyan);margin-left:auto"></span>
+      <span style="font-size:7px;color:var(--muted)">ENGINE:</span>
+      <button class="int-btn active" id="b-ai-btn" onclick="bSetEngine('ai',this)">AI (DeepSeek)</button>
+      <button class="int-btn" id="b-bot-btn" onclick="bSetEngine('bot',this)">BOT (ML only, $0)</button>
+      <span style="font-size:6px;color:var(--muted);font-style:italic" id="b-engine-hint">(AI: real V2 LLM pipeline, same as V2 always ran)</span>
     </div>
-    <div style="font-size:8px;color:var(--muted);padding:2px 14px" id="b-v6info">V6 upgrades active</div>
-    <div style="font-size:8px;padding:2px 14px" id="b-sentry-panel">Sentry: idle</div>
     <div class="ctrl-row" style="margin-top:4px">
       <span id="b-ai-health" style="font-size:7px;color:var(--muted)">🧠 checking AI keys…</span>
     </div>
@@ -166,22 +131,22 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
         STARTING EQUITY ($):
         <input id="b-equity-input" type="number" min="100" step="100" value="10000"
                style="width:90px;background:#0a0a0a;color:var(--cyan);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
-               onchange="localStorage.setItem('um_at_equity', this.value)">
+               onchange="localStorage.setItem('um_v2_equity', this.value)">
       </label>
       <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
         TRADE SIZE ($, 0=auto):
         <input id="b-size-input" type="number" min="0" step="10" value="0"
                style="width:90px;background:#0a0a0a;color:var(--cyan);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
-               onchange="localStorage.setItem('um_at_size', this.value)">
+               onchange="localStorage.setItem('um_v2_size', this.value)">
       </label>
       <label style="font-size:7px;color:var(--muted);display:flex;align-items:center;gap:4px">
         HARD STOP (%):
         <input id="b-hardstop-input" type="number" min="1" max="10" step="0.5" value="5"
                style="width:60px;background:#0a0a0a;color:var(--red);border:1px solid #333;font-family:inherit;font-size:9px;padding:3px 6px"
-               onchange="localStorage.setItem('um_at_hardstop', this.value)">
+               onchange="localStorage.setItem('um_v2_hardstop', this.value)">
       </label>
       <span style="font-size:6px;color:var(--muted);font-style:italic">
-        Cash-out cycles: profit → close + reopen | loss → hold until recovery | hard stop = emergency exit
+        Classic V2 exits: profit → close + reopen | loss → hold until recovery/hard stop
       </span>
     </div>
   </div>
@@ -190,11 +155,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div class="tab-bar" id="b-chart-tabs"></div>
   <div id="bot-chart"></div>
 
-  <!-- Tabs: Positions / Trades / Learning / System Log -->
+  <!-- Tabs: Positions / Trades / System Log -->
   <div class="tab-bar">
     <button class="tab-btn active" onclick="bShowTab('positions',this)">POSITIONS</button>
     <button class="tab-btn" onclick="bShowTab('trades',this)">TRADES</button>
-    <button class="tab-btn" onclick="bShowTab('learning',this)">LEARNING</button>
     <button class="tab-btn" onclick="bShowTab('syslog',this)">SYSTEM LOG</button>
   </div>
 
@@ -204,33 +168,19 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   <div id="bt-trades" class="section" style="display:none;min-height:120px">
     <div id="b-trades-list" style="color:var(--muted);font-size:8px">No trades yet</div>
   </div>
-  <div id="bt-learning" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
-    <div id="b-learning-list" style="color:var(--muted);font-size:8px">No lessons yet — the bot learns from each closed trade</div>
-  </div>
   <div id="bt-syslog" class="section" style="display:none;min-height:120px;max-height:300px;overflow-y:auto">
     <div id="b-syslog-list" style="color:var(--muted);font-size:8px">Waiting for bot to start...</div>
   </div>
 </div>
 
-<!-- Feature Panel -->
-<div class="feature-panel" id="feature-panel">
-  <div class="fp-hdr">
-    <div class="fp-title">FEATURES</div>
-    <div style="font-size:7px;color:var(--muted)">Toggle ON/OFF to A/B test</div>
-    <button class="fp-close" onclick="closeFeatures()">&#10005;</button>
-  </div>
-  <div class="fp-body" id="fp-body">
-    <div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">Loading features...</div>
-  </div>
-</div>
-
 <script>
 const backendUrl = localStorage.getItem('um_backend') || window.location.origin;
-let bAssets = JSON.parse(localStorage.getItem('um_at_assets') || '["BTC","ETH","SOL"]');
+let bAssets = JSON.parse(localStorage.getItem('um_v2_assets') || '["BTC","ETH","SOL"]');
 let bInterval = 30;
 let bRunning = false;
 let bChartAsset = 'BTC';
 let bChartInst = null, bMainSeries = null;
+let bEngine = localStorage.getItem('um_v2_engine') || 'ai';
 
 const ALL = ['BTC','ETH','SOL','BNB','XRP','DOGE','AAPL','TSLA','NVDA','MSFT','GOOGL','SPY','GC=F','CL=F','SI=F','XOM','LMT','RTX'];
 
@@ -244,7 +194,7 @@ function bRenderAssets() {
 function bToggleAsset(a) {
   if (bAssets.includes(a)) bAssets = bAssets.filter(x=>x!==a);
   else bAssets.push(a);
-  localStorage.setItem('um_at_assets', JSON.stringify(bAssets));
+  localStorage.setItem('um_v2_assets', JSON.stringify(bAssets));
   bRenderAssets();
 }
 
@@ -254,18 +204,17 @@ function bSetInt(m, btn) {
   btn.classList.add('active');
 }
 
-let bVersion = parseInt(localStorage.getItem('um_pipeline_version') || '3');
-function bSetVersion(v, btn) {
-  bVersion = v;
-  localStorage.setItem('um_pipeline_version', String(v));
-  btn.parentElement.querySelectorAll('.int-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
+function bSetEngine(mode, btn) {
+  bEngine = mode;
+  localStorage.setItem('um_v2_engine', mode);
+  document.getElementById('b-ai-btn').classList.toggle('active', mode === 'ai');
+  document.getElementById('b-bot-btn').classList.toggle('active', mode === 'bot');
+  const hint = document.getElementById('b-engine-hint');
+  hint.textContent = mode === 'bot'
+    ? '(BOT: zero-LLM — the trained ML ensemble decides directly, no API cost, no news awareness)'
+    : '(AI: real V2 LLM pipeline, same as V2 always ran)';
 }
 
-// SHADOW VIEW: bot.html?brain=shadow shows the OTHER brain's own paper book (read-only)
-const SHADOW_VIEW = new URLSearchParams(location.search).get('brain') === 'shadow';
-
-// AI key health — a dead key fails SILENTLY otherwise; make it loud
 let lastAiHealth = null;
 async function checkAiHealth() {
   const el = document.getElementById('b-ai-health');
@@ -277,7 +226,7 @@ async function checkAiHealth() {
     const f = (n,s) => `${n}: ${s.ok ? '✓ OK' : (s.configured ? '✗ ' + s.detail : 'not set')}`;
     el.innerHTML = h.any_ok
       ? `<span style="color:#00e676">🧠 AI ONLINE — ${f('DeepSeek',h.deepseek)} | ${f('OpenAI',h.openai)}</span>`
-      : `<span style="color:#ff1744;font-weight:700">🧠 AI OFFLINE — ${f('DeepSeek',h.deepseek)} | ${f('OpenAI',h.openai)} — the bot will NOT trade. Fix the key in Railway → Variables (check spelling + credit balance), then redeploy.</span>`;
+      : `<span style="color:#ff1744;font-weight:700">🧠 AI OFFLINE — only matters in AI engine mode; BOT mode doesn't need this.</span>`;
     return h;
   } catch(e) {
     if (el) el.textContent = '🧠 AI key check failed: ' + e.message;
@@ -285,42 +234,13 @@ async function checkAiHealth() {
   }
 }
 
-function bUpdateForceTradeHint() {
-  const ftChk = document.getElementById('b-forcetrade-chk');
-  const hint = document.getElementById('b-forcetrade-hint');
-  if (!ftChk || !hint) return;
-  hint.textContent = ftChk.checked
-    ? '(ON: trades every interval, no matter what)'
-    : '(OFF: only trades on real conviction — saves credits when flat+choppy)';
-}
-
-// Restore saved brain + compare choice on load; set up shadow view
 document.addEventListener('DOMContentLoaded', () => {
-  const v3b = document.getElementById('b-v3-btn'), v2b = document.getElementById('b-v2-btn');
-  if (v3b && v2b) { v3b.classList.toggle('active', bVersion === 3); v2b.classList.toggle('active', bVersion !== 3); }
-  const chk = document.getElementById('b-compare-chk');
-  if (chk) chk.checked = localStorage.getItem('um_compare') === '1';
-  const ftChk = document.getElementById('b-forcetrade-chk');
-  if (ftChk) { ftChk.checked = localStorage.getItem('um_force_trade') !== '0'; bUpdateForceTradeHint(); }
+  bSetEngine(bEngine, bEngine === 'bot' ? document.getElementById('b-bot-btn') : document.getElementById('b-ai-btn'));
   checkAiHealth();
-  if (SHADOW_VIEW) {
-    document.title = 'ULTRAMAX — SHADOW BOOK';
-    const ban = document.createElement('div');
-    ban.innerHTML = '👁 SHADOW BOOK — the other brain trading its own separate paper money (read-only). ';
-    ban.style.cssText = 'background:#141400;color:#ffd600;font-size:9px;padding:8px;text-align:center;border-bottom:1px solid #333';
-    const scb = document.createElement('button');
-    scb.textContent = 'CASHOUT SHADOW BOOK';
-    scb.style.cssText = 'margin-left:8px;font-size:9px;padding:3px 8px;background:#0a0a0a;color:#00e676;border:1px solid #00e676;cursor:pointer';
-    scb.onclick = bCashoutShadow;
-    ban.appendChild(scb);
-    document.body.prepend(ban);
-    const t = document.getElementById('b-toggle'); if (t) t.style.display = 'none';
-    document.querySelectorAll('.cash-btn').forEach(b => b.style.display = 'none');
-  }
 });
 
 function bShowTab(tab, btn) {
-  ['positions','trades','learning','syslog'].forEach(t => {
+  ['positions','trades','syslog'].forEach(t => {
     document.getElementById('bt-'+t).style.display = t===tab ? 'block' : 'none';
   });
   btn.parentElement.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -331,19 +251,20 @@ async function bToggle() {
   const btn = document.getElementById('b-toggle');
   btn.disabled = true;
   if (bRunning) {
-    const r = await fetch(`${backendUrl}/autotrader/stop`, {method:'POST'});
-    const d = await r.json();
+    await fetch(`${backendUrl}/autotrader/v2/stop`, {method:'POST'});
     bRunning = false;
   } else {
     if (!bAssets.length) { alert('Select at least 1 asset'); btn.disabled=false; return; }
-    const health = await checkAiHealth();
-    if (health && !health.any_ok) {
-      if (!confirm('⚠ AI KEYS ARE FAILING — every LLM call is being rejected.\n\nThe bot will skip every asset (it refuses to trade blind).\nFix DEEPSEEK_API_KEY / OPENAI_API_KEY in Railway → Variables first.\n\nStart anyway?')) { btn.disabled=false; return; }
+    if (bEngine === 'ai') {
+      const health = await checkAiHealth();
+      if (health && !health.any_ok) {
+        if (!confirm('⚠ AI KEYS ARE FAILING — every LLM call is being rejected.\n\nThe bot will skip every asset (it refuses to trade blind).\nStart anyway, or switch to BOT (ML only, $0) engine instead?')) { btn.disabled=false; return; }
+      }
     }
     const startEq = parseFloat(document.getElementById('b-equity-input').value) || 10000;
     const tradeSize = parseFloat(document.getElementById('b-size-input').value) || 0;
     const hardStop = parseFloat(document.getElementById('b-hardstop-input').value) || 5.0;
-    const r = await fetch(`${backendUrl}/autotrader/start`, {
+    const r = await fetch(`${backendUrl}/autotrader/v2/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         assets: bAssets,
@@ -351,13 +272,7 @@ async function bToggle() {
         trade_size: tradeSize,
         starting_equity: startEq,
         hard_stop_pct: hardStop,
-        use_local: localStorage.getItem('um_model_mode') === 'local',
-        local_url: localStorage.getItem('um_local_url') || 'http://localhost:11434',
-        local_model: localStorage.getItem('um_local_model') || 'qwen2.5:7b',
-        features: JSON.parse(localStorage.getItem('um_features') || '{}'),
-        pipeline_version: bVersion,
-        compare_mode: document.getElementById('b-compare-chk')?.checked || false,
-        force_trade: document.getElementById('b-forcetrade-chk')?.checked !== false,
+        engine_mode: bEngine,
       }),
     });
     const d = await r.json();
@@ -369,89 +284,29 @@ async function bToggle() {
 }
 
 async function bCashout() {
-  if (!confirm('Close ALL positions and stop the bot?')) return;
-  const r = await fetch(`${backendUrl}/autotrader/cashout`, {method:'POST'});
+  if (!confirm('Close ALL positions and stop the V2 dashboard bot?')) return;
+  const r = await fetch(`${backendUrl}/autotrader/v2/cashout`, {method:'POST'});
   const d = await r.json();
   bRunning = false;
-  alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}\n\n${d.recommendation}`);
-  bRefresh();
-}
-
-async function bCashoutShadow() {
-  if (!confirm('Cash out the SHADOW book (the inactive brain\'s own paper money)?\nThis does NOT affect the main bot.')) return;
-  const r = await fetch(`${backendUrl}/autotrader/cashout-shadow`, {method:'POST'});
-  const d = await r.json();
-  alert(`Shadow book cashed out: ${d.closed?.length||0} positions | P&L $${(d.total_pnl||0).toFixed(2)}\nEquity: $${(d.final_equity||0).toFixed(2)}`);
+  alert(`Closed ${d.closed?.length||0} positions. P&L: $${(d.total_pnl||0).toFixed(2)}`);
   bRefresh();
 }
 
 async function bCashoutWinners() {
   if (!confirm('Close all WINNING positions and bank the profits?\n\nLosing positions stay open so they can recover. Bot keeps running.')) return;
-  const r = await fetch(`${backendUrl}/autotrader/cashout-winners`, {method:'POST'});
+  const r = await fetch(`${backendUrl}/autotrader/v2/cashout-winners`, {method:'POST'});
   const d = await r.json();
-  alert(`Banked ${d.winners_closed||0} winners for $${(d.total_pnl||0).toFixed(2)}\n${d.losers_held||0} losers held open to recover.\n\nEquity: $${(d.final_equity||0).toFixed(2)}`);
+  alert(`Banked ${d.winners_closed||0} winners for $${(d.total_pnl||0).toFixed(2)}\n${d.losers_held||0} losers held open to recover.`);
   bRefresh();
-}
-
-async function bReset() {
-  if (!confirm('FULL RESET — This will wipe ALL trades, P&L, win rate, AI learning, and forensic logs. Everything goes back to zero. Are you sure?')) return;
-  try {
-    const r = await fetch(`${backendUrl}/autotrader/reset`, {method:'POST'});
-    const d = await r.json();
-    bRunning = false;
-    localStorage.removeItem('um_history_v3');
-    alert(d.message || 'Reset complete');
-    bRefresh();
-  } catch(e) { alert('Error: '+e.message); }
-}
-
-async function bExport() {
-  try {
-    const statsR = await fetch(`${backendUrl}/forensic/stats`);
-    const stats = await statsR.json();
-    const ok = confirm(
-      `Export forensic log?\n\n` +
-      `Events captured: ${stats.total_events}\n` +
-      `By type: ${JSON.stringify(stats.by_type)}\n\n` +
-      `This downloads a big text file with EVERY indicator value, ` +
-      `news headline, AI prompt/response, gate trigger, trade, and ` +
-      `outcome. Paste into Claude or GPT for post-mortem analysis.`
-    );
-    if (!ok) return;
-
-    // Trigger browser download
-    const url = `${backendUrl}/forensic/export`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ultramax_forensic_${Date.now()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    // Also offer JSON
-    setTimeout(() => {
-      if (confirm('Also download JSON version (for programmatic analysis)?')) {
-        const a2 = document.createElement('a');
-        a2.href = `${backendUrl}/forensic/export.json`;
-        a2.download = `ultramax_forensic_${Date.now()}.json`;
-        document.body.appendChild(a2);
-        a2.click();
-        document.body.removeChild(a2);
-      }
-    }, 500);
-  } catch(e) {
-    alert('Export failed: ' + e.message);
-  }
 }
 
 async function bRefresh() {
   try {
-    const r = await fetch(`${backendUrl}${SHADOW_VIEW ? '/autotrader/status-shadow' : '/autotrader/status'}`, {signal:AbortSignal.timeout(10000)});
+    const r = await fetch(`${backendUrl}/autotrader/v2/status`, {signal:AbortSignal.timeout(10000)});
     if (!r.ok) return;
     const d = await r.json();
     bRunning = d.enabled;
 
-    // Badge
     const badge = document.getElementById('b-badge');
     if (d.enabled) {
       const secs = d.seconds_until_next || 0;
@@ -464,12 +319,10 @@ async function bRefresh() {
       badge.style.color = 'var(--muted)';
     }
 
-    // Toggle button
     const btn = document.getElementById('b-toggle');
     btn.textContent = bRunning ? 'STOP BOT' : 'START BOT';
     btn.className = bRunning ? 'big-btn stop-btn' : 'big-btn start-btn';
 
-    // Stats — Row 1 (realized)
     const hb = d.heartbeat || {};
     document.getElementById('b-equity').textContent = '$' + (hb.equity||10000).toLocaleString('en',{maximumFractionDigits:2});
     const pnlEl = document.getElementById('b-pnl');
@@ -481,7 +334,6 @@ async function bRefresh() {
     wrEl.style.color = (d.win_rate||0) >= 50 ? '#00e676' : '#ff1744';
     document.getElementById('b-cycles').textContent = d.total_cycles || 0;
 
-    // Stats — Row 2 (mark-to-market / the REAL numbers)
     const mtmEl = document.getElementById('b-mtm-equity');
     if (d.mtm_equity !== undefined) {
       mtmEl.textContent = '$' + d.mtm_equity.toLocaleString('en',{maximumFractionDigits:2});
@@ -507,53 +359,8 @@ async function bRefresh() {
       wlEl.innerHTML = `<span style="color:#00e676">${d.open_winners}W</span> / <span style="color:#ff1744">${d.open_losers}L</span>`;
     }
 
-    // Brain version + V3-vs-V2 comparison scoreboard
-    const vsEl = document.getElementById('b-vscore');
-    if (vsEl && d.pipeline_version !== undefined) {
-      let txt = `ACTIVE: V${d.pipeline_version}`;
-      const sb = d.version_scoreboard;
-      if (sb && (sb.v3.resolved > 0 || sb.v2.resolved > 0)) {
-        const f = s => `${s.win_rate}% (${s.wins}W/${s.losses}L, avg ${s.avg_return_pct >= 0 ? '+' : ''}${s.avg_return_pct}%)`;
-        txt += ` | V3: ${sb.v3.resolved ? f(sb.v3) : '—'} vs V2: ${sb.v2.resolved ? f(sb.v2) : '—'}`;
-      }
-      vsEl.textContent = txt;
-    }
-    // V6: Voter weights + market intelligence
-    const vwEl = document.getElementById('b-v6info');
-    if (vwEl) {
-      let v6 = '';
-      if (d.voter_weights) {
-        const vw = d.voter_weights;
-        v6 += `VOTER WEIGHTS: Quant ${(vw.quant*100).toFixed(0)}% | News ${(vw.news*100).toFixed(0)}% | ML ${(vw.ml*100).toFixed(0)}%`;
-      }
-      if (d.voter_grades) {
-        const vg = d.voter_grades;
-        const fmt = k => vg[k] ? `${k}: ${vg[k].correct}/${vg[k].total}` : '';
-        const parts = ['quant','news','ml'].map(fmt).filter(x=>x);
-        if (parts.length) v6 += (v6 ? ' | ' : '') + 'GRADES: ' + parts.join(', ');
-      }
-      vwEl.textContent = v6 || 'V6 voter weights: learning (need 10+ trades)';
-    }
-    // Sentry: cheap always-awake watcher status
-    const sentEl = document.getElementById('b-sentry-panel');
-    if (sentEl) {
-      const s = d.sentry;
-      if (s) {
-        const dot = s.enabled ? '🟢' : '⚪';
-        let txt = `${dot} SENTRY: watching ${s.watching} position(s) | ${s.wakes_this_interval}/2 early wakes used this interval`;
-        if (s.last_wake_reason) txt += ` | last: ${s.last_wake_reason}`;
-        sentEl.textContent = txt;
-        sentEl.style.color = s.wakes_this_interval > 0 ? 'var(--yellow)' : 'var(--muted)';
-      } else {
-        sentEl.textContent = 'Sentry: idle';
-        sentEl.style.color = 'var(--muted)';
-      }
-    }
+    document.getElementById('b-rec').textContent = d.engine_mode ? `Engine: ${d.engine_mode.toUpperCase()}` : '';
 
-    // Recommendation
-    document.getElementById('b-rec').textContent = d.recommendation || '';
-
-    // Positions — enhanced with mark-to-market health data
     const posEl = document.getElementById('b-positions-list');
     const positions = d.open_positions || [];
     const health = d.position_health || [];
@@ -567,20 +374,16 @@ async function bRefresh() {
         const c = pnl_pct >= 0 ? '#00e676' : '#ff1744';
         const age = h.age_minutes || Math.round((Date.now()/1000 - p.entry_time)/60);
         const ageStr = age >= 60 ? (age/60).toFixed(1)+'h' : age+'m';
-        const conf = h.entry_confidence || p.entry_confidence || 0;
-        const slDist = h.sl_distance_pct ? h.sl_distance_pct.toFixed(1)+'%' : '—';
-        const tpDist = h.tp_distance_pct ? h.tp_distance_pct.toFixed(1)+'%' : '—';
         const curPrice = h.current_price ? '$'+h.current_price.toLocaleString('en',{maximumFractionDigits:2}) : '—';
         return `<div class="pos-card" style="flex-wrap:wrap;gap:4px">
           <span><b style="color:${p.direction==='BUY'?'#00e676':'#ff1744'}">${p.direction}</b> ${p.asset} @ $${p.entry_price.toFixed(2)} ($${p.size.toFixed(0)})</span>
           <span>Now: ${curPrice}</span>
           <span style="color:${c};font-weight:700">${pnl_pct>=0?'+':''}${pnl_pct.toFixed(2)}% | $${pnl_usd>=0?'+':''}${pnl_usd.toFixed(2)}</span>
-          <span style="color:var(--muted)">Age: ${ageStr} | SL: ${slDist} away | TP: ${tpDist} away | Conf: ${conf}%</span>
+          <span style="color:var(--muted)">Age: ${ageStr}</span>
         </div>`;
       }).join('');
     }
 
-    // Trade log
     const logEl = document.getElementById('b-trades-list');
     const trades = d.recent_trades || [];
     if (!trades.length) {
@@ -589,9 +392,8 @@ async function bRefresh() {
       logEl.innerHTML = trades.slice().reverse().map(t => {
         const c = t.pnl >= 0 ? '#00e676' : '#ff1744';
         const dt = new Date(t.ts*1000);
-        const time = dt.toLocaleString();
         return `<div class="trade-row">
-          <span>${time}</span>
+          <span>${dt.toLocaleString()}</span>
           <span><b style="color:${t.direction==='BUY'?'#00e676':'#ff1744'}">${t.direction}</b> ${t.asset}</span>
           <span>$${t.entry.toFixed(2)} → $${t.exit.toFixed(2)}</span>
           <span style="color:${c}">$${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</span>
@@ -600,7 +402,6 @@ async function bRefresh() {
       }).join('');
     }
 
-    // System log (cycle log)
     const sysEl = document.getElementById('b-syslog-list');
     const cycles = d.cycle_log || [];
     if (!cycles.length) {
@@ -608,47 +409,19 @@ async function bRefresh() {
     } else {
       sysEl.innerHTML = cycles.slice().reverse().map(c => {
         const dt = new Date(c.ts*1000);
-        const time = dt.toLocaleTimeString();
         const items = (c.summaries||[]).join(' | ');
-        return `<div class="log-entry"><span class="time">[${time}]</span> <span class="action">CYCLE #${c.cycle}</span> — ${items}</div>`;
+        return `<div class="log-entry"><span class="time">[${dt.toLocaleTimeString()}]</span> <span class="action">CYCLE #${c.cycle}</span> — ${items}</div>`;
       }).join('');
     }
 
-    // Chart tabs
     const chartTabs = document.getElementById('b-chart-tabs');
     const chartAssets = d.assets?.length ? d.assets : bAssets;
     chartTabs.innerHTML = chartAssets.map(a =>
       `<button class="tab-btn ${a===bChartAsset?'active':''}" onclick="bLoadChart('${a}',this)">${a}</button>`
     ).join('');
 
-    // Store positions for chart markers + update
     bLastPositions = d.all_positions || [];
     bUpdateMarkers(bChartAsset);
-
-    // Learning lessons display
-    const lessons = d.lessons || {};
-    const allLessons = Object.entries(lessons).flatMap(([asset, list]) =>
-      list.map(l => ({...l, asset}))
-    ).sort((a,b) => b.ts - a.ts).slice(0, 20);
-    const learnEl = document.getElementById('b-learning-list');
-    if (allLessons.length) {
-      const totalLessons = allLessons.length;
-      const winsCount = allLessons.filter(l => l.was_correct).length;
-      const learnRate = ((winsCount / totalLessons) * 100).toFixed(0);
-      let html = `<div style="color:var(--cyan);font-size:9px;margin-bottom:6px;font-weight:700">BRAIN ACCURACY: ${winsCount}/${totalLessons} correct (${learnRate}%)</div>`;
-      html += allLessons.map(l => {
-        const ico = l.was_correct ? '✅' : '❌';
-        const c = l.was_correct ? '#00e676' : '#ff1744';
-        const dt = new Date(l.ts * 1000).toLocaleTimeString();
-        return `<div class="log-entry">
-          <span class="time">[${dt}]</span>
-          <span style="color:${c}">${ico} ${l.asset} ${l.direction} ${l.pnl_pct >= 0 ? '+' : ''}${l.pnl_pct}%</span>
-          <span style="color:var(--yellow)">$${l.pnl >= 0 ? '+' : ''}${l.pnl}</span>
-          <span style="color:var(--muted);font-size:7px"> — ${l.lesson}</span>
-        </div>`;
-      }).join('');
-      learnEl.innerHTML = html;
-    }
 
   } catch(e) {}
 }
@@ -708,7 +481,7 @@ function bUpdateMarkers(asset) {
       position: isBuy ? 'belowBar' : 'aboveBar',
       color: isBuy ? '#2196F3' : '#ff1744',
       shape: isBuy ? 'arrowUp' : 'arrowDown',
-      text: `AI ${p.direction}${pnlLabel}`,
+      text: `${p.direction}${pnlLabel}`,
     });
     if (p.status === 'closed' && p.exit_time) {
       const exitTime = Math.floor(p.exit_time);
@@ -726,83 +499,13 @@ function bUpdateMarkers(asset) {
   try { bMainSeries.setMarkers(markers); } catch(e) {}
 }
 
-// ── Feature Panel ─────────────────────────────────────────────────────
-let _featuresRegistry = {};
-let _featuresState = JSON.parse(localStorage.getItem('um_features') || '{}');
-
-async function loadFeaturesRegistry() {
-  try {
-    const r = await fetch(`${backendUrl}/api/features`, { signal: AbortSignal.timeout(5000) });
-    if (!r.ok) return;
-    const d = await r.json();
-    _featuresRegistry = d.features || {};
-    for (const [name, info] of Object.entries(_featuresRegistry)) {
-      if (!(name in _featuresState)) {
-        _featuresState[name] = info.default;
-      }
-    }
-    localStorage.setItem('um_features', JSON.stringify(_featuresState));
-  } catch(e) { console.warn('Failed to load features:', e); }
-}
-
-function openFeatures() {
-  const panel = document.getElementById('feature-panel');
-  if (panel) { panel.classList.add('on'); renderFeaturesPanel(); }
-}
-function closeFeatures() {
-  const panel = document.getElementById('feature-panel');
-  if (panel) panel.classList.remove('on');
-}
-
-function renderFeaturesPanel() {
-  const body = document.getElementById('fp-body');
-  if (!body) return;
-  const names = Object.keys(_featuresRegistry);
-  if (names.length === 0) {
-    body.innerHTML = '<div style="font-size:8px;color:var(--muted);text-align:center;padding:20px">No features loaded. Check backend connection.</div>';
-    return;
-  }
-  let html = '';
-  for (const name of names) {
-    const info = _featuresRegistry[name];
-    const checked = _featuresState[name] !== false;
-    html += `<div class="fp-item">
-      <div class="fp-item-top">
-        <div class="fp-item-label">${info.label}</div>
-        <label class="toggle">
-          <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleFeature('${name}', this.checked)">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="fp-item-desc">${info.description}</div>
-      <div class="fp-item-status idle">Feature flags sent when bot starts</div>
-    </div>`;
-  }
-  html += '<button class="fp-reset" onclick="resetFeatures()">RESET TO DEFAULTS</button>';
-  body.innerHTML = html;
-}
-
-function toggleFeature(name, enabled) {
-  _featuresState[name] = enabled;
-  localStorage.setItem('um_features', JSON.stringify(_featuresState));
-}
-
-function resetFeatures() {
-  for (const [name, info] of Object.entries(_featuresRegistry)) {
-    _featuresState[name] = info.default;
-  }
-  localStorage.setItem('um_features', JSON.stringify(_featuresState));
-  renderFeaturesPanel();
-}
-
 // Init
-loadFeaturesRegistry();
 bRenderAssets();
-const _savedEq = localStorage.getItem('um_at_equity');
+const _savedEq = localStorage.getItem('um_v2_equity');
 if (_savedEq) document.getElementById('b-equity-input').value = _savedEq;
-const _savedSize = localStorage.getItem('um_at_size');
+const _savedSize = localStorage.getItem('um_v2_size');
 if (_savedSize) document.getElementById('b-size-input').value = _savedSize;
-const _savedHardStop = localStorage.getItem('um_at_hardstop');
+const _savedHardStop = localStorage.getItem('um_v2_hardstop');
 if (_savedHardStop) document.getElementById('b-hardstop-input').value = _savedHardStop;
 bRefresh();
 bLoadChart(bChartAsset);

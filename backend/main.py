@@ -111,6 +111,43 @@ def get_shadow_engine() -> TradingEngine:
     return _shadow_engine_inst
 
 
+# ─── V2 Standalone Bot: an independent, real, always-tradeable second bot ───
+# User-requested: a genuinely separate V2 dashboard -- NOT the Compare-Mode
+# shadow above (which is read-only and only ticks when the V3 main loop runs).
+# This has its own book, its own start/stop, its own clock, and a choice of
+# decision source:
+#   'ai'  = the real V2 LLM pipeline (pipeline_version=2, the exact same call
+#           V2 already makes elsewhere -- V2 itself is never touched)
+#   'bot' = zero-LLM: the trained ML ensemble (ml_engine) directly, no agents,
+#           no API cost at all
+_autotrader_v2 = {
+    'enabled': False,
+    'assets': [],
+    'interval_minutes': 60,
+    'last_cycle': 0,
+    'total_cycles': 0,
+    'trades_opened': 0,
+    'trades_closed': 0,
+    'status': 'stopped',
+    'cycle_log': [],
+    'trade_size': 0,
+    'starting_equity': 10000,
+    'hard_stop_pct': 5.0,
+    'time_decay_hours': 7.0,
+    'engine_mode': 'ai',   # 'ai' or 'bot'
+    '_loop_running': False,
+    '_run_generation': 0,
+}
+
+_v2_engine_inst: Optional[TradingEngine] = None
+
+def get_v2_engine() -> TradingEngine:
+    global _v2_engine_inst
+    if _v2_engine_inst is None:
+        _v2_engine_inst = TradingEngine()
+    return _v2_engine_inst
+
+
 def _asset_tradeable_now(asset: str) -> tuple:
     """(tradeable, reason) — the token-saver. Crypto trades 24/7. US equities
     (incl. XOM/LMT/RTX, typed 'macro') only during regular NYSE hours
@@ -208,6 +245,178 @@ async def _manage_shadow_book(asset: str, direction: str, price: float,
                            stop_loss_pct=2.0, take_profit_pct=6.0, trailing=0.8)
 
 
+def _v2_bot_decision(ind: dict, asset: str) -> tuple:
+    """Zero-LLM decision source for the V2 dashboard's 'bot' engine mode: the
+    trained ML ensemble (ml_engine, real 2y historical training) directly, no
+    agents, no API call, no cost. Returns (direction, confidence) or
+    (None, 0) if there's no model yet for this asset, or the score is too
+    close to 50 to call either way."""
+    ml = predict_ensemble(ind, asset=asset)
+    if not ml.get('available'):
+        return None, 0
+    score = ml['score']
+    if score > 55:
+        return 'BUY', round(score)
+    if score < 45:
+        return 'SELL', round(100 - score)
+    return None, 0
+
+
+async def _autotrader_v2_loop():
+    """Independent second bot -- its own book, its own cycle clock, its own
+    start/stop, driven by either the real V2 AI pipeline or the zero-LLM ML
+    bot (engine_mode). Deliberately simple: V2's classic cash-out-on-any-green
+    exit style only -- no sentry, no trailing stop, no meta-labeling. This
+    dashboard exists specifically to test whether that simplicity is what's
+    actually winning, not to become a second copy of V3's machinery."""
+    my_gen = _autotrader_v2['_run_generation']
+    _autotrader_v2['_loop_running'] = True
+    from config import OPENAI_API_KEY, DEEPSEEK_API_KEY
+
+    await asyncio.sleep(10)
+    v2engine = get_v2_engine()
+
+    while True:
+        if my_gen != _autotrader_v2['_run_generation']:
+            print(f"AUTOTRADER-V2: loop gen {my_gen} superseded -- exiting")
+            return
+        if not _autotrader_v2['enabled'] or not _autotrader_v2['assets']:
+            _autotrader_v2['_loop_running'] = False
+            return
+
+        interval = max(10, _autotrader_v2['interval_minutes']) * 60
+        _autotrader_v2['status'] = 'running'
+        _autotrader_v2['last_cycle'] = int(time.time())
+        _autotrader_v2['total_cycles'] += 1
+        cycle = _autotrader_v2['total_cycles']
+        cycle_summary = []
+        engine_mode = _autotrader_v2.get('engine_mode', 'ai')
+
+        for asset_name in _autotrader_v2['assets']:
+            try:
+                if my_gen != _autotrader_v2['_run_generation']:
+                    break
+                tradeable, closed_why = _asset_tradeable_now(asset_name)
+                if not tradeable:
+                    cycle_summary.append(f"{asset_name}: {closed_why} — skipped")
+                    continue
+
+                direction = None
+                confidence = 0
+                price = 0
+
+                if engine_mode == 'bot':
+                    # Zero-LLM path: indicators only, no agents, $0 cost.
+                    candles = await fetch_candles(asset_name, '1h', 300)
+                    if not candles:
+                        cycle_summary.append(f"{asset_name}: no candle data")
+                        continue
+                    ind = compute_indicators(candles)
+                    if not ind:
+                        cycle_summary.append(f"{asset_name}: insufficient data")
+                        continue
+                    price = ind.get('cur', 0)
+                    direction, confidence = _v2_bot_decision(ind, asset_name)
+                    if direction is None:
+                        cycle_summary.append(f"{asset_name}: no ML model / no conviction — flat")
+                        print(f"  V2-BOT {asset_name}: SKIP — no model or score too close to 50")
+                        continue
+                    print(f"  V2-BOT {asset_name}: {direction} {confidence}% (ML only, $0 cost) @ {price}")
+                else:
+                    api_key = OPENAI_API_KEY or ''
+                    ds_key = DEEPSEEK_API_KEY or ''
+                    if not api_key and not ds_key:
+                        cycle_summary.append(f"{asset_name}: no API keys")
+                        continue
+                    interval_min = _autotrader_v2.get('interval_minutes', 30)
+                    bot_horizon = max(1, round(interval_min * 1.5 / 60))
+                    req = PredictRequest(
+                        asset=asset_name, horizon=bot_horizon,
+                        api_key=api_key, ds_key=ds_key,
+                        use_r1=True, bot_mode=True,
+                        pipeline_version=2, shadow=True,
+                    )
+                    start_time = time.time()
+                    logs = []
+                    def slog(msg): logs.append({"ts": int((time.time() - start_time) * 1000), "msg": msg})
+                    try:
+                        result = await _run_prediction(req, WORKER_URL, start_time, logs, slog)
+                    except Exception as e:
+                        cycle_summary.append(f"{asset_name}: prediction error")
+                        forensic_log.log_error(asset_name, 'v2dash_ai', str(e)[:150])
+                        continue
+                    if _is_ai_dead(result):
+                        cycle_summary.append(f"{asset_name}: ⚠ AI OFFLINE — no trade")
+                        continue
+                    direction, confidence = _bot_direction_from_result(result)
+                    price = result.get('ind', {}).get('cur', 0)
+                    print(f"  V2-AI {asset_name}: {direction} {confidence}% @ {price}")
+
+                if not price or price <= 0 or direction not in ('BUY', 'SELL'):
+                    continue
+
+                # ── V2-classic exit rules: cash out any green, hard stop, time decay
+                hard_stop_pct = _autotrader_v2.get('hard_stop_pct', 5.0)
+                max_hold = int(float(_autotrader_v2.get('time_decay_hours', 7.0)) * 3600)
+                open_for_asset = [p for p in v2engine.positions.values()
+                                   if p.status == 'open' and p.asset == asset_name]
+                if open_for_asset:
+                    pos = open_for_asset[0]
+                    if pos.direction == 'BUY':
+                        pnl_pct = (price - pos.entry_price) / pos.entry_price * 100
+                    else:
+                        pnl_pct = (pos.entry_price - price) / pos.entry_price * 100
+                    age = int(time.time()) - pos.entry_time
+                    if pnl_pct > 0:
+                        close_result = await v2engine.close_position(pos.id, price, 'cycle_cashout')
+                        cashed = close_result.get('pnl', 0)
+                        _autotrader_v2['trades_closed'] += 1
+                        cycle_summary.append(f"{asset_name}: CASHOUT +{pnl_pct:.1f}% → {direction}")
+                        print(f"  V2 {asset_name}: CASHOUT +{pnl_pct:.2f}% (${cashed:+.2f}), reopening {direction}")
+                    elif pnl_pct <= -hard_stop_pct:
+                        await v2engine.close_position(pos.id, price, 'hard_stop')
+                        _autotrader_v2['trades_closed'] += 1
+                        cycle_summary.append(f"{asset_name}: HARD STOP {pnl_pct:.1f}% → {direction}")
+                    elif age > max_hold:
+                        await v2engine.close_position(pos.id, price, 'time_decay')
+                        _autotrader_v2['trades_closed'] += 1
+                        cycle_summary.append(f"{asset_name}: TIME DECAY → {direction}")
+                    else:
+                        cycle_summary.append(f"{asset_name}: HOLD {pos.direction} ({pnl_pct:+.1f}%)")
+                        continue
+
+                # ── Open the trade
+                custom_size = _autotrader_v2.get('trade_size', 0)
+                size = round(min(custom_size, v2engine._equity * 0.25), 2) if custom_size > 0 \
+                    else round(max(min(v2engine._equity * 0.02, 50000), 500), 2)
+                trade_result = await v2engine.open_position(
+                    asset_name, direction, price, size,
+                    stop_loss_pct=2.0, take_profit_pct=6.0, trailing=0.8,
+                )
+                if trade_result.get('ok'):
+                    _autotrader_v2['trades_opened'] += 1
+                    cycle_summary.append(f"{asset_name}: OPEN {direction} {confidence}% (${size:.0f})")
+                    forensic_log.log_trade_open(
+                        asset_name, direction, price, size, 0, 0, 0.8,
+                        f"v2dash_{engine_mode}_cycle_{cycle}", confidence, 0,
+                    )
+            except Exception as e:
+                cycle_summary.append(f"{asset_name}: error")
+                forensic_log.log_error(asset_name, 'v2dash_loop', str(e)[:150])
+
+        _autotrader_v2['cycle_log'].append({'ts': int(time.time()), 'cycle': cycle, 'summaries': cycle_summary})
+        _autotrader_v2['cycle_log'] = _autotrader_v2['cycle_log'][-50:]
+        _autotrader_v2['status'] = 'sleeping'
+        save_bot_state()
+
+        slept = 0
+        while slept < interval:
+            await asyncio.sleep(5)
+            slept += 5
+            if my_gen != _autotrader_v2['_run_generation'] or not _autotrader_v2['enabled']:
+                break
+
+
 # V3 vs V2 comparison scoreboard — each side tracks its own calls, resolved
 # against actual price movement one cycle later.
 _version_scoreboard = {
@@ -277,6 +486,7 @@ def save_bot_state():
     try:
         engine = get_trading_engine()
         sh = get_shadow_engine()
+        v2e = get_v2_engine()
         state = {
             'saved_at': int(time.time()),
             # Filter out ephemeral runtime fields -- if we persist the sentry
@@ -286,6 +496,8 @@ def save_bot_state():
             'autotrader': {k: v for k, v in _autotrader.items()
                             if k not in ('_loop_running', '_wake_signal', '_wake_count',
                                           '_wake_reason', '_interval_start')},
+            'autotrader_v2': {k: v for k, v in _autotrader_v2.items()
+                               if k not in ('_loop_running',)},
             'engine': {
                 'equity': engine._equity, 'daily_pnl': engine.daily_pnl,
                 'positions': [_pos_asdict(p) for p in engine.positions.values()],
@@ -295,6 +507,11 @@ def save_bot_state():
                 'equity': sh._equity, 'daily_pnl': sh.daily_pnl,
                 'positions': [_pos_asdict(p) for p in sh.positions.values()],
                 'trade_log': sh._trade_log[-500:],
+            },
+            'v2_engine': {
+                'equity': v2e._equity, 'daily_pnl': v2e.daily_pnl,
+                'positions': [_pos_asdict(p) for p in v2e.positions.values()],
+                'trade_log': v2e._trade_log[-500:],
             },
             'scoreboard': _version_scoreboard,
             'lessons': _trade_lessons,
@@ -324,17 +541,20 @@ def _restore_book(book: TradingEngine, data: dict):
             continue
 
 
-def load_bot_state() -> bool:
-    """Restore memory after a restart. Returns True if the bot should auto-resume."""
-    global _shadow_engine_inst
+def load_bot_state() -> tuple:
+    """Restore memory after a restart. Returns (resume_v3, resume_v2) -- whether
+    the main autotrader and/or the independent V2 dashboard bot should auto-resume."""
+    global _shadow_engine_inst, _v2_engine_inst
     try:
         if not os.path.exists(_STATE_FILE):
-            return False
+            return False, False
         with open(_STATE_FILE) as f:
             state = json.load(f)
         _restore_book(get_trading_engine(), state.get('engine', {}))
         _shadow_engine_inst = TradingEngine()
         _restore_book(_shadow_engine_inst, state.get('shadow', {}))
+        _v2_engine_inst = TradingEngine()
+        _restore_book(_v2_engine_inst, state.get('v2_engine', {}))
         sb = state.get('scoreboard') or {}
         for k in ('v3', 'v2'):
             if k in sb and isinstance(sb[k], dict):
@@ -356,19 +576,23 @@ def load_bot_state() -> bool:
         _autotrader['_wake_count'] = 0
         _autotrader['_wake_reason'] = ''
         _autotrader['_interval_start'] = int(time.time())
+        saved_v2 = state.get('autotrader_v2', {})
+        _autotrader_v2.update({k: v for k, v in saved_v2.items() if k != '_loop_running'})
+        _autotrader_v2['_loop_running'] = False
         age_min = (time.time() - state.get('saved_at', 0)) / 60
         engine = get_trading_engine()
         print(f"💾 Bot memory restored (saved {age_min:.0f} min ago): "
               f"{len([p for p in engine.positions.values() if p.status == 'open'])} open positions, "
-              f"equity ${engine._equity:,.2f}, enabled={_autotrader.get('enabled')}")
+              f"equity ${engine._equity:,.2f}, enabled={_autotrader.get('enabled')}; "
+              f"V2 dashboard enabled={_autotrader_v2.get('enabled')}")
         forensic_log.log_event_simple(
             'memory_restored', '*',
             f"Bot memory restored after restart ({age_min:.0f} min gap); "
             f"auto-resume={'YES' if _autotrader.get('enabled') else 'no (bot was stopped)'}")
-        return bool(_autotrader.get('enabled'))
+        return bool(_autotrader.get('enabled')), bool(_autotrader_v2.get('enabled'))
     except Exception as e:
         print(f"⚠ Bot memory load failed — starting fresh: {e}")
-        return False
+        return False, False
 
 
 def clear_bot_state():
@@ -630,12 +854,17 @@ async def startup():
     asyncio.create_task(_safe_refresh_calendar())
     asyncio.create_task(_continuous_scanner())
     asyncio.create_task(_trading_position_monitor())
+    asyncio.create_task(_v2_position_monitor())
     asyncio.create_task(_resolve_outcomes_loop())
     asyncio.create_task(_event_sentry_loop())
     # Crash-proof memory: restore the previous run and auto-resume if it was live
-    if load_bot_state():
+    resume_v3, resume_v2 = load_bot_state()
+    if resume_v3:
         print("💾 Auto-resuming the autotrader from restored memory...")
         asyncio.create_task(_autotrader_loop())
+    if resume_v2:
+        print("💾 Auto-resuming the V2 dashboard bot from restored memory...")
+        asyncio.create_task(_autotrader_v2_loop())
     asyncio.create_task(ws_manager.price_feed(fetch_current_price, ALL_ASSETS[:6]))
 
 
@@ -2096,6 +2325,41 @@ async def _trading_position_monitor():
         await asyncio.sleep(30)
 
 
+async def _v2_position_monitor():
+    """Same mechanical stop/take-profit/trailing enforcement as the main
+    monitor above, but for the independent V2 dashboard's book. Written as a
+    separate task (not folded into the function above) so touching it can
+    never risk the already-tested main-engine monitor."""
+    await asyncio.sleep(20)
+    v2engine = get_v2_engine()
+    while True:
+        try:
+            open_positions = [p for p in v2engine.positions.values() if p.status == 'open']
+            if open_positions:
+                actions = await v2engine.check_all_positions(fetch_current_price)
+                for act in actions:
+                    asset = act.get('asset')
+                    reason = act.get('reason')
+                    pnl = act.get('pnl', 0)
+                    posinfo = act.get('position', {})
+                    direction = posinfo.get('direction')
+                    entry = posinfo.get('entry_price')
+                    exit_price = posinfo.get('exit_price')
+                    entry_time = act.get('entry_time')
+                    print(f"V2-Trading: auto-closed {asset} ({reason}) P&L: {pnl}")
+                    try:
+                        hold_s = int(time.time()) - entry_time if entry_time else 0
+                        forensic_log.log_trade_close(
+                            asset, direction, entry, exit_price, pnl, reason,
+                            hold_seconds=hold_s, was_correct=pnl > 0,
+                        )
+                    except Exception as _le:
+                        forensic_log.log_error(asset, 'v2_mechanical_close_logging', str(_le)[:150])
+        except Exception as e:
+            print(f"V2 position monitor error: {e}")
+        await asyncio.sleep(30)
+
+
 @app.post("/retrain")
 async def retrain(asset_name: str = None):
     """Retrain ML ensemble after new feedback arrives."""
@@ -2136,6 +2400,15 @@ async def serve_bot():
     if os.path.exists(fp):
         return FileResponse(fp)
     raise HTTPException(404, "bot.html not found")
+
+
+@app.get("/bot2")
+@app.get("/bot2.html")
+async def serve_bot_v2():
+    fp = os.path.join(frontend_path, 'bot_v2.html')
+    if os.path.exists(fp):
+        return FileResponse(fp)
+    raise HTTPException(404, "bot_v2.html not found")
 
 
 @app.get("/health")
@@ -4256,6 +4529,190 @@ async def autotrader_status_shadow():
         },
         "cycle_log": [], "lessons": {},
         "all_positions": sh.get_positions(),
+    }
+
+
+class AutotraderV2StartRequest(BaseModel):
+    assets: list
+    interval_minutes: int = 60
+    trade_size: float = 0
+    starting_equity: float = 10000
+    hard_stop_pct: float = 5.0
+    time_decay_hours: float = 7.0
+    engine_mode: str = 'ai'   # 'ai' (real V2 LLM pipeline) or 'bot' (zero-LLM ML ensemble)
+
+
+@app.post("/autotrader/v2/start")
+async def autotrader_v2_start(req: AutotraderV2StartRequest):
+    """Start the independent V2 dashboard bot -- its own book, its own clock,
+    separate from the main V3 bot and from Compare Mode's shadow book."""
+    valid_assets = [a for a in req.assets if a in ALL_ASSETS]
+    if not valid_assets:
+        return {"ok": False, "error": f"No valid assets. Choose from: {ALL_ASSETS}"}
+    global _v2_engine_inst
+    _autotrader_v2['_run_generation'] += 1
+    _autotrader_v2['_loop_running'] = False
+    _autotrader_v2['enabled'] = True
+    _autotrader_v2['assets'] = valid_assets
+    _autotrader_v2['interval_minutes'] = max(10, req.interval_minutes)
+    _autotrader_v2['trade_size'] = max(0, req.trade_size)
+    _autotrader_v2['starting_equity'] = max(100, req.starting_equity)
+    _autotrader_v2['hard_stop_pct'] = max(1.0, min(10.0, req.hard_stop_pct))
+    _autotrader_v2['time_decay_hours'] = max(1.0, min(24.0, req.time_decay_hours))
+    _autotrader_v2['engine_mode'] = 'bot' if req.engine_mode == 'bot' else 'ai'
+    _autotrader_v2['status'] = 'starting'
+    # Fresh book every start, same as the main bot does on its own start.
+    _v2_engine_inst = TradingEngine()
+    _v2_engine_inst._equity = _autotrader_v2['starting_equity']
+    save_bot_state()
+    asyncio.create_task(_autotrader_v2_loop())
+    return {
+        "ok": True, "assets": valid_assets,
+        "interval_minutes": _autotrader_v2['interval_minutes'],
+        "trade_size": _autotrader_v2['trade_size'],
+        "starting_equity": _autotrader_v2['starting_equity'],
+        "engine_mode": _autotrader_v2['engine_mode'],
+    }
+
+
+@app.post("/autotrader/v2/stop")
+async def autotrader_v2_stop():
+    _autotrader_v2['enabled'] = False
+    _autotrader_v2['status'] = 'stopped'
+    _autotrader_v2['_loop_running'] = False
+    save_bot_state()
+    v2e = get_v2_engine()
+    return {"ok": True, "open_positions": len(v2e.get_positions('open')),
+            "equity": v2e._equity, "total_cycles": _autotrader_v2['total_cycles']}
+
+
+@app.post("/autotrader/v2/cashout")
+async def autotrader_v2_cashout():
+    _autotrader_v2['enabled'] = False
+    _autotrader_v2['status'] = 'stopped'
+    v2e = get_v2_engine()
+    closed = []
+    total_pnl = 0.0
+    for pos in list(v2e.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if price:
+                cr = await v2e.close_position(pos.id, price, 'cashout')
+                pnl = cr.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({'asset': pos.asset, 'direction': pos.direction,
+                               'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
+        except Exception:
+            continue
+    save_bot_state()
+    return {"ok": True, "closed": closed, "total_pnl": round(total_pnl, 2),
+            "final_equity": round(v2e._equity, 2)}
+
+
+@app.post("/autotrader/v2/cashout-winners")
+async def autotrader_v2_cashout_winners():
+    v2e = get_v2_engine()
+    closed = []
+    held = []
+    total_pnl = 0.0
+    for pos in list(v2e.positions.values()):
+        if pos.status != 'open':
+            continue
+        try:
+            result = await fetch_current_price(pos.asset)
+            price = result.get('price', 0)
+            if not price:
+                continue
+            pnl_pct = ((price - pos.entry_price) / pos.entry_price * 100 if pos.direction == 'BUY'
+                       else (pos.entry_price - price) / pos.entry_price * 100)
+            if pnl_pct > 0:
+                cr = await v2e.close_position(pos.id, price, 'cashout_winners')
+                pnl = cr.get('pnl', 0)
+                total_pnl += pnl
+                closed.append({'asset': pos.asset, 'direction': pos.direction,
+                               'entry': pos.entry_price, 'exit': price, 'pnl': pnl})
+            else:
+                held.append({'asset': pos.asset, 'direction': pos.direction,
+                             'entry': pos.entry_price, 'pnl_pct': round(pnl_pct, 2)})
+        except Exception:
+            continue
+    save_bot_state()
+    return {"ok": True, "closed": closed, "held": held, "total_pnl": round(total_pnl, 2),
+            "winners_closed": len(closed), "losers_held": len(held),
+            "final_equity": round(v2e._equity, 2)}
+
+
+@app.get("/autotrader/v2/status")
+async def autotrader_v2_status():
+    """Status of the independent V2 dashboard bot. Same response shape as
+    /autotrader/status so the frontend can render it with the same code."""
+    v2e = get_v2_engine()
+    hb = v2e.heartbeat()
+    open_positions = v2e.get_positions('open')
+    trade_log = v2e.get_trade_log(20)
+    wins = sum(1 for t in trade_log if t.get('pnl', 0) > 0)
+    total = len(trade_log)
+    now = int(time.time())
+    last = _autotrader_v2['last_cycle']
+    interval_sec = _autotrader_v2['interval_minutes'] * 60
+    secs_left = max(0, last + interval_sec - now) if (_autotrader_v2['enabled'] and last > 0) else 0
+
+    unrealized_total = 0.0
+    open_winners = 0
+    open_losers = 0
+    position_health = []
+    for pos_data in open_positions:
+        try:
+            result = await fetch_current_price(pos_data['asset'])
+            price = result.get('price', 0)
+        except Exception:
+            price = 0
+        if price and pos_data.get('entry_price'):
+            pnl_pct = ((price - pos_data['entry_price']) / pos_data['entry_price'] * 100
+                       if pos_data['direction'] == 'BUY'
+                       else (pos_data['entry_price'] - price) / pos_data['entry_price'] * 100)
+            pnl_usd = pnl_pct / 100 * pos_data.get('size', 0)
+            unrealized_total += pnl_usd
+            if pnl_pct >= 0:
+                open_winners += 1
+            else:
+                open_losers += 1
+            sl_dist = abs(price - pos_data.get('stop_loss', price)) / price * 100 if price else 0
+            tp_dist = abs(pos_data.get('take_profit', price) - price) / price * 100 if price else 0
+            position_health.append({
+                'asset': pos_data['asset'], 'direction': pos_data['direction'],
+                'entry_price': pos_data['entry_price'], 'current_price': round(price, 4),
+                'unrealized_pnl_pct': round(pnl_pct, 2), 'unrealized_pnl_usd': round(pnl_usd, 2),
+                'if_closed_now': round(pnl_usd, 2),
+                'age_minutes': round((now - pos_data.get('entry_time', now)) / 60),
+                'sl_distance_pct': round(sl_dist, 2), 'tp_distance_pct': round(tp_dist, 2),
+                'entry_confidence': 0,
+                'status': 'winning' if pnl_pct >= 0 else 'losing',
+            })
+    mtm_equity = round(v2e._equity + unrealized_total, 2)
+    all_recent = trade_log + [{'pnl': h['unrealized_pnl_usd']} for h in position_health]
+    true_wins = sum(1 for t in all_recent if t.get('pnl', 0) > 0)
+    true_total = len(all_recent)
+    return {
+        "enabled": _autotrader_v2['enabled'], "status": _autotrader_v2['status'],
+        "engine_mode": _autotrader_v2.get('engine_mode', 'ai'),
+        "assets": _autotrader_v2['assets'], "interval_minutes": _autotrader_v2['interval_minutes'],
+        "trade_size": _autotrader_v2.get('trade_size', 0),
+        "total_cycles": _autotrader_v2['total_cycles'],
+        "trades_opened": _autotrader_v2['trades_opened'],
+        "last_cycle": last, "seconds_until_next": secs_left,
+        "heartbeat": hb, "open_positions": open_positions,
+        "recent_trades": trade_log, "win_rate": round((wins / total * 100) if total > 0 else 0, 1),
+        "true_win_rate": round((true_wins / true_total * 100) if true_total > 0 else 0, 1),
+        "mtm_equity": mtm_equity, "unrealized_pnl": round(unrealized_total, 2),
+        "cashout_impact": round(unrealized_total, 2),
+        "open_winners": open_winners, "open_losers": open_losers,
+        "position_health": position_health,
+        "cycle_log": _autotrader_v2['cycle_log'][-20:],
+        "lessons": {}, "all_positions": v2e.get_positions(),
     }
 
 
