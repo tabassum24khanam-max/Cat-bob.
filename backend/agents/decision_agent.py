@@ -35,6 +35,7 @@ async def run_decision_agent(
     risk_evidence: list = None,
     bot_mode: bool = False,
     version: int = 2,
+    framing: str = 'neutral',
 ) -> dict:
     """Call R1, V4, GPT-4o, or LOCAL model (via Ollama) for final decision."""
 
@@ -153,6 +154,16 @@ Respond with ONLY this JSON:
                           f" | 4H {'BULL' if mtf_data.get('h4_bull') else 'BEAR' if mtf_data.get('h4_bear') else 'NEUTRAL'}"
                           f" | 1H {'BULL' if mtf_data.get('h1_bull') else 'BEAR' if mtf_data.get('h1_bear') else 'NEUTRAL'}")
 
+        framing_line = ""
+        if framing == 'bull':
+            framing_line = ("YOUR ASSIGNED LENS: before ruling, construct the STRONGEST possible BULL case "
+                            "from the evidence — steelman it hard. Then rule honestly: if the bull case fails "
+                            "even after your best construction, say so and rule against it.\n\n")
+        elif framing == 'bear':
+            framing_line = ("YOUR ASSIGNED LENS: before ruling, construct the STRONGEST possible BEAR case "
+                            "from the evidence — steelman it hard. Then rule honestly: if the bear case fails "
+                            "even after your best construction, say so and rule against it.\n\n")
+
         if bot_mode:
             must_rule = """4. The desk trades every cycle: you MUST output BUY or SELL — NO_TRADE is not available to you.
    Your confidence is where your honesty lives: strong case = high, weak case = low (a forced weak call is a 55, not a costume). NEVER inflate."""
@@ -183,7 +194,7 @@ MONTE CARLO (1000 sims): median {mc['median']:.4f} | prob up {mc['prob_up']*100:
 RISK OFFICER'S NOTES (facts for your consideration, not orders):
 {risk_notes}
 
-RULES OF THE DESK:
+{framing_line}RULES OF THE DESK:
 1. Weigh ARGUMENTS, not job titles. Anyone in this room can be wrong today.
 2. A genuine major catalyst outranks the math. If the Intelligence Chief flagged an override and you agree, rule with the news and say so in "primary_reason".
 3. If you overrule an analyst or the model, state why in one sentence inside "insight".

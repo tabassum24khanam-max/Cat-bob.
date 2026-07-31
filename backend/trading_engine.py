@@ -11,6 +11,12 @@ from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 from config import ALPACA_KEY, ALPACA_SECRET, BINANCE_SYMBOLS, get_asset_type
 
+# Round-trip trading cost (fees + slippage), in basis points, deducted from
+# every close. Paper mode previously assumed free fills, flattering every P&L
+# number vs reality — with ~0.2-1% typical moves on $10k positions, a 5-12bps
+# round trip is a material share of the edge and must be in the baseline.
+ROUND_TRIP_COST_BPS = {'crypto': 12, 'stock': 5, 'macro': 6}
+
 # D10: Safety Controls — V4: raised floors, quality-first philosophy
 MAX_POSITIONS = 10
 MAX_DAILY_LOSS_PCT = 5.0
@@ -199,6 +205,9 @@ class TradingEngine:
         else:
             pnl = (pos.entry_price - current_price) / pos.entry_price * pos.size
 
+        fee = pos.size * ROUND_TRIP_COST_BPS.get(get_asset_type(pos.asset), 6) / 10000.0
+        pnl -= fee
+
         pos.status = 'closed'
         pos.exit_price = current_price
         pos.exit_time = int(time.time())
@@ -209,7 +218,7 @@ class TradingEngine:
         self._trade_log.append({
             'id': pos_id, 'asset': pos.asset, 'direction': pos.direction,
             'entry': pos.entry_price, 'exit': current_price,
-            'pnl': pos.pnl, 'reason': reason, 'ts': pos.exit_time,
+            'pnl': pos.pnl, 'fee': round(fee, 2), 'reason': reason, 'ts': pos.exit_time,
         })
 
         return {'ok': True, 'pnl': pos.pnl, 'reason': reason}
