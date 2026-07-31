@@ -1889,16 +1889,37 @@ async def _autotrader_loop():
                             "catalyst_override": result.get('catalyst_override'),
                             "ensemble": result.get('ensemble'),
                             "genuine_unanimity": result.get('genuine_unanimity', False),
+                            "agent_agreement": result.get('agent_agreement'),
+                            "volatility": result.get('volatility'),
+                            "judge_votes": result.get('judge_votes', []),
                         },
                         "quant": {
                             "direction": result.get('quant', {}).get('direction'),
                             "confidence": result.get('quant', {}).get('confidence'),
+                            "prob_up": result.get('quant', {}).get('prob_up'),
+                            "prob_down": result.get('quant', {}).get('prob_down'),
                             "reasoning": result.get('quant', {}).get('reasoning'),
+                            "counter_argument": result.get('quant', {}).get('counter_argument'),
+                            "stop_loss_pct": result.get('quant', {}).get('stop_loss_pct'),
+                            "inputs_snapshot": result.get('ind'),
                         },
                         "news": {
                             "sentiment": result.get('news', {}).get('sentiment'),
+                            "sentiment_score": result.get('news', {}).get('sentiment_score'),
                             "catalysts": result.get('news', {}).get('key_catalysts'),
                             "reasoning": result.get('news', {}).get('reasoning'),
+                            "dominant_catalyst": result.get('news', {}).get('dominant_catalyst'),
+                            "catalyst_direction": result.get('news', {}).get('catalyst_direction'),
+                            "expected_move_pct": result.get('news', {}).get('expected_move_pct'),
+                            "noise_discarded": result.get('news', {}).get('noise_discarded'),
+                            "priced_in": result.get('news', {}).get('priced_in'),
+                            "headlines_used": result.get('headlines_used', []),
+                            "market_data": result.get('news_market_data'),
+                        },
+                        "ml_witness": {
+                            "score": result.get('ml', {}).get('score'),
+                            "agreement": result.get('ml', {}).get('agreement'),
+                            "cv_accuracy": result.get('ml', {}).get('cv_accuracy'),
                         },
                         "risk_notes": result.get('risk_evidence'),
                         "pipeline_version": result.get('pipeline_version'),
@@ -2616,6 +2637,15 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
         avg_conf = sum(r.get('confidence', 50) for r in ensemble_results) / 3
         decision['confidence'] = int(round(avg_conf))
         decision['_genuine_unanimity'] = genuine_unanimity
+        # Full per-framing votes -- WHY the judge ruled the way it did, not just
+        # the summary count. Each framing steelmanned a different case; this is
+        # the actual reasoning trace, not a "2/3 voted BUY" headline.
+        decision['_judge_votes'] = [
+            {"framing": f, "decision": r.get('decision'), "confidence": r.get('confidence'),
+             "primary_reason": r.get('primary_reason'), "insight": r.get('insight'),
+             "flip_trigger": r.get('flip_trigger')}
+            for f, r in zip(('bull', 'bear', 'neutral'), ensemble_results)
+        ]
         if genuine_unanimity:
             slog(f"⭐ GENUINE UNANIMITY: bull-framed, bear-framed, AND neutral-framed runs all landed on {decision.get('decision')} — rare, real conviction signal")
         slog(f"✓ Judge ensemble: {decision.get('_ensemble')} → {decision.get('decision')} {decision['confidence']}%")
@@ -3074,7 +3104,11 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             "direction": quant_result.get('direction'),
             "confidence": quant_result.get('confidence'),
             "prob_up": quant_result.get('prob_up'),
+            "prob_down": quant_result.get('prob_down'),
             "reasoning": quant_result.get('reasoning'),
+            "counter_argument": quant_result.get('counter_argument'),
+            "stop_loss_pct": quant_result.get('stop_loss_pct'),
+            "mtf_alignment": quant_result.get('mtf_alignment'),
             "key_levels": quant_result.get('key_levels', {})
         },
         "news": {
@@ -3085,6 +3119,32 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             "reasoning": news_result.get('reasoning'),
             "key_catalysts": news_result.get('key_catalysts', []),
             "macro_warning": news_result.get('macro_warning'),
+            "dominant_catalyst": news_result.get('dominant_catalyst'),
+            "catalyst_direction": news_result.get('catalyst_direction'),
+            "expected_move_pct": news_result.get('expected_move_pct'),
+            "time_to_impact": news_result.get('time_to_impact'),
+            "noise_discarded": news_result.get('noise_discarded'),
+            "priced_in": news_result.get('priced_in'),
+            "flip_trigger": news_result.get('flip_trigger'),
+        },
+        # WHY the judge ruled this way -- each framing's own vote + reasoning,
+        # not just the "2/3 voted BUY" summary string.
+        "judge_votes": decision.get('_judge_votes', []),
+        # What the news agent actually READ -- the raw scored headlines, not
+        # just its conclusion. Lets a post-mortem check the input, not just the output.
+        "headlines_used": [
+            {"source": a.get('source'), "headline": a.get('headline'),
+             "sentiment": round(a.get('sentiment', 0), 2), "impact": a.get('impact')}
+            for a in articles[:20]
+        ],
+        # What the news agent's macro/on-chain inputs actually were (VIX, DXY,
+        # fear&greed, funding rate) -- previously computed but discarded after
+        # building the prompt, never visible in any log.
+        "news_market_data": {
+            "vix": macro_data.get('vix'), "dxy": macro_data.get('dxy'),
+            "fear_greed": fg_data.get('value'), "fear_greed_label": fg_data.get('label'),
+            "funding_rate": onchain_data.get('funding_rate'),
+            "long_short_ratio": onchain_data.get('long_short_ratio'),
         },
         # Indicator snapshot (full, for ML training)
         "ind": {

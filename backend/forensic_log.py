@@ -364,13 +364,36 @@ def _render_event(ev: Dict) -> List[str]:
         ap = d.get('autopsy') or {}
         if ap:
             j = ap.get('judge', {}); q = ap.get('quant', {}); n = ap.get('news', {})
+            mlw = ap.get('ml_witness', {})
             out.append(f"  WHY (autopsy):")
             if j.get('primary_reason'): out.append(f"    Judge ruling: {j.get('primary_reason')}")
             if j.get('insight'): out.append(f"    Judge reasoning: {j.get('insight')}")
-            if q.get('direction'): out.append(f"    Quant analyst: {q.get('direction')} {q.get('confidence')}% -- {q.get('reasoning','')}")
+            if j.get('agent_agreement'): out.append(f"    Agent agreement: {j.get('agent_agreement')} (volatility: {j.get('volatility')})")
+            if j.get('ensemble'): out.append(f"    Ensemble: {j.get('ensemble')} (genuine unanimity: {j.get('genuine_unanimity')})")
+            for v in (j.get('judge_votes') or []):
+                out.append(f"      [{v.get('framing')}-framed vote] -> {v.get('decision')} {v.get('confidence')}%: {v.get('primary_reason')}")
+            if q.get('direction'):
+                out.append(f"    Quant analyst got: indicators/regime snapshot (see inputs_snapshot) -> gave: {q.get('direction')} {q.get('confidence')}% (prob_up={q.get('prob_up')})")
+                out.append(f"      Quant's reasoning: {q.get('reasoning','')}")
+            if q.get('counter_argument'): out.append(f"      Quant's own counter-argument: {q.get('counter_argument')}")
             if n.get('sentiment'):
                 cats = ', '.join(n.get('catalysts') or []) if isinstance(n.get('catalysts'), list) else ''
-                out.append(f"    Intelligence: {n.get('sentiment')} -- {n.get('reasoning','')}" + (f" [catalysts: {cats}]" if cats else ""))
+                hl = n.get('headlines_used') or []
+                out.append(f"    News agent got: {len(hl)} scored headlines + macro data (see market_data)")
+                out.append(f"      News agent gave: {n.get('sentiment')} ({n.get('sentiment_score')}) -- {n.get('reasoning','')}" + (f" [catalysts: {cats}]" if cats else ""))
+            if n.get('dominant_catalyst'):
+                out.append(f"      Dominant catalyst: {n.get('dominant_catalyst')} | direction: {n.get('catalyst_direction')} | priced in: {n.get('priced_in')}")
+            if n.get('noise_discarded'): out.append(f"      Noise discarded: {n.get('noise_discarded')}")
+            hl = n.get('headlines_used') or []
+            if hl:
+                out.append(f"      Sample headlines fed in:")
+                for h in hl[:6]:
+                    out.append(f"        [{h.get('source')}] {h.get('headline')} (sent={h.get('sentiment')})")
+            md = n.get('market_data') or {}
+            if md.get('vix') is not None:
+                out.append(f"      Macro inputs: VIX={md.get('vix')} DXY={md.get('dxy')} F&G={md.get('fear_greed')} ({md.get('fear_greed_label')}) funding={md.get('funding_rate')}")
+            if mlw.get('score') is not None:
+                out.append(f"    ML witness: score={mlw.get('score')} agree={mlw.get('agreement')} cv_accuracy={mlw.get('cv_accuracy')}")
             rn = ap.get('risk_notes')
             if rn: out.append(f"    Risk notes: {'; '.join(rn[:4]) if isinstance(rn, list) else rn}")
             if j.get('flip_trigger'): out.append(f"    Would flip if: {j.get('flip_trigger')}")
