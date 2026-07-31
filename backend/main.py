@@ -262,6 +262,62 @@ def _v2_bot_decision(ind: dict, asset: str) -> tuple:
     return None, 0
 
 
+def _v2_synth_quant(ind: dict, ml_result: dict) -> dict:
+    """Non-LLM stand-in for the quant agent's output shape, used by the V2
+    dashboard's HYBRID engine mode. Built straight from indicators + the
+    trained ML ensemble -- feeds the one real LLM call (the decision agent)
+    without spending any tokens on a quant read. Must carry every key
+    run_decision_agent's prompt accesses directly (quant['direction'],
+    quant['confidence'], quant['prob_up'], quant['prob_down'])."""
+    if ml_result.get('available'):
+        score = ml_result['score']
+        direction = 'BUY' if score >= 50 else 'SELL'
+        confidence = round(max(score, 100 - score))
+        reasoning = (f"ML ensemble (no LLM): score {score:.1f}/100, "
+                     f"{'models agree' if ml_result.get('agreement') else 'models split'}, "
+                     f"trained on {ml_result.get('n_train', 0):,} samples")
+    else:
+        macd_bull = ind.get('macd_hist', 0) > 0
+        direction = 'BUY' if macd_bull else 'SELL'
+        confidence = 50
+        score = 55 if macd_bull else 45
+        reasoning = (f"No ML model yet -- mechanical fallback from regime={ind.get('regime')}, "
+                     f"MACD {'bull' if macd_bull else 'bear'} (no LLM)")
+    return {
+        'direction': direction, 'confidence': confidence,
+        'prob_up': round(score, 1), 'prob_down': round(100 - score, 1),
+        'reasoning': reasoning,
+        'counter_argument': 'Not evaluated -- this read is mechanical, not an LLM judgment.',
+        'stop_loss_pct': 2.0, 'key_levels': {},
+    }
+
+
+def _v2_synth_news(articles: list) -> dict:
+    """Non-LLM stand-in for the news agent's output shape, used by the V2
+    dashboard's HYBRID engine mode: aggregate keyword/FinBERT sentiment over
+    the freely-fetched headlines (fetch_asset_news costs $0), no LLM reasoning
+    about which headlines actually matter. Must carry every key
+    run_decision_agent's prompt accesses directly (news['sentiment'],
+    news['sentiment_score'] as an int for the ':+d' format, news['market_regime'])."""
+    if not articles:
+        return {
+            'sentiment': 'neutral', 'sentiment_score': 0, 'confidence': 50,
+            'market_regime': 'neutral', 'key_catalysts': [],
+            'reasoning': 'No headlines fetched (no LLM read)', 'macro_warning': None,
+            'catalyst_override': False,
+        }
+    avg_sent = sum(a.get('sentiment', 0) for a in articles) / len(articles)
+    top = sorted(articles, key=lambda a: a.get('tier', 0.5) * a.get('impact', 0.3), reverse=True)[:3]
+    sentiment = 'bullish' if avg_sent > 0.15 else 'bearish' if avg_sent < -0.15 else 'neutral'
+    return {
+        'sentiment': sentiment, 'sentiment_score': int(round(avg_sent * 100)),
+        'confidence': 50, 'market_regime': 'neutral',
+        'key_catalysts': [a.get('headline', '')[:80] for a in top],
+        'reasoning': f"Aggregate keyword/FinBERT sentiment over {len(articles)} headlines (no LLM read)",
+        'macro_warning': None, 'catalyst_override': False,
+    }
+
+
 async def _autotrader_v2_loop():
     """Independent second bot -- its own book, its own cycle clock, its own
     start/stop, driven by either the real V2 AI pipeline or the zero-LLM ML
@@ -322,6 +378,54 @@ async def _autotrader_v2_loop():
                         print(f"  V2-BOT {asset_name}: SKIP — no model or score too close to 50")
                         continue
                     print(f"  V2-BOT {asset_name}: {direction} {confidence}% (ML only, $0 cost) @ {price}")
+                elif engine_mode == 'hybrid':
+                    # ONE real LLM call (the decision agent) instead of three.
+                    # Quant + news are synthesized for free from indicators/ML
+                    # and freely-fetched headlines -- no quant-agent or
+                    # news-agent LLM call, no headline-filter LLM call either.
+                    api_key = OPENAI_API_KEY or ''
+                    ds_key = DEEPSEEK_API_KEY or ''
+                    if not api_key and not ds_key:
+                        cycle_summary.append(f"{asset_name}: no API keys")
+                        continue
+                    candles = await fetch_candles(asset_name, '1h', 300)
+                    if not candles:
+                        cycle_summary.append(f"{asset_name}: no candle data")
+                        continue
+                    ind = compute_indicators(candles)
+                    if not ind:
+                        cycle_summary.append(f"{asset_name}: insufficient data")
+                        continue
+                    price = ind.get('cur', 0)
+                    is_crypto_asset = asset_name in BINANCE_SYMBOLS
+                    interval_min = _autotrader_v2.get('interval_minutes', 30)
+                    bot_horizon = max(1, round(interval_min * 1.5 / 60))
+                    mc = monte_carlo(ind['cur'], ind['atr'], bot_horizon, is_crypto_asset)
+                    ml_result = predict_ensemble(ind, asset=asset_name)
+                    asset_type = ('crypto' if is_crypto_asset else
+                                  'macro' if asset_name in ['GC=F', 'CL=F', 'SI=F'] else 'stock')
+                    try:
+                        articles = await fetch_asset_news(asset_name, ASSET_NAMES.get(asset_name, asset_name), asset_type)
+                    except Exception:
+                        articles = []
+                    quant_stub = _v2_synth_quant(ind, ml_result)
+                    news_stub = _v2_synth_news(articles)
+                    decision = await run_decision_agent(
+                        asset_name, ind, bot_horizon, quant_stub, news_stub,
+                        mtf_data={}, mc=mc, similarity_results=[],
+                        ds_key=ds_key, api_key=api_key, use_r1=True,
+                        ml_result=ml_result, bot_mode=True, version=2,
+                    )
+                    if decision.get('_model') == 'error':
+                        cycle_summary.append(f"{asset_name}: ⚠ AI OFFLINE — no trade")
+                        continue
+                    direction = decision.get('decision')
+                    confidence = decision.get('confidence', 50)
+                    if direction not in ('BUY', 'SELL'):
+                        # Decision agent passed on it -- fall back to the free ML/indicator lean
+                        direction = quant_stub['direction']
+                        confidence = min(58, quant_stub['confidence'])
+                    print(f"  V2-HYBRID {asset_name}: {direction} {confidence}% (1 LLM call) @ {price}")
                 else:
                     api_key = OPENAI_API_KEY or ''
                     ds_key = DEEPSEEK_API_KEY or ''
@@ -4539,7 +4643,8 @@ class AutotraderV2StartRequest(BaseModel):
     starting_equity: float = 10000
     hard_stop_pct: float = 5.0
     time_decay_hours: float = 7.0
-    engine_mode: str = 'ai'   # 'ai' (real V2 LLM pipeline) or 'bot' (zero-LLM ML ensemble)
+    engine_mode: str = 'ai'   # 'bot' (zero-LLM ML ensemble), 'hybrid' (1 LLM call -- decision agent
+                              # only, quant+news synthesized free), or 'ai' (real V2 3-agent pipeline)
 
 
 @app.post("/autotrader/v2/start")
@@ -4559,7 +4664,7 @@ async def autotrader_v2_start(req: AutotraderV2StartRequest):
     _autotrader_v2['starting_equity'] = max(100, req.starting_equity)
     _autotrader_v2['hard_stop_pct'] = max(1.0, min(10.0, req.hard_stop_pct))
     _autotrader_v2['time_decay_hours'] = max(1.0, min(24.0, req.time_decay_hours))
-    _autotrader_v2['engine_mode'] = 'bot' if req.engine_mode == 'bot' else 'ai'
+    _autotrader_v2['engine_mode'] = req.engine_mode if req.engine_mode in ('bot', 'hybrid') else 'ai'
     _autotrader_v2['status'] = 'starting'
     # Fresh book every start, same as the main bot does on its own start.
     _v2_engine_inst = TradingEngine()
