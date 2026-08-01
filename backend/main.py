@@ -83,7 +83,6 @@ _autotrader = {
     'trade_size': 0,
     'starting_equity': 10000,
     'force_trade': True,
-    'force_size_scale': 0.5,
     '_loop_running': False,
     '_run_generation': 0,   # bumped on every START; stale loops self-exit
     'use_local': False,
@@ -604,16 +603,19 @@ def save_bot_state():
                                if k not in ('_loop_running',)},
             'engine': {
                 'equity': engine._equity, 'daily_pnl': engine.daily_pnl,
+                'lifetime_pnl': engine.lifetime_pnl, 'day_stamp': engine._day_stamp,
                 'positions': [_pos_asdict(p) for p in engine.positions.values()],
                 'trade_log': engine._trade_log[-500:],
             },
             'shadow': {
                 'equity': sh._equity, 'daily_pnl': sh.daily_pnl,
+                'lifetime_pnl': sh.lifetime_pnl, 'day_stamp': sh._day_stamp,
                 'positions': [_pos_asdict(p) for p in sh.positions.values()],
                 'trade_log': sh._trade_log[-500:],
             },
             'v2_engine': {
                 'equity': v2e._equity, 'daily_pnl': v2e.daily_pnl,
+                'lifetime_pnl': v2e.lifetime_pnl, 'day_stamp': v2e._day_stamp,
                 'positions': [_pos_asdict(p) for p in v2e.positions.values()],
                 'trade_log': v2e._trade_log[-500:],
             },
@@ -635,6 +637,8 @@ def save_bot_state():
 def _restore_book(book: TradingEngine, data: dict):
     book._equity = data.get('equity', book._equity)
     book.daily_pnl = data.get('daily_pnl', 0.0)
+    book.lifetime_pnl = data.get('lifetime_pnl', book.daily_pnl)
+    book._day_stamp = data.get('day_stamp', book._day_stamp)
     book._trade_log = data.get('trade_log', [])
     book.positions = {}
     for d in data.get('positions', []):
@@ -643,6 +647,9 @@ def _restore_book(book: TradingEngine, data: dict):
             book.positions[p.id] = p
         except Exception:
             continue
+    # Restoring an old save from a previous UTC day must roll daily_pnl
+    # immediately, not wait for the next close/heartbeat.
+    book._maybe_roll_day()
 
 
 def load_bot_state() -> tuple:
@@ -1761,6 +1768,10 @@ async def _autotrader_loop():
         # the bot kept trying every other asset. A real circuit breaker stops
         # the whole machine and says so loudly, the same way a real trading
         # desk would halt for the day rather than quietly keep placing bets.
+        # _maybe_roll_day() first: daily_pnl must reset at UTC midnight, or
+        # this reads as LIFETIME drawdown and can permanently brick every
+        # future restart once cumulative losses cross 5% once.
+        engine._maybe_roll_day()
         _dd_pct = (engine.daily_pnl / engine._equity * 100) if engine._equity else 0
         if _dd_pct <= -5.0:
             _autotrader['enabled'] = False
@@ -2008,6 +2019,15 @@ async def _autotrader_loop():
                             current_pos.entry_price, price, be_pnl, 0,
                             parent_id=cycle_id,
                         )
+                        # trade_flip alone loses exit_reason/hold_seconds/was_correct --
+                        # the forensic export had no clean way to see WHY any managed
+                        # close happened, only that a flip occurred. Same fix at all
+                        # 5 managed-close sites below.
+                        forensic_log.log_trade_close(
+                            asset_name, current_pos.direction, current_pos.entry_price, price,
+                            be_pnl, 'breakeven_stop', hold_seconds=age_seconds,
+                            was_correct=be_pnl > 0, parent_id=cycle_id,
+                        )
                         asyncio.create_task(send_message(
                             f"🛡 BREAKEVEN {asset_name}: was +{peak_pnl:.1f}%, closed {pnl_pct:+.1f}% | ${be_pnl:+.2f} | Reopening {direction}"
                         ))
@@ -2024,6 +2044,11 @@ async def _autotrader_loop():
                             asset_name, current_pos.direction, direction,
                             current_pos.entry_price, price, cashed_pnl, 0,
                             parent_id=cycle_id,
+                        )
+                        forensic_log.log_trade_close(
+                            asset_name, current_pos.direction, current_pos.entry_price, price,
+                            cashed_pnl, 'cycle_cashout', hold_seconds=age_seconds,
+                            was_correct=cashed_pnl > 0, parent_id=cycle_id,
                         )
                         asyncio.create_task(send_message(
                             f"💰 CASHOUT {asset_name}: {current_pos.direction} +{pnl_pct:.2f}% | +${cashed_pnl:.2f} | Reopening {direction}"
@@ -2052,6 +2077,11 @@ async def _autotrader_loop():
                             current_pos.entry_price, price, flip_pnl, 0,
                             parent_id=cycle_id,
                         )
+                        forensic_log.log_trade_close(
+                            asset_name, current_pos.direction, current_pos.entry_price, price,
+                            flip_pnl, 'thesis_flip', hold_seconds=age_seconds,
+                            was_correct=flip_pnl > 0, parent_id=cycle_id,
+                        )
                         asyncio.create_task(send_message(
                             f"🔄 THESIS FLIP {asset_name}: {current_pos.direction} {pnl_pct:+.2f}% → {direction} ({confidence}%) | ${flip_pnl:+.2f}"
                         ))
@@ -2073,6 +2103,11 @@ async def _autotrader_loop():
                                 current_pos.entry_price, price, stop_pnl, 0,
                                 parent_id=cycle_id,
                             )
+                            forensic_log.log_trade_close(
+                                asset_name, current_pos.direction, current_pos.entry_price, price,
+                                stop_pnl, 'decaying_stop', hold_seconds=age_seconds,
+                                was_correct=stop_pnl > 0, parent_id=cycle_id,
+                            )
                             asyncio.create_task(send_message(
                                 f"📉 DECAYING STOP {asset_name}: {pnl_pct:+.2f}% (limit -{effective_stop:.1f}% at {age_hrs}h) | ${stop_pnl:+.2f}"
                             ))
@@ -2089,6 +2124,11 @@ async def _autotrader_loop():
                                 asset_name, current_pos.direction, direction,
                                 current_pos.entry_price, price, decay_pnl, 0,
                                 parent_id=cycle_id,
+                            )
+                            forensic_log.log_trade_close(
+                                asset_name, current_pos.direction, current_pos.entry_price, price,
+                                decay_pnl, 'time_decay', hold_seconds=age_seconds,
+                                was_correct=decay_pnl > 0, parent_id=cycle_id,
                             )
                             asyncio.create_task(send_message(
                                 f"⏰ TIME DECAY {asset_name}: {pnl_pct:+.2f}% after {age_hrs}h | ${decay_pnl:+.2f} | Reopening {direction}"
@@ -2121,6 +2161,15 @@ async def _autotrader_loop():
                 custom_size = _autotrader.get('trade_size', 0)
                 if custom_size > 0:
                     size = round(min(custom_size, engine._equity * 0.25), 2)
+                    # PQS/ADX/chop scalers were computed every cycle but silently
+                    # discarded on this path (the fixed-trade-size path actually
+                    # used every real run this session) -- the print line even
+                    # showed "PQS=7 ADX=0" implying they mattered when they never
+                    # touched size. V2 must stay byte-for-byte unchanged, so this
+                    # fix is scoped to V3 only.
+                    if pipe_version >= 3:
+                        size = round(min(size * pqs_scale * adx_scale * chop_scale,
+                                          engine._equity * 0.25), 2)
                 else:
                     base_size = max(min(engine._equity * 0.02, 50000), 500)
                     stats = _equity_tracker.get_stats()
@@ -2171,8 +2220,18 @@ async def _autotrader_loop():
                     # all agreed) is the rare real conviction event -- bet it fully,
                     # a floor on top of whatever the meta-model already set.
                     if result.get('genuine_unanimity'):
-                        size = round(max(size, _pre_meta_size * 1.2), 2)
+                        size = round(min(max(size, _pre_meta_size * 1.2), engine._equity * 0.25), 2)
                         print(f"  {asset_name}: GENUINE UNANIMITY — size floor raised to ${size:.0f}")
+
+                    # QUORUM SIZE CUT: the confidence haircut above already
+                    # discounts a dead quant agent's ruling; size needs its own
+                    # cut too, since a dead agent means the judge traded on 2 of
+                    # 3 real voices, not 3 -- the exact quorum gap the
+                    # quant_dead flag exists to surface (documented but never
+                    # actually enforced anywhere until now).
+                    if result.get('quant_dead'):
+                        size = round(size * 0.5, 2)
+                        print(f"  {asset_name}: QUORUM CUT — quant dead, size halved to ${size:.0f}")
 
                 if pqs_score < 5:
                     sl_pct = min(sl_pct, 1.2)
@@ -3411,6 +3470,15 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             parts.append((bayes_conf, 0.10))
             total_w = sum(w for _, w in parts)
             final_conf = sum(v * w for v, w in parts) / total_w if total_w else judge_conf
+            # QUORUM HAIRCUT: quant_dead means the judge ruled on only 2 of 3
+            # voices (news + ML), yet was fed the dead quant agent's fallback
+            # reading (NO_TRADE at 40%) as if it were a real read. The
+            # quant_dead flag existed and was logged/displayed since the
+            # previous fix, but nothing ever actually penalized confidence for
+            # it -- this was the missing half of that fix.
+            if quant_dead:
+                final_conf *= 0.85
+                slog(f"⚠ QUORUM HAIRCUT: quant agent dead, judge ruled on 2/3 voices — confidence ×0.85")
             decision['_judge_confidence'] = round(judge_conf)
             decision['confidence'] = int(round(max(40, min(95, final_conf))))
             decision['_voter_weights'] = vw
@@ -3540,6 +3608,14 @@ NOTE: This is factual history. Do NOT blindly repeat your last direction — eva
             "trend_stability": ind['trend_stability'], "vol_percentile": ind['vol_percentile'],
             "vol_r": ind['vol_r'], "stoch_k": ind['stoch_k'],
             "bb_pos": ind['bb_pos'], "poc": ind['poc'], "dist_poc": ind['dist_poc'],
+            # adx/bb_width were missing here entirely -- the autotrader loop's
+            # ADX sizing, _detect_chop, and _detect_market_mode all read THIS
+            # trimmed dict (not the full one), so without these two keys they
+            # always fell back to their .get() defaults: adx_scale pinned at
+            # 0.4 (worst tier), is_chop could never reach its 0.5 threshold
+            # (max achievable score was 0.35), and market mode always read
+            # 'chop' even in a strong trend. Verified against live BTC data.
+            "adx": ind.get('adx', 20), "bb_width": ind.get('bb_width', 0.03),
             "rsi_div_bull": ind.get('rsi_div_bull', False), "rsi_div_bear": ind.get('rsi_div_bear', False),
         },
         "ind_snapshot": json.dumps(ind),
@@ -4419,6 +4495,12 @@ async def autotrader_start(req: AutotraderStartRequest):
     _autotrader['status'] = 'starting'
     engine = get_trading_engine()
     engine._equity = _autotrader['starting_equity']
+    # A new run's "Day P&L" should reflect this run, not whatever accumulated
+    # across previous stop/start cycles today -- equity already resets here,
+    # daily_pnl must too (lifetime_pnl is untouched; that one only clears on
+    # a full RESET ALL).
+    engine.daily_pnl = 0.0
+    engine.daily_trades = 0
     # Orphan cleanup: close any carried-over positions for assets no longer selected
     for _p in list(engine.positions.values()):
         if _p.status == 'open' and _p.asset not in valid_assets:
@@ -4986,6 +5068,7 @@ async def autotrader_reset():
     engine.positions.clear()
     engine.daily_pnl = 0.0
     engine.daily_trades = 0
+    engine.lifetime_pnl = 0.0
     engine._equity = _autotrader.get('starting_equity', 10000)
     engine._trade_log.clear()
 

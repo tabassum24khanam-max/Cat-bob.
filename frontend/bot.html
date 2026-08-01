@@ -524,7 +524,11 @@ async function bRefresh() {
       let v6 = '';
       if (d.voter_weights) {
         const vw = d.voter_weights;
-        v6 += `VOTER WEIGHTS: Quant ${(vw.quant*100).toFixed(0)}% | News ${(vw.news*100).toFixed(0)}% | ML ${(vw.ml*100).toFixed(0)}%`;
+        // Only ML's learned weight actually feeds the V3 confidence blend today
+        // (as a multiplier on its own 25% slot). Quant/News accuracy are tracked
+        // and shown here for visibility, but do not yet change sizing or
+        // confidence -- labeled accordingly so this isn't read as more than it is.
+        v6 += `VOTER ACCURACY (ML weight is live; Quant/News tracked only): Quant ${(vw.quant*100).toFixed(0)}% | News ${(vw.news*100).toFixed(0)}% | ML ${(vw.ml*100).toFixed(0)}%`;
       }
       if (d.voter_grades) {
         const vg = d.voter_grades;

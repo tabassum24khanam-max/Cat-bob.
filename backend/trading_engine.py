@@ -3,6 +3,7 @@ ULTRAMAX Trading Engine — Autonomous trading with safety controls
 Supports: Alpaca (stocks), Binance (crypto), Paper trading (all)
 """
 import asyncio
+import itertools
 import time
 import json
 import os
@@ -10,6 +11,13 @@ import httpx
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field, asdict
 from config import ALPACA_KEY, ALPACA_SECRET, BINANCE_SYMBOLS, get_asset_type
+
+# Monotonic counter appended to pos_id -- two positions on the same asset
+# opened within the same wall-clock second used to collide on
+# f"pos_{int(time.time())}_{asset}" and silently overwrite each other in
+# self.positions. Not reachable via the current autotrader loop (one position
+# per asset per cycle), but a real footgun for any faster caller.
+_pos_id_counter = itertools.count()
 
 # Round-trip trading cost (fees + slippage), in basis points, deducted from
 # every close. Paper mode previously assumed free fills, flattering every P&L
@@ -51,18 +59,35 @@ class TradingEngine:
         self.paper_mode = True
         self.daily_pnl = 0.0
         self.daily_trades = 0
+        self.lifetime_pnl = 0.0
+        self._day_stamp = time.strftime('%Y-%m-%d', time.gmtime())
         self.last_heartbeat = 0
         self._equity = 10000.0  # paper trading starting equity
         self._trade_log = []
 
+    def _maybe_roll_day(self):
+        """daily_pnl (and every safety control built on it -- the circuit
+        breaker, can_trade's daily-loss check, the per-asset daily loss limit)
+        must reset at UTC midnight. Before this, daily_pnl only ever
+        accumulated -- it was really lifetime P&L since the last full RESET
+        ALL, so once cumulative losses crossed the 5% threshold the bot would
+        halt on cycle 1 of every future restart, forever."""
+        today = time.strftime('%Y-%m-%d', time.gmtime())
+        if today != self._day_stamp:
+            self.daily_pnl = 0.0
+            self.daily_trades = 0
+            self._day_stamp = today
+
     # D1: Heartbeat
     def heartbeat(self) -> dict:
+        self._maybe_roll_day()
         self.last_heartbeat = int(time.time())
         return {
             'status': 'alive',
             'ts': self.last_heartbeat,
             'positions': len([p for p in self.positions.values() if p.status == 'open']),
             'daily_pnl': round(self.daily_pnl, 2),
+            'lifetime_pnl': round(self.lifetime_pnl, 2),
             'paper_mode': self.paper_mode,
             'equity': round(self._equity, 2),
         }
@@ -80,6 +105,7 @@ class TradingEngine:
     # D10: Safety checks
     def can_trade(self, confidence: int, pqs_score: int = 0) -> tuple:
         """Check all safety controls. Returns (allowed, reason)."""
+        self._maybe_roll_day()
         open_count = len([p for p in self.positions.values() if p.status == 'open'])
         if open_count >= MAX_POSITIONS:
             return False, f'Max positions reached ({MAX_POSITIONS})'
@@ -96,7 +122,17 @@ class TradingEngine:
                            size_usd: float, stop_loss_pct: float = 2.0,
                            take_profit_pct: float = 4.0, trailing: float = 1.5) -> dict:
         """Open a new position (paper or live)."""
-        pos_id = f"pos_{int(time.time())}_{asset}"
+        # MAX_POSITIONS was only ever enforced by can_trade(), which nothing in
+        # the autotrader loop calls -- naturally bounded to one position per
+        # selected asset today, but selecting 11+ assets that all signal in the
+        # same cycle would silently exceed it. Enforced here so it holds on
+        # every path (main engine, shadow book, V2 dashboard bot) instead of
+        # being a safety control that only exists on paper.
+        open_count = len([p for p in self.positions.values() if p.status == 'open'])
+        if open_count >= MAX_POSITIONS:
+            return {'ok': False, 'error': f'Max positions reached ({MAX_POSITIONS})'}
+
+        pos_id = f"pos_{int(time.time())}_{next(_pos_id_counter)}_{asset}"
 
         sl = price * (1 - stop_loss_pct/100) if direction == 'BUY' else price * (1 + stop_loss_pct/100)
         tp = price * (1 + take_profit_pct/100) if direction == 'BUY' else price * (1 - take_profit_pct/100)
@@ -200,6 +236,8 @@ class TradingEngine:
         if not pos or pos.status != 'open':
             return {'ok': False, 'error': 'Position not found or already closed'}
 
+        self._maybe_roll_day()
+
         if pos.direction == 'BUY':
             pnl = (current_price - pos.entry_price) / pos.entry_price * pos.size
         else:
@@ -213,6 +251,7 @@ class TradingEngine:
         pos.exit_time = int(time.time())
         pos.pnl = round(pnl, 2)
         self.daily_pnl += pnl
+        self.lifetime_pnl += pnl
         self._equity += pnl
 
         self._trade_log.append({
